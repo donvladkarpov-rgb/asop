@@ -1,1 +1,31 @@
 .*/
+
+# Gradle build output
+**/build/
+
+# Gradle cache
+.gradle/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Kotlin
+.kotlin/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+.env.local
+
+# Secrets
+*.p12
+*.jks
+*.keystore
