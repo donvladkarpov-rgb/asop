@@ -1,4 +1,4 @@
-package ru.asop.dto.carrier
+package ru.asop.api.gateway.dto.request
 
 import jakarta.validation.constraints.Pattern
 import jakarta.validation.constraints.Size

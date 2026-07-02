@@ -10,8 +10,8 @@ dependencies {
 
     // Internal
     implementation(project(":backend:shared:asop-common"))
-    implementation(project(":backend:shared:asop-dto"))
     implementation(project(":backend:shared:asop-kafka-contracts"))
+    implementation(project(":backend:shared:api:gateway-api"))
 
     // Spring WebFlux (reactive REST)
     implementation(libs.spring.boot.starter.webflux)

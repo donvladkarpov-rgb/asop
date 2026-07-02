@@ -9,6 +9,7 @@ description = "Root CA и управление сертификатами"
 dependencies {
     // Internal
     implementation(project(":backend:shared:asop-common"))
+    implementation(project(":backend:shared:api:crypto-api"))
 
     // Spring Boot
     implementation(libs.spring.boot.starter.webflux)

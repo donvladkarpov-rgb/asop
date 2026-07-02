@@ -1,4 +1,4 @@
-package ru.asop.gateway.dto
+package ru.asop.api.gateway.dto.response
 
 import java.time.Instant
 import java.util.UUID

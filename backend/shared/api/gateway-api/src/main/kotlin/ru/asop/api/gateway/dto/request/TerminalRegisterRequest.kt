@@ -1,4 +1,4 @@
-package ru.asop.dto.terminal
+package ru.asop.api.gateway.dto.request
 
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size

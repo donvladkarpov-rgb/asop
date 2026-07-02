@@ -6,7 +6,6 @@ import org.springframework.core.annotation.Order
 import org.springframework.http.HttpMethod
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity
 import org.springframework.security.config.web.server.ServerHttpSecurity
-import org.springframework.security.core.userdetails.UsernameNotFoundException
 import org.springframework.security.web.authentication.preauth.x509.X509PrincipalExtractor
 import org.springframework.security.web.server.SecurityWebFilterChain
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers
@@ -16,9 +15,6 @@ import java.security.cert.X509Certificate
 @EnableWebFluxSecurity
 class SecurityConfig {
 
-    // Chain 1: Терминалы (mTLS).
-    // Обрабатывает ТОЛЬКО пути /api/v1/terminals/* и /api/v1/sync/*
-    // Аутентификация — по клиентскому X.509 сертификату.
     @Bean
     @Order(1)
     fun terminalSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
@@ -37,8 +33,6 @@ class SecurityConfig {
             .build()
     }
 
-    // Chain 2: Веб-клиенты (JWT через Keycloak).
-    // Обрабатывает ВСЕ ОСТАЛЬНЫЕ пути.
     @Bean
     @Order(2)
     fun webSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
@@ -59,9 +53,6 @@ class SecurityConfig {
     }
 }
 
-// Извлекает terminalSerial из CN клиентского сертификата.
-// DN формат: "CN=TERM-001, OU=carrier-123, O=ASOP"
-// Результат: "TERM-001"
 class TerminalPrincipalExtractor : X509PrincipalExtractor {
     override fun extractPrincipal(x509Certificate: X509Certificate): Any {
         val subject = x509Certificate.subjectX500Principal.name
@@ -71,7 +62,9 @@ class TerminalPrincipalExtractor : X509PrincipalExtractor {
             ?.substringAfter("CN=")
 
         if (cn == null) {
-            throw UsernameNotFoundException("CN not found in certificate subject: $subject")
+            throw org.springframework.security.core.userdetails.UsernameNotFoundException(
+                "CN not found in certificate subject: $subject"
+            )
         }
         return cn
     }

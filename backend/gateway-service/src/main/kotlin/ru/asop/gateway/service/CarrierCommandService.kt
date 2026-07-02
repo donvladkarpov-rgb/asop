@@ -9,7 +9,7 @@ import reactor.kafka.sender.SenderResult  // ← НОВОЕ
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.common.util.InnValidator
 import ru.asop.common.util.UuidUtils
-import ru.asop.dto.carrier.CarrierCreateRequest
+import ru.asop.api.gateway.dto.request.CarrierCreateRequest
 import ru.asop.kafka.events.carrier.CarrierCreatedEvent
 import java.security.Principal
 import java.time.Instant

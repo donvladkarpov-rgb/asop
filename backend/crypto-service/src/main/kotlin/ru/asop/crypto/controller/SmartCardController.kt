@@ -3,14 +3,14 @@ package ru.asop.crypto.controller
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Mono
-import ru.asop.crypto.dto.SmartCardCertRequest
-import ru.asop.crypto.dto.SmartCardCertResponse
 import ru.asop.crypto.service.SmartCardCertService
 import ru.asop.crypto.service.SmartCardRole
 import java.security.KeyFactory
 import java.security.PublicKey
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
+import ru.asop.api.crypto.dto.request.SmartCardCertRequest
+import ru.asop.api.crypto.dto.response.SmartCardCertResponse
 
 @RestController
 @RequestMapping("/api/v1/smart-cards")

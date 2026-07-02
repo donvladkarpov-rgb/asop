@@ -1,4 +1,4 @@
-package ru.asop.crypto.dto
+package ru.asop.api.crypto.dto.response
 
 import java.time.Instant
 

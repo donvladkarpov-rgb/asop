@@ -1,4 +1,4 @@
-package ru.asop.crypto.dto
+package ru.asop.api.crypto.dto.request
 
 import jakarta.validation.constraints.NotBlank
 

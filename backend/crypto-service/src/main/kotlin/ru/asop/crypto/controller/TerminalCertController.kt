@@ -1,12 +1,12 @@
 package ru.asop.crypto.controller
 
 import org.springframework.http.HttpHeaders
-import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Mono
-import ru.asop.crypto.dto.TerminalCertRequest
-import ru.asop.crypto.dto.TerminalCertResponse
+import ru.asop.api.crypto.controller.TerminalCertApi
+import ru.asop.api.crypto.dto.request.TerminalCertRequest
+import ru.asop.api.crypto.dto.response.TerminalCertResponse
 import ru.asop.crypto.service.RootCaService
 import ru.asop.crypto.service.TerminalCertService
 import java.security.KeyFactory
@@ -20,14 +20,9 @@ import java.util.Base64
 class TerminalCertController(
     private val terminalCertService: TerminalCertService,
     private val rootCaService: RootCaService
-) {
+) : TerminalCertApi {
 
-    /**
-     * POST /api/v1/terminals/register
-     * Регистрация терминала и выпуск сертификата
-     */
-    @PostMapping("/register")
-    fun registerTerminal(
+    override fun registerTerminal(
         @RequestBody request: TerminalCertRequest
     ): Mono<ResponseEntity<TerminalCertResponse>> {
         return Mono.fromCallable {
@@ -55,16 +50,7 @@ class TerminalCertController(
         }
     }
 
-    /**
-     * GET /api/v1/terminals/root-ca
-     * Получить публичный сертификат Root CA в формате PEM.
-     * Используется терминалами для проверки цепочки доверия.
-     *
-     * ВАЖНО: MediaType.APPLICATION_PEM_CERTIFICATE_VALUE отсутствует в Spring 6.1.x,
-     * поэтому используем строковый литерал "application/x-pem-file".
-     */
-    @GetMapping("/root-ca", produces = ["application/x-pem-file"])
-    fun getRootCaCertificate(): Mono<ResponseEntity<String>> {
+    override fun getRootCaCertificate(): Mono<ResponseEntity<String>> {
         return Mono.fromCallable {
             val certificate = rootCaService.getRootCaCertificate()
             val pem = certificateToPem(certificate)
@@ -75,12 +61,7 @@ class TerminalCertController(
         }
     }
 
-    /**
-     * GET /api/v1/terminals/root-ca/der
-     * Получить Root CA в бинарном формате DER (для программной обработки)
-     */
-    @GetMapping("/root-ca/der", produces = [MediaType.APPLICATION_OCTET_STREAM_VALUE])
-    fun getRootCaCertificateDer(): Mono<ResponseEntity<ByteArray>> {
+    override fun getRootCaCertificateDer(): Mono<ResponseEntity<ByteArray>> {
         return Mono.fromCallable {
             val certificate = rootCaService.getRootCaCertificate()
 
@@ -90,12 +71,7 @@ class TerminalCertController(
         }
     }
 
-    /**
-     * GET /api/v1/terminals/root-ca/public-key
-     * Получить только публичный ключ Root CA (если кому-то нужен только ключ)
-     */
-    @GetMapping("/root-ca/public-key", produces = [MediaType.APPLICATION_JSON_VALUE])
-    fun getRootCaPublicKey(): Mono<ResponseEntity<Map<String, String>>> {
+    override fun getRootCaPublicKey(): Mono<ResponseEntity<Map<String, String>>> {
         return Mono.fromCallable {
             val certificate = rootCaService.getRootCaCertificate()
             val publicKey = certificate.publicKey
@@ -110,9 +86,6 @@ class TerminalCertController(
         }
     }
 
-    /**
-     * Конвертация X.509 сертификата в PEM формат
-     */
     private fun certificateToPem(certificate: X509Certificate): String {
         val base64Cert = Base64.getMimeEncoder(64, "\n".toByteArray())
             .encodeToString(certificate.encoded)
