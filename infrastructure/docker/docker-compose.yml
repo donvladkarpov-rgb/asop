@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  # PostgreSQL
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: asop
+      POSTGRES_USER: asop
+      POSTGRES_PASSWORD: asop
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/db-migrations:/docker-entrypoint-initdb.d
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    ports:
+      - "2181:2181"
+
+  # Keycloak
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0.4
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "8180:8080"
+
+  # Crypto Service (Root CA)
+  crypto-service:
+    build:
+      context: ./backend/services/asop-crypto-service
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      ROOT_CA_KEYSTORE_PATH: /data/root-ca.p12
+      ROOT_CA_KEYSTORE_PASSWORD: changeit
+    volumes:
+      - crypto_data:/data
+
+  # Gateway Service
+  gateway-service:
+    build:
+      context: ./backend/services/gateway-service
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/asop
+      GATEWAY_KEYSTORE_PASSWORD: changeit
+      TRUSTSTORE_PASSWORD: changeit
+    depends_on:
+      - kafka
+      - keycloak
+      - crypto-service
+
+volumes:
+  postgres_data:
+  crypto_data:

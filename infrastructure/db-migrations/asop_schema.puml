@@ -1,0 +1,987 @@
+@startuml
+' ============================================================
+' Полная ER-диаграмма БД АСОП (TAVRIDA)
+' 67 таблиц + 1 VIEW + 6 функций
+' ============================================================
+
+skinparam linetype ortho
+skinparam packageStyle rectangle
+skinparam nodesep 40
+skinparam ranksep 40
+skinparam class {
+    HeaderBackgroundColor #2C3E50
+    HeaderFontColor #FFFFFF
+    BackgroundColor #FDFDFD
+    BorderColor #34495E
+    ArrowColor #E74C3C
+    FontSize 8
+    Padding 2
+    Margin 3
+}
+skinparam classAttributeIconSize 0
+hide circle
+hide empty members
+
+title АСОП (TAVRIDA) - Полная ER-диаграмма\n67 таблиц | 1 VIEW | 6 функций
+
+' ============================================================
+' МОДУЛЬ 0: РЕГИОНЫ И ТЕРРИТОРИИ
+' ============================================================
+package "0. Регионы и Территории (ФИАС/ГАР)" #E8F6F3 {
+    class ASOP_REGIONS {
+        * REGION_ID : UUID
+        MUNICIPAL_DIVISION : VARCHAR
+        ADMIN_DIVISION : VARCHAR
+        FEDERAL_DISTRICT : VARCHAR
+        IFNS_FL_CODE : VARCHAR
+        IFNS_UL_CODE : VARCHAR
+        OKATO_CODE : VARCHAR
+        OKTMO_CODE : VARCHAR
+        OKTMO_BUDGET_CODE : VARCHAR
+        FIAS_ID : VARCHAR
+        REGISTRY_RECORD_ID : VARCHAR
+    }
+
+    class ASOP_TERRITORIES {
+        * TERRITORY_ID : UUID
+        # REGION_ID : UUID
+        MUNICIPAL_DIVISION : VARCHAR
+        ADMIN_DIVISION : VARCHAR
+        FEDERAL_DISTRICT : VARCHAR
+        IFNS_FL_CODE : VARCHAR
+        IFNS_UL_CODE : VARCHAR
+        OKATO_CODE : VARCHAR
+        OKTMO_CODE : VARCHAR
+        OKTMO_BUDGET_CODE : VARCHAR
+        FIAS_ID : VARCHAR
+        REGISTRY_RECORD_ID : VARCHAR
+        GEO_POLYGON : GEOGRAPHY
+    }
+
+    class ASOP_ORGANIZERS {
+        * ORGANIZER_ID : UUID
+        ORGANIZER_NAME : VARCHAR
+    }
+
+    class ASOP_ORGANIZER_TERRITORIES {
+        * # ORGANIZER_ID : UUID
+        * # TERRITORY_ID : UUID
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 1: СПРАВОЧНИКИ
+' ============================================================
+package "1. Справочники" #FEF9E7 {
+    class ASOP_ROLES {
+        * ROLE_ID : UUID
+        ROLE_NAME : VARCHAR
+    }
+
+    class ASOP_CARD_TYPES {
+        * CARD_TYPE_ID : UUID
+        CARD_TYPE_NAME : VARCHAR
+    }
+
+    class ASOP_TARIFF_TYPES {
+        * TARIFF_TYPE_ID : UUID
+        CODE : VARCHAR
+        NAME : VARCHAR
+        DESCRIPTION : TEXT
+    }
+
+    class ASOP_SESSION_TYPES {
+        * SESSION_TYPE_ID : UUID
+        SESSION_TYPE_CODE : VARCHAR
+        SESSION_TYPE_NAME : VARCHAR
+    }
+
+    class ASOP_EVENT_TYPES {
+        * EVENT_TYPE : CHAR
+        EVENT_TYPE_NAME : VARCHAR
+    }
+
+    class ASOP_TRANSACTION_TYPES {
+        * TRANSACTION_TYPE_ID : UUID
+        TRANSACTION_TYPE_NAME : VARCHAR
+    }
+
+    class ASOP_TRANSACTION_RESULTS {
+        * TRANSACTION_RESULT_ID : UUID
+        TRANSACTION_RESULT_NAME : VARCHAR
+    }
+
+    class ASOP_SERVICES {
+        * SERVICE_ID : UUID
+        SERVICE_NAME : VARCHAR
+        DESCRIPTION : TEXT
+        PRIORITY : INT
+        # REGION_ID : UUID
+    }
+
+    class ASOP_BENEFITS {
+        * BENEFIT_ID : UUID
+        BENEFIT_CODE : VARCHAR
+        BENEFIT_NAME : VARCHAR
+        # REGION_ID : UUID
+        DESCRIPTION : TEXT
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_BENEFIT_STEPS {
+        * STEP_ID : UUID
+        # BENEFIT_ID : UUID
+        STEP_ORDER : INT
+        TRIP_THRESHOLD_FROM : INT
+        TRIP_THRESHOLD_TO : INT
+        DISCOUNT_SHARE : NUMERIC
+        PERIOD_TYPE : VARCHAR
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 1.1: ДИСТРИБЬЮТОРЫ
+' ============================================================
+package "1.1. Дистрибьюторы карт" #FDEDEC {
+    class ASOP_CARDS_DISTRIBUTORS {
+        * CARDS_DISTRIBUTOR_ID : UUID
+        DISTRIBUTOR_NAME : VARCHAR
+        INN : VARCHAR
+        KPP : VARCHAR
+        LEGAL_ADDRESS : VARCHAR
+        CONTACT_PHONE : VARCHAR
+        CONTACT_EMAIL : VARCHAR
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 2: ПЕРЕВОЗЧИКИ, ДОГОВОРЫ, ТС
+' ============================================================
+package "2. Перевозчики, Договоры, ТС" #EBF5FB {
+    class ASOP_CARRIERS {
+        * CARRIER_ID : UUID
+        CARRIER_NAME : VARCHAR
+        INN : VARCHAR
+        # REGION_ID : UUID
+    }
+
+    class ASOP_CONTRACTS {
+        * CONTRACT_ID : UUID
+        CONTRACTOR_TYPE : VARCHAR
+        # CARRIER_ID : UUID
+        # CARDS_DISTRIBUTOR_ID : UUID
+        CONTRACT_NUMBER : VARCHAR
+        START_DATE : DATE
+        END_DATE : DATE
+        STATUS : VARCHAR
+        COMMISSION_PERCENT : NUMERIC
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_CONTRACT_ROUTES {
+        * # CONTRACT_ID : UUID
+        * # ROUTE_ID : UUID
+    }
+
+    class ASOP_VEHICLE_TYPES {
+        * VEHICLE_TYPE_ID : UUID
+        TYPE_NAME : VARCHAR
+    }
+
+    class ASOP_VEHICLE_MODELS {
+        * VEHICLE_MODEL_ID : UUID
+        MODEL_NAME : VARCHAR
+    }
+
+    class ASOP_VEHICLES {
+        * VEHICLE_ID : UUID
+        # CARRIER_ID : UUID
+        # VEHICLE_TYPE_ID : UUID
+        # VEHICLE_MODEL_ID : UUID
+        VEHICLE_NUMBER : VARCHAR
+        VEHICLE_NAME : VARCHAR
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 3: ПОЛЬЗОВАТЕЛИ И БЕЗОПАСНОСТЬ
+' ============================================================
+package "3. Пользователи и Безопасность" #F5EEF8 {
+    class ASOP_USERS {
+        * USER_ID : UUID
+        FIRST_NAME : VARCHAR
+        LAST_NAME_INITIAL : CHAR
+        PATRONYMIC_INITIAL : CHAR
+        PHONE : VARCHAR
+        SNILS_HASH : VARCHAR
+        SNILS_ENCRYPTED : BYTEA
+        KEYCLOAK_ID : VARCHAR
+    }
+
+    class ASOP_USER_ROLES {
+        * # USER_ID : UUID
+        * # ROLE_ID : UUID
+    }
+
+    class ASOP_USER_CARRIERS {
+        * # USER_ID : UUID
+        * # CARRIER_ID : UUID
+    }
+
+    class ASOP_USER_REGIONS {
+        * # USER_ID : UUID
+        * # REGION_ID : UUID
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 4: МАРШРУТЫ И ПУТИ
+' ============================================================
+package "4. Маршруты и Пути" #FEF5E7 {
+    class ASOP_FARE_ZONES {
+        * ZONE_ID : UUID
+        ZONE_CODE : VARCHAR
+        ZONE_NAME : VARCHAR
+        DESCRIPTION : VARCHAR
+        ZONE_POLYGON : GEOGRAPHY
+        # REGION_ID : UUID
+    }
+
+    class ASOP_TRANSPORT_STOPS {
+        * STOP_ID : UUID
+        # FARE_ZONE_ID : UUID
+        # REGION_ID : UUID
+        STOP_CODE : VARCHAR
+        STOP_NAME : VARCHAR
+        STOP_ADDRESS : VARCHAR
+        ZONE_POLYGON : GEOGRAPHY
+        DESCRIPTION : TEXT
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_ROUTES {
+        * ROUTE_ID : UUID
+        ROUTE_NUMBER : VARCHAR
+        ROUTE_NAME : VARCHAR
+        # ORGANIZER_ID : UUID
+        MINISTRY_REGISTRY_NO : VARCHAR
+        ROUTE_CATEGORY : VARCHAR
+        # REGION_ID : UUID
+    }
+
+    class ASOP_PATHS {
+        * PATH_ID : UUID
+        # ROUTE_ID : UUID
+        PATH_NAME : VARCHAR
+        # START_STOP_ID : UUID
+        # END_STOP_ID : UUID
+        ROUTE_OBJECT : JSONB
+        BENEFIT_POLICY : VARCHAR
+        PATH_START_DATE : TIMESTAMP
+        PATH_END_DATE : TIMESTAMP
+        DESCRIPTION : VARCHAR
+        # REGION_ID : UUID
+    }
+
+    class ASOP_PATH_TRANSPORT_STOPS {
+        * PATH_STOP_ID : UUID
+        # PATH_ID : UUID
+        # STOP_ID : UUID
+        SERIAL_NUMBER : INT
+        # REGION_ID : UUID
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_SCHEDULE {
+        * SCHEDULE_ID : UUID
+        # PATH_ID : UUID
+        # STOP_ID : UUID
+        DAY_MASK : INT
+        ARRIVAL_TIME : TIME
+        DWELL_TIME_SEC : INT
+        # REGION_ID : UUID
+        IS_ACTIVE : BOOLEAN
+    }
+
+    class ASOP_PATH_SERVICES {
+        * PATH_SERVICE_ID : UUID
+        # PATH_ID : UUID
+        # SERVICE_ID : UUID
+        # CARRIER_ID : UUID
+        # VEHICLE_ID : UUID
+        # TARIFF_TYPE_ID : UUID
+        PRICE : NUMERIC
+        IS_ACTIVE : BOOLEAN
+    }
+
+    class ASOP_PATH_DISCOUNTS {
+        * PATH_DISCOUNT_ID : UUID
+        # PATH_ID : UUID
+        # CARRIER_ID : UUID
+        # VEHICLE_ID : UUID
+        # TARIFF_TYPE_ID : UUID
+        DISCOUNT_NAME : VARCHAR
+        DISCOUNT_TYPE : VARCHAR
+        DISCOUNT_VALUE : NUMERIC
+        VALID_FROM : TIMESTAMP
+        VALID_UNTIL : TIMESTAMP
+        IS_ACTIVE : BOOLEAN
+    }
+
+    class ASOP_PATH_BENEFITS {
+        * PATH_BENEFIT_ID : UUID
+        # PATH_ID : UUID
+        # BENEFIT_ID : UUID
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 5: КАРТЫ, ЛЬГОТЫ, ТАРИФЫ
+' ============================================================
+package "5. Карты, Льготы, Тарифы" #E8F8F5 {
+    class ASOP_CARDS {
+        * CARD_ID : UUID
+        # CARD_TYPE_ID : UUID
+        # USER_ID : UUID
+        IS_PRIMARY : BOOLEAN
+        LAST_SYNC_RECEIPT_TIME : INT
+        REGISTERED_AT : TIMESTAMP
+        REGISTERED_BY_USER_ID : UUID
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_CARD_MIFARES {
+        * # CARD_ID : UUID
+        UID : BYTEA
+        ATQA : SMALLINT
+        SAK : SMALLINT
+        PROTOCOL_VERSION : INT
+        MEMORY_MAP : JSONB
+    }
+
+    class ASOP_CARD_BANKS {
+        * # CARD_ID : UUID
+        PAN_TOKEN : VARCHAR
+        PAN_LAST4 : CHAR
+        BIN : CHAR
+        IS_TOKENIZED : BOOLEAN
+    }
+
+    class ASOP_CARD_TARIFFS {
+        * CARD_TARIFF_ID : UUID
+        # CARD_ID : UUID
+        # TARIFF_TYPE_ID : UUID
+        BALANCE : NUMERIC
+        TRAVEL_COUNT : INT
+        MAX_TRAVEL_COUNT : INT
+        EXPIRATION_DATE : TIMESTAMP
+        ACTIVATED_AT : TIMESTAMP
+        # PURCHASE_TRANSACTION_ID : UUID
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_BLACKLISTS {
+        * # CARD_ID : UUID
+        BLOCK_TYPE : VARCHAR
+        BLOCKED_AT : TIMESTAMP
+        # RELATED_DEBT_ID : UUID
+        AUTO_UNBLOCK_ON_RECOVERY : BOOLEAN
+    }
+
+    class ASOP_USER_BENEFITS {
+        * ASSIGNMENT_ID : UUID
+        # USER_ID : UUID
+        # BENEFIT_ID : UUID
+        VALID_FROM : TIMESTAMP
+        VALID_UNTIL : TIMESTAMP
+        SYNC_VERSION : INT
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_TARIFF_RATES {
+        * TARIFF_RATE_ID : UUID
+        # TARIFF_TYPE_ID : UUID
+        # CARRIER_ID : UUID
+        # ZONE_ID : UUID
+        # PATH_ID : UUID
+        PRICE : NUMERIC
+        DESCRIPTION : TEXT
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 5.1: ДОЛГИ ПО КАРТАМ
+' ============================================================
+package "5.1. Долги по картам" #FDEBD0 {
+    class ASOP_CARD_DEBTS {
+        * DEBT_ID : UUID
+        # CARD_ID : UUID
+        # TRANSACTION_ID : UUID
+        # SESSION_ID : UUID
+        # TERMINAL_ID : UUID
+        # CARRIER_ID : UUID
+        DEBT_AMOUNT : NUMERIC
+        CURRENCY : CHAR
+        DEBT_STATUS : VARCHAR
+        DEBT_OPENED_AT : TIMESTAMP
+        DEBT_DUE_DATE : TIMESTAMP
+        RECOVERED_AT : TIMESTAMP
+        # RECOVERED_TRANSACTION_ID : UUID
+        WRITE_OFF_AT : TIMESTAMP
+        WRITE_OFF_REASON : VARCHAR
+        BLACKLIST_ENTRY_ID : UUID
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_DEBT_RECOVERY_ATTEMPTS {
+        * ATTEMPT_ID : UUID
+        # DEBT_ID : UUID
+        ATTEMPT_NUMBER : INT
+        # RECOVERY_TRANSACTION_ID : UUID
+        AMOUNT_ATTEMPTED : NUMERIC
+        STATUS : VARCHAR
+        ERROR_CODE : VARCHAR
+        ERROR_MESSAGE : VARCHAR
+        BANK_RESPONSE : JSONB
+        ATTEMPTED_AT : TIMESTAMP
+        COMPLETED_AT : TIMESTAMP
+        DURATION_MS : INT
+        NEXT_RETRY_AT : TIMESTAMP
+    }
+
+    class "V_ACTIVE_CARD_DEBTS\n(VIEW)" as V_ACTIVE_CARD_DEBTS {
+        DEBT_ID : UUID
+        CARD_ID : UUID
+        CARRIER_ID : UUID
+        DEBT_AMOUNT : NUMERIC
+        DEBT_STATUS : VARCHAR
+        DAYS_OPEN : NUMERIC
+        DAYS_REMAINING : NUMERIC
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 6: ОБОРУДОВАНИЕ
+' ============================================================
+package "6. Оборудование: Терминалы, TID, Профили, ПО" #D5F5E3 {
+    class ASOP_TERMINAL_PROFILES {
+        * PROFILE_ID : UUID
+        PROFILE_NAME : VARCHAR
+        PROFILE_PARAMS : JSONB
+    }
+
+    class ASOP_TERMINAL_SOFTWARE {
+        * SOFTWARE_VERSION_ID : UUID
+        TERMINAL_TYPE : VARCHAR
+        VERSION : VARCHAR
+        FILE_PATH : VARCHAR
+        UPDATE_DATE : TIMESTAMP
+    }
+
+    class ASOP_DISTRIBUTOR_TERMINALS {
+        * DISTRIBUTOR_TERMINAL_ID : UUID
+        # CARDS_DISTRIBUTOR_ID : UUID
+        # CONTRACT_ID : UUID
+        TERMINAL_NUMBER : VARCHAR
+        TERMINAL_SERIAL : VARCHAR
+        TERMINAL_MODEL : VARCHAR
+        PAYMENT_PROVIDER_ID : VARCHAR
+        STATUS : VARCHAR
+        # MOL_USER_ID : UUID
+        # PROFILE_ID : UUID
+        # SOFTWARE_VERSION_ID : UUID
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_TIDS {
+        * TID_ID : UUID
+        # CARRIER_ID : UUID
+        # TERMINAL_ID : UUID
+        TID_VALUE : VARCHAR
+        STATUS : VARCHAR
+        ASSIGNED_AT : TIMESTAMP
+        UNASSIGNED_AT : TIMESTAMP
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_TERMINALS {
+        * TERMINAL_ID : UUID
+        # CARRIER_ID : UUID
+        TERMINAL_NUMBER : VARCHAR
+        TERMINAL_SERIAL : VARCHAR
+        TERMINAL_MODEL : VARCHAR
+        STATUS : VARCHAR
+        # MOL_USER_ID : UUID
+        # PARENT_TERMINAL_ID : UUID
+        # TID_ID : UUID
+        # VEHICLE_ID : UUID
+        # PROFILE_ID : UUID
+        # SOFTWARE_VERSION_ID : UUID
+        BENEFITS_SYNC_TOKEN : VARCHAR
+        LAST_BENEFITS_SYNC_AT : TIMESTAMP
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 7: СЕССИИ, ТРАНЗАКЦИИ, АУДИТ, КРС
+' ============================================================
+package "7. Сессии, Транзакции, Аудит, КРС" #FADBD8 {
+    class ASOP_SESSIONS {
+        * SESSION_ID : UUID
+        # SESSION_TYPE_ID : UUID
+        # PARENT_SESSION_ID : UUID
+        # TERMINAL_ID : UUID
+        # TID_ID : UUID
+        # OPENED_BY_USER_ID : UUID
+        # CLOSED_BY_USER_ID : UUID
+        # CARD_ID : UUID
+        # PATH_ID : UUID
+        # VEHICLE_ID : UUID
+        STARTED_AT : TIMESTAMP
+        CLOSED_AT : TIMESTAMP
+        STARTED_AT_LOCAL : TIMESTAMP
+        CLOSED_AT_LOCAL : TIMESTAMP
+        EXPIRATION_TIME : TIMESTAMP
+        STATUS : VARCHAR
+        ATTRIBUTES : JSONB
+    }
+
+    class ASOP_AUDIT_SERVICES {
+        * AUDIT_SERVICE_ID : UUID
+        SERVICE_CODE : VARCHAR
+        SERVICE_NAME : VARCHAR
+        ISSUER_TYPE : VARCHAR
+        # ORGANIZER_ID : UUID
+        # CARRIER_ID : UUID
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_AUDIT_TASKS {
+        * TASK_ID : UUID
+        TASK_NUMBER : VARCHAR
+        ISSUER_TYPE : VARCHAR
+        # ORGANIZER_ID : UUID
+        # CARRIER_ID : UUID
+        # ASSIGNED_AUDIT_SERVICE_ID : UUID
+        TASK_START_DATE : TIMESTAMP
+        TASK_END_DATE : TIMESTAMP
+        STATUS : VARCHAR
+        DESCRIPTION : TEXT
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_AUDIT_TASK_PATHS {
+        * TASK_PATH_ID : UUID
+        # TASK_ID : UUID
+        # PATH_ID : UUID
+    }
+
+    class ASOP_AUDIT_BRIGADES {
+        * BRIGADE_ID : UUID
+        # TASK_ID : UUID
+        # FOREMAN_USER_ID : UUID
+        BRIGADE_STATUS : VARCHAR
+        STARTED_AT : TIMESTAMP
+        CLOSED_AT : TIMESTAMP
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_AUDIT_BRIGADE_MEMBERS {
+        * MEMBER_ID : UUID
+        # BRIGADE_ID : UUID
+        # USER_ID : UUID
+        ROLE : VARCHAR
+    }
+
+    class ASOP_AUDIT_INSPECTIONS {
+        * INSPECTION_ID : UUID
+        # BRIGADE_ID : UUID
+        # CONTROLLER_SESSION_ID : UUID
+        # PATH_ID : UUID
+        INSPECTION_START : TIMESTAMP
+        INSPECTION_END : TIMESTAMP
+        DURATION : INTERVAL
+        PATH_NAME : VARCHAR
+        PASSENGERS_CHECKED : INT
+        PASSENGERS_PAID : INT
+        PASSENGERS_COMPENSATED : INT
+        PASSENGERS_UNPAID : INT
+        FINES_COUNT : INT
+        STATUS : VARCHAR
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_AUDIT_INSPECTION_TASKS {
+        * INSPECTION_TASK_ID : UUID
+        # INSPECTION_ID : UUID
+        # TASK_ID : UUID
+    }
+
+    class ASOP_TRANSACTIONS {
+        * TRANSACTION_ID : UUID
+        STARTED_AT : TIMESTAMP
+        COMPLETED_AT : TIMESTAMP
+        # SESSION_ID : UUID
+        # TRANSACTION_TYPE_ID : UUID
+        # TRANSACTION_RESULT_ID : UUID
+        AMOUNT : NUMERIC
+        CURRENCY : CHAR
+        ACQUIRER_REFERENCE : VARCHAR
+        ERROR_CODE : VARCHAR
+        ERROR_MESSAGE : VARCHAR
+        METADATA : JSONB
+    }
+
+    class ASOP_TRANSACTION_CARDS {
+        * TRANSACTION_CARD_ID : UUID
+        # TRANSACTION_ID : UUID
+        # CARD_ID : UUID
+        CARD_ROLE : VARCHAR
+        # TARIFF_APPLIED_ID : UUID
+        BALANCE_BEFORE : NUMERIC
+        BALANCE_AFTER : NUMERIC
+    }
+
+    class ASOP_PAYMENTS {
+        * PAYMENT_ID : UUID
+        # CARD_ID : UUID
+        RECEIPT_UNIX_TIME : INT
+        # SESSION_ID : UUID
+        # EVENT_ID : UUID
+        # USER_ID : UUID
+        # DISTRIBUTOR_TERMINAL_ID : UUID
+        AMOUNT : NUMERIC
+        TRIPS_ADDED : INT
+        PAYMENT_METHOD : VARCHAR
+        STATUS : VARCHAR
+        EXTERNAL_REF : VARCHAR
+        CREATED_AT : TIMESTAMP
+    }
+
+    class ASOP_GPS_TRACKING {
+        * POSITION_ID : UUID
+        # VEHICLE_ID : UUID
+        # PATH_ID : UUID
+        # SESSION_ID : UUID
+        GPS_COORD : GEOGRAPHY
+        RECORDED_AT : TIMESTAMP
+        SPEED_KMH : NUMERIC
+        STATUS : VARCHAR
+    }
+
+    class ASOP_EVENTS {
+        * EVENT_ID : UUID
+        EVENT_TIME : TIMESTAMP
+        EVENT_LOCAL_TIME : TIMESTAMP
+        # EVENT_TYPE : CHAR
+        # USER_ID : UUID
+        # SESSION_ID : UUID
+        REFERENCE_TYPE_ID : INT
+        REFERENCE_ID : UUID
+        EVENT_DETAILS : VARCHAR
+        EVENT_OBJECT : JSONB
+    }
+}
+
+' ============================================================
+' МОДУЛЬ 8: ФИСКАЛИЗАЦИЯ
+' ============================================================
+package "8. Модуль Фискализации" #D6EAF8 {
+    class ASOP_FISCALIZERS {
+        * FISCALIZER_ID : UUID
+        FISCALIZER_CODE : VARCHAR
+        FISCALIZER_NAME : VARCHAR
+        BASE_API_URL : VARCHAR
+        DESCRIPTION : TEXT
+        IS_ACTIVE : BOOLEAN
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_CARRIER_FISCALIZERS {
+        * CARRIER_FISCALIZER_ID : UUID
+        # CARRIER_ID : UUID
+        # FISCALIZER_ID : UUID
+        CUSTOM_API_URL : VARCHAR
+        IS_PRIMARY : BOOLEAN
+        IS_ACTIVE : BOOLEAN
+        SETTINGS : JSONB
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_FISCALIZER_TOKENS {
+        * TOKEN_ID : UUID
+        # CARRIER_FISCALIZER_ID : UUID
+        TOKEN_ENCRYPTED : BYTEA
+        TOKEN_HINT : VARCHAR
+        VALID_FROM : TIMESTAMP
+        VALID_UNTIL : TIMESTAMP
+        STATUS : VARCHAR
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_FISCAL_RECEIPTS {
+        * RECEIPT_ID : UUID
+        # TRANSACTION_ID : UUID
+        # CARRIER_ID : UUID
+        # CARRIER_FISCALIZER_ID : UUID
+        RECEIPT_NUMBER : VARCHAR
+        FISCAL_SIGN : VARCHAR
+        STATUS : VARCHAR
+        ATTEMPT_COUNT : INT
+        MAX_ATTEMPTS : INT
+        LAST_ATTEMPT_AT : TIMESTAMP
+        NEXT_RETRY_AT : TIMESTAMP
+        LAST_ERROR_MESSAGE : VARCHAR
+        RECEIPT_DATA : JSONB
+        RESPONSE_DATA : JSONB
+        CONFIRMED_AT : TIMESTAMP
+        CREATED_AT : TIMESTAMP
+        UPDATED_AT : TIMESTAMP
+    }
+
+    class ASOP_FISCAL_RECEIPT_ATTEMPTS {
+        * ATTEMPT_ID : UUID
+        # RECEIPT_ID : UUID
+        ATTEMPT_NUMBER : INT
+        # TOKEN_ID : UUID
+        REQUEST_PAYLOAD : JSONB
+        RESPONSE_PAYLOAD : JSONB
+        HTTP_STATUS : INT
+        SUCCESS : BOOLEAN
+        ERROR_MESSAGE : VARCHAR
+        ERROR_CODE : VARCHAR
+        ATTEMPTED_AT : TIMESTAMP
+        DURATION_MS : INT
+    }
+
+    class ASOP_FISCAL_MONTHLY_REPORTS {
+        * REPORT_ID : UUID
+        # CARRIER_ID : UUID
+        # FISCALIZER_ID : UUID
+        REPORT_MONTH : DATE
+        TOTAL_RECEIPTS : INT
+        CONFIRMED_RECEIPTS : INT
+        FAILED_RECEIPTS : INT
+        PENDING_RECEIPTS : INT
+        CANCELLED_RECEIPTS : INT
+        TOTAL_AMOUNT : NUMERIC
+        AVG_CONFIRMATION_MS : INT
+        SUCCESS_RATE : NUMERIC
+        STATUS : VARCHAR
+        GENERATED_AT : TIMESTAMP
+        FINALIZED_AT : TIMESTAMP
+        FILE_PATH : VARCHAR
+    }
+}
+
+' ============================================================
+' СВЯЗИ (FOREIGN KEYS)
+' ============================================================
+
+' --- Модуль 0: Регионы ---
+ASOP_TERRITORIES --> ASOP_REGIONS : REGION_ID
+ASOP_ORGANIZER_TERRITORIES --> ASOP_ORGANIZERS : ORGANIZER_ID
+ASOP_ORGANIZER_TERRITORIES --> ASOP_TERRITORIES : TERRITORY_ID
+
+' --- Модуль 1: Справочники ---
+ASOP_SERVICES --> ASOP_REGIONS : REGION_ID
+ASOP_BENEFITS --> ASOP_REGIONS : REGION_ID
+ASOP_BENEFIT_STEPS --> ASOP_BENEFITS : BENEFIT_ID
+
+' --- Модуль 2: Перевозчики ---
+ASOP_CARRIERS --> ASOP_REGIONS : REGION_ID
+ASOP_CONTRACTS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_CONTRACTS --> ASOP_CARDS_DISTRIBUTORS : CARDS_DISTRIBUTOR_ID
+ASOP_CONTRACT_ROUTES --> ASOP_CONTRACTS : CONTRACT_ID
+ASOP_CONTRACT_ROUTES --> ASOP_ROUTES : ROUTE_ID
+ASOP_VEHICLES --> ASOP_CARRIERS : CARRIER_ID
+ASOP_VEHICLES --> ASOP_VEHICLE_TYPES : VEHICLE_TYPE_ID
+ASOP_VEHICLES --> ASOP_VEHICLE_MODELS : VEHICLE_MODEL_ID
+
+' --- Модуль 3: Пользователи ---
+ASOP_USER_ROLES --> ASOP_USERS : USER_ID
+ASOP_USER_ROLES --> ASOP_ROLES : ROLE_ID
+ASOP_USER_CARRIERS --> ASOP_USERS : USER_ID
+ASOP_USER_CARRIERS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_USER_REGIONS --> ASOP_USERS : USER_ID
+ASOP_USER_REGIONS --> ASOP_REGIONS : REGION_ID
+
+' --- Модуль 4: Маршруты ---
+ASOP_FARE_ZONES --> ASOP_REGIONS : REGION_ID
+ASOP_TRANSPORT_STOPS --> ASOP_FARE_ZONES : FARE_ZONE_ID
+ASOP_TRANSPORT_STOPS --> ASOP_REGIONS : REGION_ID
+ASOP_ROUTES --> ASOP_ORGANIZERS : ORGANIZER_ID
+ASOP_ROUTES --> ASOP_REGIONS : REGION_ID
+ASOP_PATHS --> ASOP_ROUTES : ROUTE_ID
+ASOP_PATHS --> ASOP_TRANSPORT_STOPS : START_STOP_ID
+ASOP_PATHS --> ASOP_TRANSPORT_STOPS : END_STOP_ID
+ASOP_PATHS --> ASOP_REGIONS : REGION_ID
+ASOP_PATH_TRANSPORT_STOPS --> ASOP_PATHS : PATH_ID
+ASOP_PATH_TRANSPORT_STOPS --> ASOP_TRANSPORT_STOPS : STOP_ID
+ASOP_PATH_TRANSPORT_STOPS --> ASOP_REGIONS : REGION_ID
+ASOP_SCHEDULE --> ASOP_PATHS : PATH_ID
+ASOP_SCHEDULE --> ASOP_TRANSPORT_STOPS : STOP_ID
+ASOP_SCHEDULE --> ASOP_REGIONS : REGION_ID
+ASOP_PATH_SERVICES --> ASOP_PATHS : PATH_ID
+ASOP_PATH_SERVICES --> ASOP_SERVICES : SERVICE_ID
+ASOP_PATH_SERVICES --> ASOP_CARRIERS : CARRIER_ID
+ASOP_PATH_SERVICES --> ASOP_VEHICLES : VEHICLE_ID
+ASOP_PATH_SERVICES --> ASOP_TARIFF_TYPES : TARIFF_TYPE_ID
+ASOP_PATH_DISCOUNTS --> ASOP_PATHS : PATH_ID
+ASOP_PATH_DISCOUNTS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_PATH_DISCOUNTS --> ASOP_VEHICLES : VEHICLE_ID
+ASOP_PATH_DISCOUNTS --> ASOP_TARIFF_TYPES : TARIFF_TYPE_ID
+ASOP_PATH_BENEFITS --> ASOP_PATHS : PATH_ID
+ASOP_PATH_BENEFITS --> ASOP_BENEFITS : BENEFIT_ID
+
+' --- Модуль 5: Карты ---
+ASOP_CARDS --> ASOP_CARD_TYPES : CARD_TYPE_ID
+ASOP_CARDS --> ASOP_USERS : USER_ID
+ASOP_CARD_MIFARES --> ASOP_CARDS : CARD_ID
+ASOP_CARD_BANKS --> ASOP_CARDS : CARD_ID
+ASOP_CARD_TARIFFS --> ASOP_CARDS : CARD_ID
+ASOP_CARD_TARIFFS --> ASOP_TARIFF_TYPES : TARIFF_TYPE_ID
+ASOP_CARD_TARIFFS --> ASOP_TRANSACTIONS : PURCHASE_TRANSACTION_ID
+ASOP_BLACKLISTS --> ASOP_CARDS : CARD_ID
+ASOP_BLACKLISTS --> ASOP_CARD_DEBTS : RELATED_DEBT_ID
+ASOP_USER_BENEFITS --> ASOP_USERS : USER_ID
+ASOP_USER_BENEFITS --> ASOP_BENEFITS : BENEFIT_ID
+ASOP_TARIFF_RATES --> ASOP_TARIFF_TYPES : TARIFF_TYPE_ID
+ASOP_TARIFF_RATES --> ASOP_CARRIERS : CARRIER_ID
+ASOP_TARIFF_RATES --> ASOP_FARE_ZONES : ZONE_ID
+ASOP_TARIFF_RATES --> ASOP_PATHS : PATH_ID
+
+' --- Модуль 5.1: Долги ---
+ASOP_CARD_DEBTS --> ASOP_CARDS : CARD_ID
+ASOP_CARD_DEBTS --> ASOP_TRANSACTIONS : TRANSACTION_ID
+ASOP_CARD_DEBTS --> ASOP_SESSIONS : SESSION_ID
+ASOP_CARD_DEBTS --> ASOP_TERMINALS : TERMINAL_ID
+ASOP_CARD_DEBTS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_DEBT_RECOVERY_ATTEMPTS --> ASOP_CARD_DEBTS : DEBT_ID
+ASOP_DEBT_RECOVERY_ATTEMPTS --> ASOP_TRANSACTIONS : RECOVERY_TRANSACTION_ID
+
+' --- Модуль 6: Оборудование ---
+ASOP_DISTRIBUTOR_TERMINALS --> ASOP_CARDS_DISTRIBUTORS : CARDS_DISTRIBUTOR_ID
+ASOP_DISTRIBUTOR_TERMINALS --> ASOP_CONTRACTS : CONTRACT_ID
+ASOP_DISTRIBUTOR_TERMINALS --> ASOP_USERS : MOL_USER_ID
+ASOP_DISTRIBUTOR_TERMINALS --> ASOP_TERMINAL_PROFILES : PROFILE_ID
+ASOP_DISTRIBUTOR_TERMINALS --> ASOP_TERMINAL_SOFTWARE : SOFTWARE_VERSION_ID
+ASOP_TIDS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_TIDS --> ASOP_TERMINALS : TERMINAL_ID
+ASOP_TERMINALS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_TERMINALS --> ASOP_USERS : MOL_USER_ID
+ASOP_TERMINALS --> ASOP_TERMINALS : PARENT_TERMINAL_ID
+ASOP_TERMINALS --> ASOP_TIDS : TID_ID
+ASOP_TERMINALS --> ASOP_VEHICLES : VEHICLE_ID
+ASOP_TERMINALS --> ASOP_TERMINAL_PROFILES : PROFILE_ID
+ASOP_TERMINALS --> ASOP_TERMINAL_SOFTWARE : SOFTWARE_VERSION_ID
+
+' --- Модуль 7: Сессии, транзакции ---
+ASOP_SESSIONS --> ASOP_SESSION_TYPES : SESSION_TYPE_ID
+ASOP_SESSIONS --> ASOP_SESSIONS : PARENT_SESSION_ID
+ASOP_SESSIONS --> ASOP_TERMINALS : TERMINAL_ID
+ASOP_SESSIONS --> ASOP_TIDS : TID_ID
+ASOP_SESSIONS --> ASOP_USERS : OPENED_BY_USER_ID
+ASOP_SESSIONS --> ASOP_USERS : CLOSED_BY_USER_ID
+ASOP_SESSIONS --> ASOP_CARDS : CARD_ID
+ASOP_SESSIONS --> ASOP_PATHS : PATH_ID
+ASOP_SESSIONS --> ASOP_VEHICLES : VEHICLE_ID
+
+ASOP_AUDIT_SERVICES --> ASOP_ORGANIZERS : ORGANIZER_ID
+ASOP_AUDIT_SERVICES --> ASOP_CARRIERS : CARRIER_ID
+ASOP_AUDIT_TASKS --> ASOP_ORGANIZERS : ORGANIZER_ID
+ASOP_AUDIT_TASKS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_AUDIT_TASKS --> ASOP_AUDIT_SERVICES : ASSIGNED_AUDIT_SERVICE_ID
+ASOP_AUDIT_TASK_PATHS --> ASOP_AUDIT_TASKS : TASK_ID
+ASOP_AUDIT_TASK_PATHS --> ASOP_PATHS : PATH_ID
+ASOP_AUDIT_BRIGADES --> ASOP_AUDIT_TASKS : TASK_ID
+ASOP_AUDIT_BRIGADES --> ASOP_USERS : FOREMAN_USER_ID
+ASOP_AUDIT_BRIGADE_MEMBERS --> ASOP_AUDIT_BRIGADES : BRIGADE_ID
+ASOP_AUDIT_BRIGADE_MEMBERS --> ASOP_USERS : USER_ID
+ASOP_AUDIT_INSPECTIONS --> ASOP_AUDIT_BRIGADES : BRIGADE_ID
+ASOP_AUDIT_INSPECTIONS --> ASOP_SESSIONS : CONTROLLER_SESSION_ID
+ASOP_AUDIT_INSPECTIONS --> ASOP_PATHS : PATH_ID
+ASOP_AUDIT_INSPECTION_TASKS --> ASOP_AUDIT_INSPECTIONS : INSPECTION_ID
+ASOP_AUDIT_INSPECTION_TASKS --> ASOP_AUDIT_TASKS : TASK_ID
+
+ASOP_TRANSACTIONS --> ASOP_SESSIONS : SESSION_ID
+ASOP_TRANSACTIONS --> ASOP_TRANSACTION_TYPES : TRANSACTION_TYPE_ID
+ASOP_TRANSACTIONS --> ASOP_TRANSACTION_RESULTS : TRANSACTION_RESULT_ID
+ASOP_TRANSACTION_CARDS --> ASOP_TRANSACTIONS : TRANSACTION_ID
+ASOP_TRANSACTION_CARDS --> ASOP_CARDS : CARD_ID
+ASOP_TRANSACTION_CARDS --> ASOP_CARD_TARIFFS : TARIFF_APPLIED_ID
+
+ASOP_PAYMENTS --> ASOP_CARDS : CARD_ID
+ASOP_PAYMENTS --> ASOP_SESSIONS : SESSION_ID
+ASOP_PAYMENTS --> ASOP_EVENTS : EVENT_ID
+ASOP_PAYMENTS --> ASOP_USERS : USER_ID
+ASOP_PAYMENTS --> ASOP_DISTRIBUTOR_TERMINALS : DISTRIBUTOR_TERMINAL_ID
+
+ASOP_GPS_TRACKING --> ASOP_VEHICLES : VEHICLE_ID
+ASOP_GPS_TRACKING --> ASOP_PATHS : PATH_ID
+ASOP_GPS_TRACKING --> ASOP_SESSIONS : SESSION_ID
+
+ASOP_EVENTS --> ASOP_EVENT_TYPES : EVENT_TYPE
+ASOP_EVENTS --> ASOP_SESSIONS : SESSION_ID
+ASOP_EVENTS --> ASOP_USERS : USER_ID
+
+' --- Модуль 8: Фискализация ---
+ASOP_CARRIER_FISCALIZERS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_CARRIER_FISCALIZERS --> ASOP_FISCALIZERS : FISCALIZER_ID
+ASOP_FISCALIZER_TOKENS --> ASOP_CARRIER_FISCALIZERS : CARRIER_FISCALIZER_ID
+ASOP_FISCAL_RECEIPTS --> ASOP_TRANSACTIONS : TRANSACTION_ID
+ASOP_FISCAL_RECEIPTS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_FISCAL_RECEIPTS --> ASOP_CARRIER_FISCALIZERS : CARRIER_FISCALIZER_ID
+ASOP_FISCAL_RECEIPT_ATTEMPTS --> ASOP_FISCAL_RECEIPTS : RECEIPT_ID
+ASOP_FISCAL_RECEIPT_ATTEMPTS --> ASOP_FISCALIZER_TOKENS : TOKEN_ID
+ASOP_FISCAL_MONTHLY_REPORTS --> ASOP_CARRIERS : CARRIER_ID
+ASOP_FISCAL_MONTHLY_REPORTS --> ASOP_FISCALIZERS : FISCALIZER_ID
+
+' ============================================================
+' ЛЕГЕНДА
+' ============================================================
+legend right
+  | Символ | Значение |
+  | <back:#FDFDFD> * </back> | Первичный ключ (PK) |
+  | <back:#FDFDFD> # </back> | Внешний ключ (FK) |
+  | <back:#FDFDFD> * # </back> | PK + FK одновременно |
+endlegend
+
+note bottom of ASOP_USERS
+  **Функции БД:**
+  • fn_get_active_fiscal_token()
+  • fn_calculate_next_retry()
+  • fn_create_card_debt()
+  • fn_recover_card_debt()
+  • fn_expire_overdue_debts()
+  • fn_calculate_debt_recovery_retry()
+end note
+
+@enduml

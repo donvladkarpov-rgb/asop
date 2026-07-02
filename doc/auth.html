@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Архитектура аутентификации и авторизации ASOP</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+        }
+
+        h2 {
+            color: #34495e;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+
+        h3 {
+            color: #7f8c8d;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+
+        .meta-info {
+            background: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+            border-left: 4px solid #3498db;
+        }
+
+        .meta-info strong {
+            color: #2c3e50;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            background: white;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background: #3498db;
+            color: white;
+            font-weight: 600;
+        }
+
+        tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+
+        tr:hover {
+            background: #e3f2fd;
+        }
+
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #e74c3c;
+        }
+
+        pre {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            border-radius: 5px;
+            overflow-x: auto;
+            margin: 20px 0;
+        }
+
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+
+        .toc {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .toc h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .toc li {
+            margin: 8px 0;
+        }
+
+        .toc a {
+            color: #3498db;
+            text-decoration: none;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            color: #0c5460;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            color: #856404;
+        }
+
+        .diagram {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            white-space: pre;
+            overflow-x: auto;
+            border: 1px solid #ddd;
+        }
+
+        .back-to-top {
+            display: inline-block;
+            margin-top: 10px;
+            color: #3498db;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+
+        .back-to-top:hover {
+            text-decoration: underline;
+        }
+
+        ul, ol {
+            margin: 15px 0;
+            padding-left: 30px;
+        }
+
+        li {
+            margin: 8px 0;
+        }
+
+        .section {
+            margin-bottom: 50px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🔐 Архитектура аутентификации и авторизации ASOP</h1>
+
+    <div class="meta-info">
+        <strong>Версия:</strong> 1.0<br>
+        <strong>Дата:</strong> 2026-07-01<br>
+        <strong>Статус:</strong> Утверждено<br>
+        <strong>Область:</strong> Backend, Gateway, Terminal Android, NFC-персонализация, Keycloak, PKI
+    </div>
+
+    <div class="toc">
+        <h3>📚 Оглавление</h3>
+        <ul>
+            <li><a href="#overview">1. Обзор и архитектурные принципы</a></li>
+            <li><a href="#components">2. Компоненты системы</a></li>
+            <li><a href="#flows">3. Детальные сценарии (Flows)</a></li>
+            <li><a href="#database">4. Изменения в схеме БД</a></li>
+            <li><a href="#security">5. Защита от атак</a></li>
+            <li><a href="#architecture">6. Итоговая архитектура</a></li>
+            <li><a href="#principles">7. Ключевые принципы</a></li>
+        </ul>
+    </div>
+
+    <div class="section" id="overview">
+        <h2>1. Обзор и архитектурные принципы</h2>
+
+        <p>Система АСОП строится на <strong>трёх независимых контурах аутентификации</strong>, каждый из которых оптимизирован под свой тип клиента и условия работы:</p>
+
+        <table>
+            <thead>
+            <tr>
+                <th>Клиент</th>
+                <th>Метод</th>
+                <th>Сетевое условие</th>
+                <th>Где применяется</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td><strong>Веб-админка / Мобильное приложение пассажира</strong></td>
+                <td>JWT (OIDC через Keycloak)</td>
+                <td>Всегда онлайн</td>
+                <td>Управление системой, личные кабинеты, аналитика</td>
+            </tr>
+            <tr>
+                <td><strong>Терминал (Android/Linux)</strong></td>
+                <td>mTLS + сертификат устройства</td>
+                <td>Online ↔ Offline (до 12 ч)</td>
+                <td>Приём оплаты, валидация, открытие смен, GPS-трекинг</td>
+            </tr>
+            <tr>
+                <td><strong>Водитель</strong></td>
+                <td>MIFARE DESFire EV3 + PKI (ECDSA P-256) + PIN</td>
+                <td>100% Offline</td>
+                <td>Аутентификация в терминале, открытие смены/рейса</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <h3>Ключевые принципы</h3>
+        <ol>
+            <li><strong>Offline-first для терминалов</strong>: терминал способен работать без связи часами, накапливая сессии и транзакции локально.</li>
+            <li><strong>Аппаратная защита ключей</strong>: приватные ключи никогда не покидают защищённую среду (HSM для Root CA, Android Keystore/StrongBox для терминалов, чип DESFire для водителей).</li>
+            <li><strong>Zero-Trust на уровне устройств</strong>: каждый терминал и каждая карта водителя имеют криптографический паспорт, проверяемый через Root CA.</li>
+            <li><strong>Асинхронная архитектура Gateway</strong>: Gateway не пишет в БД. Он принимает запросы, валидирует аутентификацию/авторизацию, пушит команды в Kafka и возвращает <code>202 Accepted</code>.</li>
+            <li><strong>Минимум изменений в БД</strong>: в схему добавляется только одно поле (<code>ASOP_VEHICLES.CARRIER_ID</code> → <code>NULL</code>). Новые таблицы не создаются.</li>
+        </ol>
+    </div>
+
+    <div class="section" id="components">
+        <h2>2. Компоненты системы</h2>
+
+        <h3>2.1. Root CA (Корневой Центр Сертификации)</h3>
+        <ul>
+            <li><strong>Назначение</strong>: единая точка доверия. Подписывает сертификаты терминалов и сертификаты водителей (на MIFARE-картах).</li>
+            <li><strong>Хранение приватного ключа</strong>:
+                <ul>
+                    <li>MVP: PKCS#12 файл + пароль в HashiCorp Vault / AWS Secrets Manager</li>
+                    <li>Production: HSM (Thales Luna, YubiHSM 2, AWS CloudHSM) с защитой от физического вскрытия</li>
+                </ul>
+            </li>
+            <li><strong>Управление доступом</strong>: M-of-N (минимум 3 из 5 администраторов для подписи сертификата или отзыва)</li>
+            <li><strong>Онлайн-операции</strong>: выполняются через Intermediate CA, который подписывается Root CA. Root CA физически отключён от сети.</li>
+            <li><strong>Выходные артефакты</strong>: <code>asop-root-ca.pem</code> (публичный ключ), CRL (список отозванных сертификатов), Intermediate CA сертификаты.</li>
+        </ul>
+
+        <h3>2.2. Веб-клиенты и мобильные приложения (JWT + Keycloak)</h3>
+        <ul>
+            <li><strong>Flow</strong>: Authorization Code Flow (веб), Authorization Code + PKCE (мобайл)</li>
+            <li><strong>Токены</strong>:
+                <ul>
+                    <li><code>access_token</code>: JWT, TTL 5 мин, содержит <code>sub</code>, <code>realm_access.roles</code>, <code>resource_access.asop-backend.roles</code></li>
+                    <li><code>refresh_token</code>: opaque, TTL 8 ч (веб) / 30 дн (мобайл), хранится в <code>httpOnly</code> cookie или Secure Storage</li>
+                </ul>
+            </li>
+            <li><strong>Валидация в Gateway</strong>:
+                <ul>
+                    <li>JWT декодируется и проверяется локально через JWKS (<code>/realms/asop/protocol/openid-connect/certs</code>)</li>
+                    <li>JWKS кэшируется в Gateway, обновляется каждые 60 сек</li>
+                    <li>Никаких сетевых вызовов к Keycloak на каждый запрос</li>
+                </ul>
+            </li>
+            <li><strong>Авторизация</strong>: ролевая модель через Spring Security Reactive (<code>hasRole</code>, <code>hasAuthority</code>). Примеры ролей: <code>SUPER_ADMIN</code>, <code>CARRIER_ADMIN</code>, <code>DISPATCHER</code>, <code>PASSENGER</code>.</li>
+        </ul>
+
+        <h3>2.3. Терминалы (mTLS + сертификаты устройств)</h3>
+        <ul>
+            <li><strong>Аутентификация устройства</strong>: Mutual TLS при каждом соединении с Gateway</li>
+            <li><strong>Хранение приватного ключа терминала</strong>:
+                <ul>
+                    <li>Android: <code>AndroidKeyStore</code> с флагом <code>setIsStrongBoxBacked(true)</code> (аппаратный SE, если доступен)</li>
+                    <li>Linux/Embedded: TPM 2.0 или внешний YubiKey</li>
+                </ul>
+            </li>
+            <li><strong>Процесс регистрации терминала</strong>:
+                <ol>
+                    <li>При первом включении терминал генерирует пару ECC P-256 в Keystore</li>
+                    <li>Формирует CSR (<code>POST /api/v1/terminals/register</code>)</li>
+                    <li>Gateway подписывает CSR через Intermediate CA</li>
+                    <li>Терминал получает X.509 сертификат, сохраняет в Keystore</li>
+                    <li>Серийный номер сертификата фиксируется в <code>ASOP_TERMINALS</code></li>
+                </ol>
+            </li>
+            <li><strong>Синхронизация (online)</strong>: терминал запрашивает у Gateway:
+                <ul>
+                    <li>Обновлённый CRL</li>
+                    <li>Изменения в льготах (<code>ASOP_USER_BENEFITS</code>)</li>
+                    <li>Изменения в тарифах (<code>ASOP_TARIFF_RATES</code>)</li>
+                    <li>Чёрный список карт (<code>ASOP_BLACKLISTS</code>)</li>
+                </ul>
+            </li>
+            <li><strong>Offline-работа</strong>: терминал хранит локальные копии справочников. Сессии подписываются приватным ключом терминала и отправляются батчем при появлении связи.</li>
+        </ul>
+
+        <h3>2.4. Водители (MIFARE DESFire EV3 + PKI + Challenge-Response)</h3>
+        <ul>
+            <li><strong>Криптография</strong>: ECDSA на кривой NIST P-256. Приватный ключ генерируется и хранится <strong>внутри чипа карты</strong>, физически не извлекаем.</li>
+            <li><strong>Структура приложения на карте (AID: <code>0xD2760000850101</code>)</strong>:
+                <ul>
+                    <li><code>File 0x01</code>: X.509 сертификат водителя (подписан Root CA)</li>
+                    <li><code>File 0x02</code>: ECC Private Key (права: <code>Sign Only</code>, чтение запрещено)</li>
+                    <li><code>File 0x03</code>: Профиль водителя (<code>driver_id</code>, <code>carrier_id</code>, <code>valid_from</code>, <code>valid_until</code>)</li>
+                </ul>
+            </li>
+            <li><strong>Протокол аутентификации (NFC)</strong>:
+                <ol>
+                    <li>Терминал генерирует случайный <code>challenge</code> (32 байта)</li>
+                    <li>Отправляет карте команду <code>SignData(challenge)</code></li>
+                    <li>Карта подписывает challenge своим приватным ключом, возвращает подпись</li>
+                    <li>Терминал извлекает публичный ключ из сертификата (File 0x01)</li>
+                    <li>Терминал проверяет подпись локально</li>
+                    <li>Терминал проверяет срок действия сертификата и отсутствие UID в локальном CRL</li>
+                    <li>Водитель вводит PIN (второй фактор) → терминал сверяет хэш PIN с локальной базой</li>
+                    <li>При успехе → смена открыта</li>
+                </ol>
+            </li>
+            <li><strong>Персонализация карты (в депо)</strong>: выполняется через NFC-ридер + ПК с ПО персонализации. Приватный ключ генерируется на карте, публичный отправляется на бэкенд для выпуска сертификата, сертификат записывается обратно на карту.</li>
+        </ul>
+    </div>
+
+    <div class="section" id="flows">
+        <h2>3. Детальные сценарии (Flows)</h2>
+
+        <h3>3.1. Аутентификация vs Авторизация в Gateway</h3>
+        <table>
+            <thead>
+            <tr>
+                <th>Этап</th>
+                <th>Вопрос</th>
+                <th>Механизм</th>
+                <th>Результат</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>Аутентификация</td>
+                <td>Кто ты?</td>
+                <td>Проверка подписи JWT (JWKS) или валидация Client Cert (mTLS)</td>
+                <td><code>Principal</code> / <code>X.509Certificate</code></td>
+            </tr>
+            <tr>
+                <td>Авторизация</td>
+                <td>Что тебе можно?</td>
+                <td>Проверка ролей/скопов в токете, RBAC в Spring Security</td>
+                <td><code>200 OK</code> / <code>403 Forbidden</code></td>
+            </tr>
+            <tr>
+                <td>Аудит</td>
+                <td>Кто совершил действие?</td>
+                <td><code>userId</code> из JWT или <code>terminal_serial</code> из mTLS передаётся в Kafka-событие</td>
+                <td><code>correlationId</code>, <code>userId</code> в event</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <h3>3.2. Открытие смены терминалом (полный цикл)</h3>
+        <ol>
+            <li><strong>Синхронизация (online)</strong>: терминал загружает CRL, льготы, тарифы, чёрный список карт.</li>
+            <li><strong>Выбор транспорта</strong>:
+                <pre><code>SELECT VEHICLE_ID, VEHICLE_NUMBER, VEHICLE_NAME,
+  CASE WHEN CARRIER_ID = :terminal_carrier_id THEN 1
+       WHEN CARRIER_ID IS NULL THEN 2 ELSE 3 END AS priority
+FROM ASOP_VEHICLES
+WHERE CARRIER_ID = :terminal_carrier_id OR CARRIER_ID IS NULL
+ORDER BY priority, VEHICLE_NUMBER;</code></pre>
+            </li>
+            <li><strong>Выбор маршрута</strong> (M:N через договоры):
+                <pre><code>SELECT DISTINCT r.ROUTE_ID, r.ROUTE_NUMBER, r.ROUTE_NAME
+FROM ASOP_ROUTES r
+JOIN ASOP_CONTRACT_ROUTES cr ON cr.ROUTE_ID = r.ROUTE_ID
+JOIN ASOP_CONTRACTS c ON c.CONTRACT_ID = cr.CONTRACT_ID
+WHERE c.CARRIER_ID = :terminal_carrier_id AND c.STATUS = 'ACTIVE';</code></pre>
+            </li>
+            <li><strong>Аутентификация водителя</strong>: NFC Challenge-Response + PIN (2FA).</li>
+            <li><strong>Создание сессии</strong>: терминал генерирует <code>SESSION_ID</code> (UUIDv7), фиксирует <code>STARTED_AT_LOCAL</code>, <code>PATH_ID</code>, <code>VEHICLE_ID</code>, <code>DRIVER_UID</code>.</li>
+            <li><strong>Локальная подпись</strong>: терминал подписывает хэш сессии своим приватным ключом (<code>SHA256withECDSA</code>).</li>
+            <li><strong>Работа офлайн</strong>: накопление транзакций в локальной SQLite/Room.</li>
+            <li><strong>Синхронизация</strong>: при появлении сети терминал отправляет батч сессий на Gateway → Kafka → <code>session-service</code>.</li>
+        </ol>
+
+        <h3>3.3. Персонализация MIFARE-карты водителя</h3>
+        <ol>
+            <li>Администратор помещает пустую DESFire EV3 на NFC-ридер.</li>
+            <li>ПО персонализации аутентифицируется как Admin (Master Key).</li>
+            <li>Создаётся приложение ASOP, генерируется ECC P-256 ключевая пара внутри чипа.</li>
+            <li>Публичный ключ отправляется на <code>driver-card-service</code>.</li>
+            <li>Бэкенд формирует X.509 сертификат (<code>CN=driver_id, OU=carrier_id, O=ASOP</code>), подписывает через Root CA.</li>
+            <li>Сертификат записывается в File 0x01, профиль в File 0x03.</li>
+            <li>Карта выдаётся водителю, запись в журнал.</li>
+        </ol>
+
+        <h3>3.4. Отзыв сертификата и обновление CRL</h3>
+        <ol>
+            <li>Администратор отзывает карту/терминал в веб-админке (<code>POST /api/v1/certificates/{serial}/revoke</code>).</li>
+            <li>Бэкенд помечает сертификат как <code>REVOKED</code>, добавляет серийный номер в CRL.</li>
+            <li>CRL подписывается Root CA, публикуется на Gateway.</li>
+            <li>Терминалы при следующей синхронизации загружают обновлённый CRL.</li>
+            <li>При попытке аутентификации терминал сверяет UID/Serial с локальным CRL → доступ запрещён.</li>
+        </ol>
+    </div>
+
+    <div class="section" id="database">
+        <h2>4. Изменения в схеме БД</h2>
+
+        <div class="alert alert-info">
+            <strong>Единственное изменение</strong>: поле <code>CARRIER_ID</code> в таблице <code>ASOP_VEHICLES</code> становится nullable для поддержки общего пула транспорта (реальный кейс: аренда/передача ТС между перевозчиками).
+        </div>
+
+        <pre><code>ALTER TABLE ASOP_VEHICLES
+    ALTER COLUMN CARRIER_ID DROP NOT NULL;
+
+COMMENT ON COLUMN ASOP_VEHICLES.CARRIER_ID IS
+    'Перевозчик-владелец. NULL = общий пул транспорта, доступный любому перевозчику через договор или временную передачу.';</code></pre>
+
+        <div class="alert alert-warning">
+            <strong>Важно</strong>: таблицы <code>ASOP_TERMINAL_CERTIFICATES</code>, <code>ASOP_DRIVER_CARDS</code>, <code>ASOP_VEHICLE_TRANSFERS</code> в схему <strong>не добавляются</strong>. Управление сертификатами и картами ведётся через внешние системы/журналы, а в БД фиксируются только бизнес-сущности и ссылки на серийные номера/UID при необходимости.
+        </div>
+    </div>
+
+    <div class="section" id="security">
+        <h2>5. Защита от атак</h2>
+
+        <table>
+            <thead>
+            <tr>
+                <th>Атака</th>
+                <th>Вектор</th>
+                <th>Митигация</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>Клонирование карты</td>
+                <td>Снятие дампа памяти</td>
+                <td>DESFire EV3: ключи в аппаратном SE, UID защищён от чтения</td>
+            </tr>
+            <tr>
+                <td>Replay-атака</td>
+                <td>Перехват и повтор NFC-ответа</td>
+                <td>Случайный challenge + timestamp + одноразовая сессия</td>
+            </tr>
+            <tr>
+                <td>Кража карты водителя</td>
+                <td>Физическое хищение</td>
+                <td>PIN как второй фактор + удалённый отзыв через CRL</td>
+            </tr>
+            <tr>
+                <td>Компрометация терминала</td>
+                <td>Root/доступ к ОС</td>
+                <td>Приватный ключ в Keystore/StrongBox, не извлекаем. Данные сессий подписываются, но ключ не покидает чип</td>
+            </tr>
+            <tr>
+                <td>Подмена Root CA</td>
+                <td>MITM при обновлении прошивки</td>
+                <td>Root CA public key зашит в образ прошивки, проверяется через хэш</td>
+            </tr>
+            <tr>
+                <td>Компрометация Root CA</td>
+                <td>Утечка приватного ключа CA</td>
+                <td>HSM + M-of-N + offline хранение + процедура emergency rotation</td>
+            </tr>
+            <tr>
+                <td>Фабрикация транзакций</td>
+                <td>Подмена данных на терминале</td>
+                <td>Каждая сессия подписывается ключом терминала. Gateway валидирует подпись перед приёмом в Kafka</td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div class="section" id="architecture">
+        <h2>6. Итоговая архитектура</h2>
+
+        <div class="diagram">
+            ┌─────────────────────────────────────────
+            │        Root CA (ASOP)           │
+            │  HSM / Offline / M-of-N         │
+            └───────────────┬─────────────────┘
+            │ (подпись сертификатов)
+            ┌───────────────────────────┼───────────────────────────┐
+            ↓                           ↓                           ↓
+            ┌───────────────┐         ┌──────────────────┐         ┌──────────────────┐
+            │  Веб-клиенты  │         │    Терминалы     │         │  Водители (NFC)  │
+            │  (JWT/Keycloak)│         │  (mTLS + Cert)   │         │  (DESFire EV3)   │
+            │               │         │                  │         │                  │
+            │ • Authorization│         │ • Android Keystore│         │ • ECC P-256 Key  │
+            │ • Refresh Token│         │ • CSR → Gateway  │         │ • File 0x01: Cert│
+            │ • Roles/Scopes │         │ • Sync: CRL/Tariffs│       │ • File 0x02: Priv│
+            │ • JWKS Local   │         │ • Offline 12h    │         │ • Challenge-Resp │
+            └───────┬───────┘         └────────┬─────────┘         └────────┬─────────
+            │                          │                            │
+            └──────────────────────────┼────────────────────────────┘
+            ↓
+            ┌────────────────────────────────────────────────┐
+            │              Gateway Service                   │
+            │  • Spring WebFlux (Reactive)                   │
+            │  • JWT Validation (JWKS)                       │
+            │  • mTLS Termination                            │
+            │  • Validation → Kafka Producer                 │
+            │  • Returns 202 Accepted + X-Event-Id           │
+            └───────────────────────┬────────────────────────┘
+            ↓
+            ┌────────────────────────────────────────────────┐
+            │           Kafka (asop.*.commands)              │
+            │  • asop.carrier.commands                       │
+            │  • asop.session.commands                       │
+            │  • asop.terminal.commands                      │
+            ───────────────────────┬────────────────────────┘
+            ↓
+            ┌────────────────────────────────────────────────┐
+            │           Downstream Services                  │
+            │  • carrier-service (R2DBC + Postgres)          │
+            │  • session-service (R2DBC + Postgres)          │
+            │  • terminal-service (Device Management)        │
+            │  • fiscal-service, debt-service, etc.          │
+            └────────────────────────────────────────────────</div>
+    </div>
+
+    <div class="section" id="principles">
+        <h2>7. Ключевые принципы и рекомендации по внедрению</h2>
+
+        <ol>
+            <li><strong>Не хранить приватные ключи в БД</strong>. БД хранит только бизнес-данные, ссылки на серийные номера сертификатов и UID карт. Криптография остаётся на устройствах и в HSM.</li>
+            <li><strong>CRL должен обновляться превентивно</strong>. Терминал не имеет права открывать смену, если карта водителя находится в локальном CRL.</li>
+            <li><strong>Offline-окно ограничено 12 часами</strong>. После истечения <code>EXPIRATION_TIME</code> сессии терминал обязан синхронизироваться, иначе блокирует приём оплат.</li>
+            <li><strong>Конфликты синхронизации решаются по timestamp</strong>. Если два терминала отправили сессии с одинаковым <code>VEHICLE_ID</code> в overlapping timeframe, <code>session-service</code> помечает одну как <code>CONFLICT</code> и требует ручной проверки диспетчером.</li>
+            <li><strong>Root CA rotation планируется заранее</strong>. За 30 дней до истечения срока Root CA выпускается новый, прошивки терминалов обновляются через OTA, старые сертификаты переиздаются.</li>
+            <li><strong>Тестирование криптографии обязательно</strong>. Использовать <code>njadesfire</code> или нативный <code>IsoDep</code> для эмуляции DESFire EV3 в CI. Проверять challenge-response, подпись сессий, валидацию CRL.</li>
+            <li><strong>Логирование аутентификации</strong>. Все успешные и неуспешные попытки входа (веб, терминал, NFC) фиксируются в audit-логе с <code>correlationId</code> для расследования инцидентов.</li>
+        </ol>
+
+        <div class="alert alert-info">
+            <strong>Документ закрывает все аспекты аутентификации и авторизации, согласованные в ходе проектирования.</strong><br>
+            При необходимости дополнения разделов (например, детальная спецификация APDU-команд для DESFire или конфигурация Keycloak realm) — добавить отдельным приложением.
+        </div>
+    </div>
+
+    <div style="margin-top: 50px; padding-top: 20px; border-top: 2px solid #ecf0f1; text-align: center; color: #7f8c8d;">
+        <p>Документация сгенерирована для финальной схемы БД АСОП (TAVRIDA) с модулями фискализации и долгов.</p>
+        <p><strong>Версия:</strong> 1.0 | <strong>Дата:</strong> 2026-07-01</p>
+    </div>
+</div>
+
+<script>
+    // Smooth scroll for anchor links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = document.querySelector(this.getAttribute('href'));
+            if (target) {
+                target.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'start'
+                });
+            }
+        });
+    });
+
+    // Add back-to-top links to all h2 headers
+    document.querySelectorAll('h2').forEach(h2 => {
+        const backLink = document.createElement('a');
+        backLink.href = '#';
+        backLink.className = 'back-to-top';
+        backLink.textContent = '↑ Наверх';
+        backLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        h2.appendChild(backLink);
+    });
+</script>
+</body>
+</html>

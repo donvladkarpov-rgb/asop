@@ -1,0 +1,74 @@
+server:
+  port: 8080
+  shutdown: graceful
+  ssl:
+    enabled: true
+    key-store: classpath:gateway-keystore.p12
+    key-store-password: ${GATEWAY_KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: gateway
+    trust-store: classpath:truststore.p12
+    trust-store-password: ${TRUSTSTORE_PASSWORD:changeit}
+    trust-store-type: PKCS12
+    client-auth: want
+
+spring:
+  application:
+    name: gateway-service
+
+  # Jackson
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+      indent-output: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+  # Security (Keycloak)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # JWKS endpoint Keycloak для валидации JWT
+          # Для локальной разработки: http://localhost:8180/realms/asop/protocol/openid-connect/certs
+          # Для prod: подставлять через ENV
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8180/realms/asop/protocol/openid-connect/certs}
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/asop}
+
+  # Kafka (reactor-kafka producer)
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+# ASOP custom properties
+asop:
+  kafka:
+    # Таймаут ожидания подтверждения от Kafka
+    send-timeout-ms: 5000
+
+# Logging
+logging:
+  level:
+    root: INFO
+    ru.asop: DEBUG
+    org.springframework.security: INFO
+    io.netty: WARN
+    reactor.netty: WARN
+    reactor.kafka: INFO
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
