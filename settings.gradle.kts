@@ -13,6 +13,19 @@ include(
     ":backend:shared:asop-kafka-contracts"
 )
 
+// ============ Shared API modules ============
+include(
+    ":backend:shared:api:gateway-api",
+    ":backend:shared:api:crypto-api",
+    ":backend:shared:api:carrier-api",
+    ":backend:shared:api:session-api",
+    ":backend:shared:api:terminal-api",
+    ":backend:shared:api:card-api",
+    ":backend:shared:api:user-api",
+    ":backend:shared:api:debt-api",
+    ":backend:shared:api:fiscal-api",
+    ":backend:shared:api:audit-api"
+)
 
 // ============ Backend services ============
 include(
@@ -24,7 +37,6 @@ include(
     ":backend:fiscal-service",
     ":backend:debt-service",
     ":backend:session-service",
-    ":backend:audit-service"
+    ":backend:audit-service",
+    ":backend:crypto-service"
 )
-include("backend:asop-crypto-service")
-findProject(":backend:asop-crypto-service")?.name = "asop-crypto-service"

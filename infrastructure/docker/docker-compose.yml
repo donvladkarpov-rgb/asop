@@ -47,7 +47,7 @@ services:
   # Crypto Service (Root CA)
   crypto-service:
     build:
-      context: ./backend/services/asop-crypto-service
+      context: ./backend/services/crypto-service
       dockerfile: Dockerfile
     ports:
       - "8081:8081"
