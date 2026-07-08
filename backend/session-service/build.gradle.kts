@@ -11,6 +11,7 @@ dependencies {
     implementation(project(":backend:shared:asop-common"))
     implementation(project(":backend:shared:asop-dto"))
     implementation(project(":backend:shared:asop-kafka-contracts"))
+    implementation(project(":backend:shared:api:session-api"))
 
     // Spring WebFlux
     implementation(libs.spring.boot.starter.webflux)
@@ -25,8 +26,7 @@ dependencies {
     // Database
     implementation(libs.r2dbc.postgresql)
     runtimeOnly(libs.postgresql.driver)
-    implementation(libs.flyway.core)
-    implementation(libs.flyway.postgresql)
+    implementation(libs.liquibase.core)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.reactor)

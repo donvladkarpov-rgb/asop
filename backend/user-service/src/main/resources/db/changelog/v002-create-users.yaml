@@ -1,0 +1,125 @@
+databaseChangeLog:
+  - changeSet:
+      id: v002
+      author: asop
+      changes:
+        - createTable:
+            tableName: ASOP_USERS
+            remarks: Users (PII protected — SNILS hashed/encrypted, names shortened)
+            columns:
+              - column:
+                  name: USER_ID
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: FIRST_NAME
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: LAST_NAME_INITIAL
+                  type: CHAR(1)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: PATRONYMIC_INITIAL
+                  type: CHAR(1)
+              - column:
+                  name: PHONE
+                  type: VARCHAR(20)
+              - column:
+                  name: SNILS_HASH
+                  type: VARCHAR(64)
+                  constraints:
+                    unique: true
+              - column:
+                  name: SNILS_ENCRYPTED
+                  type: BYTEA
+              - column:
+                  name: KEYCLOAK_ID
+                  type: VARCHAR(255)
+                  constraints:
+                    unique: true
+
+        - createTable:
+            tableName: ASOP_USER_ROLES
+            remarks: User-role assignments
+            columns:
+              - column:
+                  name: USER_ID
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: ROLE_ID
+                  type: UUID
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: ASOP_USER_ROLES
+            columnNames: USER_ID, ROLE_ID
+            constraintName: pk_user_roles
+        - addForeignKeyConstraint:
+            baseTableName: ASOP_USER_ROLES
+            baseColumnNames: USER_ID
+            referencedTableName: ASOP_USERS
+            referencedColumnNames: USER_ID
+            constraintName: fk_ur_user
+        - addForeignKeyConstraint:
+            baseTableName: ASOP_USER_ROLES
+            baseColumnNames: ROLE_ID
+            referencedTableName: ASOP_ROLES
+            referencedColumnNames: ROLE_ID
+            constraintName: fk_ur_role
+
+        - createTable:
+            tableName: ASOP_USER_CARRIERS
+            remarks: User-carrier assignments
+            columns:
+              - column:
+                  name: USER_ID
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: CARRIER_ID
+                  type: UUID
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: ASOP_USER_CARRIERS
+            columnNames: USER_ID, CARRIER_ID
+            constraintName: pk_user_carriers
+        - addForeignKeyConstraint:
+            baseTableName: ASOP_USER_CARRIERS
+            baseColumnNames: USER_ID
+            referencedTableName: ASOP_USERS
+            referencedColumnNames: USER_ID
+            constraintName: fk_uc_user
+
+        - createTable:
+            tableName: ASOP_USER_REGIONS
+            remarks: User-region assignments
+            columns:
+              - column:
+                  name: USER_ID
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: REGION_ID
+                  type: UUID
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: ASOP_USER_REGIONS
+            columnNames: USER_ID, REGION_ID
+            constraintName: pk_user_regions
+        - addForeignKeyConstraint:
+            baseTableName: ASOP_USER_REGIONS
+            baseColumnNames: USER_ID
+            referencedTableName: ASOP_USERS
+            referencedColumnNames: USER_ID
+            constraintName: fk_ureg_user

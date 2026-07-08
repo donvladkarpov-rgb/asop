@@ -6,7 +6,6 @@ coroutines = "1.9.0"
 jackson = "2.17.2"
 kafka = "3.7.1"
 postgresql = "42.7.4"
-flyway = "10.20.1"
 r2dbc-postgresql = "1.0.5.RELEASE"
 keycloak = "25.0.4"
 testcontainers = "1.20.3"
@@ -41,8 +40,8 @@ reactor-kafka = { module = "io.projectreactor.kafka:reactor-kafka", version.ref 
 # Database
 postgresql-driver = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
 r2dbc-postgresql = { module = "org.postgresql:r2dbc-postgresql", version.ref = "r2dbc-postgresql" }
-flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
-flyway-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+liquibase-core = { module = "org.liquibase:liquibase-core" }
+keycloak-admin-client = { module = "org.keycloak:keycloak-admin-client", version.ref = "keycloak" }
 
 # Jackson
 jackson-kotlin = { module = "com.fasterxml.jackson.module:jackson-module-kotlin", version.ref = "jackson" }

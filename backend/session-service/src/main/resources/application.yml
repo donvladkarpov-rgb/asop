@@ -1,5 +1,32 @@
 server:
-  port: 8088
+  port: 8085
+
 spring:
   application:
     name: session-service
+
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:asop}
+    username: ${DB_USER:asop}
+    password: ${DB_PASSWORD:asop}
+
+  liquibase:
+    enabled: false
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/asop
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: session-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+asop:
+  kafka:
+    topics:
+      session-commands: asop.session.commands

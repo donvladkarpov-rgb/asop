@@ -1,5 +1,38 @@
 server:
   port: 8082
+
 spring:
   application:
     name: user-service
+
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:asop}
+    username: ${DB_USER:asop}
+    password: ${DB_PASSWORD:asop}
+
+  liquibase:
+    enabled: true
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/asop
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+asop:
+  bootstrap:
+    enabled: ${BOOTSTRAP_ENABLED:true}
+    admin-email: ${BOOTSTRAP_ADMIN_EMAIL:admin@asop.local}
+    admin-password: ${BOOTSTRAP_ADMIN_PASSWORD:admin}
+    admin-first-name: ${BOOTSTRAP_ADMIN_FIRST_NAME:Admin}
+    admin-last-name-initial: A
+
+  keycloak:
+    url: ${KEYCLOAK_URL:http://localhost:8180}
+    realm: asop
+    admin-user: ${KEYCLOAK_ADMIN_USER:admin}
+    admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}

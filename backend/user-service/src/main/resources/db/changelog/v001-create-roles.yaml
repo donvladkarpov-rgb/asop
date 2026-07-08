@@ -1,0 +1,20 @@
+databaseChangeLog:
+  - changeSet:
+      id: v001
+      author: asop
+      changes:
+        - createTable:
+            tableName: ASOP_ROLES
+            remarks: Role definitions
+            columns:
+              - column:
+                  name: ROLE_ID
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: ROLE_NAME
+                  type: VARCHAR(255)
+                  constraints:
+                    nullable: false

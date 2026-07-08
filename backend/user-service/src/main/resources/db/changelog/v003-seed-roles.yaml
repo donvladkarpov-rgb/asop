@@ -1,0 +1,81 @@
+databaseChangeLog:
+  - changeSet:
+      id: v003
+      author: asop
+      changes:
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000001"
+              - column:
+                  name: ROLE_NAME
+                  value: "SUPER_ADMIN"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000002"
+              - column:
+                  name: ROLE_NAME
+                  value: "CARRIER_ADMIN"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000003"
+              - column:
+                  name: ROLE_NAME
+                  value: "CONTROLLER_ADMIN"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000004"
+              - column:
+                  name: ROLE_NAME
+                  value: "DISTRIBUTOR_ADMIN"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000005"
+              - column:
+                  name: ROLE_NAME
+                  value: "DISPATCHER"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000006"
+              - column:
+                  name: ROLE_NAME
+                  value: "DRIVER"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000007"
+              - column:
+                  name: ROLE_NAME
+                  value: "CONTROLLER"
+        - insert:
+            tableName: ASOP_ROLES
+            columns:
+              - column:
+                  name: ROLE_ID
+                  value: "00000000-0000-0000-0000-000000000008"
+              - column:
+                  name: ROLE_NAME
+                  value: "PASSENGER"
+      rollback:
+        - delete:
+            tableName: ASOP_ROLES
+            where: "ROLE_ID IN ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000003','00000000-0000-0000-0000-000000000004','00000000-0000-0000-0000-000000000005','00000000-0000-0000-0000-000000000006','00000000-0000-0000-0000-000000000007','00000000-0000-0000-0000-000000000008')"
