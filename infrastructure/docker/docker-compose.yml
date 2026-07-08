@@ -1,9 +1,8 @@
-version: '3.8'
-
 services:
-  # PostgreSQL
+  # === Infrastructure ===
+
   postgres:
-    image: postgres:14
+    image: postgis/postgis:14-3.4
     environment:
       POSTGRES_DB: asop
       POSTGRES_USER: asop
@@ -12,20 +11,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infrastructure/db-migrations:/docker-entrypoint-initdb.d
-
-  # Kafka
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-    ports:
-      - "9092:9092"
-    depends_on:
-      - zookeeper
+      - ../db-migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U asop -d asop"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - asop-net
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
@@ -33,46 +26,298 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
     ports:
       - "2181:2181"
+    networks:
+      - asop-net
 
-  # Keycloak
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - asop-net
+
   keycloak:
     image: quay.io/keycloak/keycloak:25.0.4
-    command: start-dev
+    command: start-dev --import-realm
     environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres/asop
+      KC_DB_USERNAME: asop
+      KC_DB_PASSWORD: asop
+      KC_HOSTNAME: localhost
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
     ports:
       - "8180:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - asop-net
 
-  # Crypto Service (Root CA)
+  # === Application Services ===
+
   crypto-service:
     build:
-      context: ./backend/services/crypto-service
+      context: ../../backend/crypto-service
       dockerfile: Dockerfile
     ports:
       - "8081:8081"
     environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       ROOT_CA_KEYSTORE_PATH: /data/root-ca.p12
       ROOT_CA_KEYSTORE_PASSWORD: changeit
     volumes:
       - crypto_data:/data
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - asop-net
 
-  # Gateway Service
   gateway-service:
     build:
-      context: ./backend/services/gateway-service
+      context: ../../backend/gateway-service
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
     environment:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/asop
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/asop/protocol/openid-connect/certs
       GATEWAY_KEYSTORE_PASSWORD: changeit
       TRUSTSTORE_PASSWORD: changeit
     depends_on:
-      - kafka
-      - keycloak
-      - crypto-service
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      crypto-service:
+        condition: service_started
+    networks:
+      - asop-net
+
+  user-service:
+    build:
+      context: ../../backend/user-service
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      BOOTSTRAP_ENABLED: "true"
+      BOOTSTRAP_ADMIN_PASSWORD: admin
+      SPRING_LIQUIBASE_CHANGE_LOG: file:/db-migrations/user/db.changelog-master.yaml
+    volumes:
+      - ../db-migrations:/db-migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  terminal-service:
+    build:
+      context: ../../backend/terminal-service
+      dockerfile: Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  session-service:
+    build:
+      context: ../../backend/session-service
+      dockerfile: Dockerfile
+    ports:
+      - "8085:8085"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  card-service:
+    build:
+      context: ../../backend/card-service
+      dockerfile: Dockerfile
+    ports:
+      - "8086:8086"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  carrier-service:
+    build:
+      context: ../../backend/carrier-service
+      dockerfile: Dockerfile
+    ports:
+      - "8087:8087"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  debt-service:
+    build:
+      context: ../../backend/debt-service
+      dockerfile: Dockerfile
+    ports:
+      - "8088:8088"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  audit-service:
+    build:
+      context: ../../backend/audit-service
+      dockerfile: Dockerfile
+    ports:
+      - "8089:8089"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  fiscal-service:
+    build:
+      context: ../../backend/fiscal-service
+      dockerfile: Dockerfile
+    ports:
+      - "8090:8090"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+networks:
+  asop-net:
+    driver: bridge
 
 volumes:
   postgres_data:

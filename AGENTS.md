@@ -40,14 +40,14 @@ API → asop-common dependency via `api(platform(...))` pattern.
 |------|------|------|
 | `gateway-service` | 8080 | API Gateway: JWT + mTLS, Kafka producer |
 | `crypto-service` | 8081 | Root CA, X.509 cert issuance |
-| `user-service` | — | Users + Keycloak bootstrap |
-| `carrier-service` | — | Carriers, contracts, vehicles (R2DBC) |
-| `session-service` | — | Sessions/shifts (tree hierarchy) |
-| `card-service` | — | Cards (MIFARE, bank) |
-| `fiscal-service` | — | Fiscalization (OFD) |
-| `audit-service` | — | Inspections (КРС) |
-| `debt-service` | — | Card debts |
-| `terminal-service` | — | Terminal management |
+| `user-service` | 8082 | Users + Keycloak bootstrap |
+| `terminal-service` | 8084 | Terminal management |
+| `session-service` | 8085 | Sessions/shifts (tree hierarchy) |
+| `card-service` | 8086 | Cards (MIFARE, bank) |
+| `carrier-service` | 8087 | Carriers, contracts, vehicles (R2DBC) |
+| `debt-service` | 8088 | Card debts |
+| `audit-service` | 8089 | Inspections (КРС) |
+| `fiscal-service` | 8090 | Fiscalization (OFD) |
 
 ### Gateway dual auth
 
@@ -66,21 +66,31 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **Gateway returns**: `202 Accepted` + `X-Event-Id` header + `AcceptedResponse` body (with `eventId`, `topic`, `acceptedAt`, `locationHint`)
 - **API modules** contain only interfaces + DTOs, no implementation. Package: `ru.asop.api.{domain}`.
 - **Service packages**: `ru.asop.{domain}` (e.g. `ru.asop.gateway`, `ru.asop.crypto`)
-- **Liquibase migrations**: in each service's `src/main/resources/db/changelog/` (only `user-service` has them now). Other DB services have `liquibase.enabled=false` until they add changelogs.
+- **Liquibase migrations**: all in `infrastructure/db-migrations/{service}/` (e.g. `infrastructure/db-migrations/user/`). Only `user-service` has migrations now; others have `liquibase.enabled=false` until changelogs are added.
 - **InnValidator** lives in `asop-common`, used in gateway for carrier creation
 
 ## Infrastructure
 
-- **Docker Compose** in `infrastructure/docker/docker-compose.yml`
+- **Docker Compose** in `infrastructure/docker/docker-compose.yml` — все 10 сервисов + Postgres + Kafka + Keycloak на общей сети `asop-net`
 - **PostgreSQL 14** with PostGIS
 - **Keycloak 25.0.4** on port 8180, realm `asop`
 - **Bootstrap** (`BootstrapService` in `user-service`): on `ApplicationReadyEvent`, checks `ASOP_USERS` — if empty, creates Keycloak realm + roles + admin user (`admin@asop.local`, temporary password from `BOOTSTRAP_ADMIN_PASSWORD`). Records in `ASOP_USERS` + `ASOP_USER_ROLES`. Env vars: `BOOTSTRAP_ENABLED`, `BOOTSTRAP_ADMIN_PASSWORD`, `KEYCLOAK_URL`, `KEYCLOAK_ADMIN_PASSWORD`
 - **Password change**: `POST /api/v1/users/password/change` on `user-service` → updates password in Keycloak Admin API. Authenticated via JWT (Keycloak).
 
-### Known bugs in docker-compose.yml
+### Docker deploy
 
-- **Build context paths**: uses `./backend/services/{name}` but should be `../../backend/{name}` (file is in `infrastructure/docker/`)
-- **Postgres volume mount**: `./infrastructure/db-migrations` should be `../db-migrations` (relative to docker-compose dir)
+```bash
+# 1. Build JARs
+./gradlew bootJar
+
+# 2. Build & start all containers
+docker compose -f infrastructure/docker/docker-compose.yml up -d --build
+
+# 3. Drop specific service
+docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-service
+```
+
+Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse-temurin:21-jre). Liquibase migrations for Docker mounted from `infrastructure/db-migrations/` into `/db-migrations/` inside containers.
 
 ## Crypto (crypto-service)
 
