@@ -1,0 +1,7 @@
+databaseChangeLog:
+  - include:
+      file: v001-create-roles.yaml
+  - include:
+      file: v002-create-users.yaml
+  - include:
+      file: v003-seed-roles.yaml

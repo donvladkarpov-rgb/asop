@@ -12,6 +12,7 @@ spring:
 
   liquibase:
     enabled: false
+    change-log: file:./infrastructure/db-migrations/debt/db.changelog-master.yaml
 
   security:
     oauth2:
