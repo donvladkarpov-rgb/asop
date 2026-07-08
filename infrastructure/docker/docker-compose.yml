@@ -2,6 +2,7 @@ services:
   # === Infrastructure ===
 
   postgres:
+    mem_limit: 512m
     image: postgis/postgis:14-3.4
     environment:
       POSTGRES_DB: asop
@@ -21,6 +22,7 @@ services:
       - asop-net
 
   zookeeper:
+    mem_limit: 256m
     image: confluentinc/cp-zookeeper:7.5.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -30,6 +32,7 @@ services:
       - asop-net
 
   kafka:
+    mem_limit: 1g
     image: confluentinc/cp-kafka:7.5.0
     environment:
       KAFKA_BROKER_ID: 1
@@ -51,6 +54,7 @@ services:
       - asop-net
 
   keycloak:
+    mem_limit: 512m
     image: quay.io/keycloak/keycloak:25.0.4
     command: start-dev --import-realm
     environment:
@@ -78,6 +82,7 @@ services:
   # === Application Services ===
 
   crypto-service:
+    mem_limit: 256m
     build:
       context: ../../backend/crypto-service
       dockerfile: Dockerfile
@@ -96,6 +101,7 @@ services:
       - asop-net
 
   gateway-service:
+    mem_limit: 256m
     build:
       context: ../../backend/gateway-service
       dockerfile: Dockerfile
@@ -118,6 +124,7 @@ services:
       - asop-net
 
   user-service:
+    mem_limit: 256m
     build:
       context: ../../backend/user-service
       dockerfile: Dockerfile
@@ -148,6 +155,7 @@ services:
       - asop-net
 
   terminal-service:
+    mem_limit: 256m
     build:
       context: ../../backend/terminal-service
       dockerfile: Dockerfile
@@ -172,6 +180,7 @@ services:
       - asop-net
 
   session-service:
+    mem_limit: 256m
     build:
       context: ../../backend/session-service
       dockerfile: Dockerfile
@@ -196,6 +205,7 @@ services:
       - asop-net
 
   card-service:
+    mem_limit: 256m
     build:
       context: ../../backend/card-service
       dockerfile: Dockerfile
@@ -220,6 +230,7 @@ services:
       - asop-net
 
   carrier-service:
+    mem_limit: 256m
     build:
       context: ../../backend/carrier-service
       dockerfile: Dockerfile
@@ -244,6 +255,7 @@ services:
       - asop-net
 
   debt-service:
+    mem_limit: 256m
     build:
       context: ../../backend/debt-service
       dockerfile: Dockerfile
@@ -268,6 +280,7 @@ services:
       - asop-net
 
   audit-service:
+    mem_limit: 256m
     build:
       context: ../../backend/audit-service
       dockerfile: Dockerfile
@@ -292,6 +305,7 @@ services:
       - asop-net
 
   fiscal-service:
+    mem_limit: 256m
     build:
       context: ../../backend/fiscal-service
       dockerfile: Dockerfile
