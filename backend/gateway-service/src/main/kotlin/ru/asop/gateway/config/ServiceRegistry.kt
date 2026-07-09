@@ -1,0 +1,40 @@
+package ru.asop.gateway.config
+
+import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Component
+
+@Component
+class ServiceRegistry {
+
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    private val isDocker = System.getenv("ASOP_ENV") == "docker"
+
+    private val services: Map<String, String> = mapOf(
+        "users" to svc("user-service", 8082),
+        "terminals" to svc("terminal-service", 8084),
+        "sessions" to svc("session-service", 8085),
+        "cards" to svc("card-service", 8086),
+        "carriers" to svc("carrier-service", 8087),
+        "debts" to svc("debt-service", 8088),
+        "audit" to svc("audit-service", 8089),
+        "fiscal" to svc("fiscal-service", 8090),
+        "crypto" to svc("crypto-service", 8081),
+    )
+
+    private fun svc(host: String, port: Int): String {
+        val h = if (isDocker) host else "localhost"
+        return "http://$h:$port"
+    }
+
+    fun getBaseUrl(resource: String): String? {
+        val url = services[resource]
+        if (url == null) log.debug("Unknown service resource: {}", resource)
+        return url
+    }
+
+    init {
+        log.info("ServiceRegistry initialized (mode: {})", if (isDocker) "docker" else "local")
+        services.forEach { (k, v) -> log.debug("  {} -> {}", k, v) }
+    }
+}

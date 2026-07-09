@@ -24,10 +24,21 @@ class KeycloakAdminService(
                 log.info("Keycloak realm '{}' already exists", properties.realm)
                 false
             } else {
-                val realmRep = org.keycloak.representations.idm.RealmRepresentation()
-                realmRep.realm = properties.realm
-                realmRep.isEnabled = true
-                keycloak.realms().create(realmRep)
+            val realmRep = org.keycloak.representations.idm.RealmRepresentation()
+            realmRep.realm = properties.realm
+            realmRep.displayName = "ASOP Platform"
+            realmRep.isEnabled = true
+            realmRep.setResetPasswordAllowed(true)
+            realmRep.setRegistrationAllowed(false)
+            realmRep.setVerifyEmail(false)
+            realmRep.setLoginWithEmailAllowed(true)
+            realmRep.setDuplicateEmailsAllowed(false)
+            realmRep.setEditUsernameAllowed(false)
+            realmRep.setRegistrationEmailAsUsername(false)
+            realmRep.setRememberMe(false)
+            realmRep.setBruteForceProtected(false)
+            realmRep.setDirectGrantFlow("direct grant")
+            keycloak.realms().create(realmRep)
                 log.info("Created Keycloak realm '{}'", properties.realm)
                 true
             }
@@ -66,7 +77,8 @@ class KeycloakAdminService(
         email: String,
         password: String,
         temporary: Boolean,
-        firstName: String = ""
+        firstName: String = "",
+        lastName: String = ""
     ): String {
         val keycloak = adminClient()
         try {
@@ -75,8 +87,9 @@ class KeycloakAdminService(
                 this.email = email
                 this.username = email
                 this.firstName = firstName
+                this.lastName = lastName
                 isEnabled = true
-                credentials = listOf(
+                this.credentials = listOf(
                     CredentialRepresentation().apply {
                         type = CredentialRepresentation.PASSWORD
                         value = password
@@ -91,6 +104,7 @@ class KeycloakAdminService(
                 throw RuntimeException("Keycloak create user failed: $status — $errorBody")
             }
             val userId = response.location.path.takeLastWhile { it != '/' }
+
             log.info("Created Keycloak user '{}' with id={}", email, userId)
             return userId
         } catch (e: Exception) {

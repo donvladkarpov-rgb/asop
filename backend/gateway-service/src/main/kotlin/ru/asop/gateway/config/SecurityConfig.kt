@@ -6,9 +6,13 @@ import org.springframework.core.annotation.Order
 import org.springframework.http.HttpMethod
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity
 import org.springframework.security.config.web.server.ServerHttpSecurity
+import org.springframework.security.core.authority.SimpleGrantedAuthority
+import org.springframework.security.core.userdetails.ReactiveUserDetailsService
+import org.springframework.security.core.userdetails.User
 import org.springframework.security.web.authentication.preauth.x509.X509PrincipalExtractor
 import org.springframework.security.web.server.SecurityWebFilterChain
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers
+import reactor.core.publisher.Mono
 import java.security.cert.X509Certificate
 
 @Configuration
@@ -31,6 +35,17 @@ class SecurityConfig {
                 x509.principalExtractor(TerminalPrincipalExtractor())
             }
             .build()
+    }
+
+    @Bean
+    fun terminalUserDetailsService(): ReactiveUserDetailsService {
+        return ReactiveUserDetailsService { serialNumber ->
+            val user = User.withUsername(serialNumber)
+                .password("")
+                .authorities(SimpleGrantedAuthority("ROLE_TERMINAL"))
+                .build()
+            Mono.just(user)
+        }
     }
 
     @Bean

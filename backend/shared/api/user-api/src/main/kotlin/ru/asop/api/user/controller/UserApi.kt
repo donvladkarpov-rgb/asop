@@ -5,9 +5,9 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.server.ServerWebExchange
 import reactor.core.publisher.Mono
 import ru.asop.api.user.dto.request.ChangePasswordRequest
-import java.security.Principal
 
 @RequestMapping("/api/v1/users")
 interface UserApi {
@@ -15,6 +15,6 @@ interface UserApi {
     @PostMapping("/password/change")
     fun changePassword(
         @Valid @RequestBody request: ChangePasswordRequest,
-        principal: Mono<Principal>
+        exchange: ServerWebExchange
     ): Mono<ResponseEntity<Void>>
 }

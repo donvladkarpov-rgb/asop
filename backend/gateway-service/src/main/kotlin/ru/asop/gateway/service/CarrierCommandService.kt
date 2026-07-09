@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Mono
-import reactor.kafka.sender.SenderResult  // ← НОВОЕ
+import reactor.kafka.sender.SenderResult
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.common.util.InnValidator
 import ru.asop.common.util.UuidUtils
@@ -17,7 +17,8 @@ import java.util.UUID
 
 @Service
 class CarrierCommandService(
-    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
+    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>,
+    private val eventService: EventService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -30,7 +31,7 @@ class CarrierCommandService(
             val eventId = UuidUtils.newId()
             val carrierId = UuidUtils.newId()
             val correlationId = UuidUtils.newId()
-            val userId = extractUserId(principal)
+            val keycloakId = principal?.name
 
             val event = CarrierCreatedEvent(
                 carrierId = carrierId,
@@ -39,7 +40,7 @@ class CarrierCommandService(
                 regionId = request.regionId,
                 createdAt = Instant.now(),
                 correlationId = correlationId,
-                userId = userId
+                userId = null // сервис резолвит userId из keycloakId по БД
             )
 
             eventId to event
@@ -50,8 +51,16 @@ class CarrierCommandService(
                 event as Any
             )
 
+            // Pass-Through Identity: keycloakId в Kafka headers
+            val keycloakId = principal?.name
+            if (keycloakId != null) {
+                record.headers().add("X-Keycloak-Id", keycloakId.encodeToByteArray())
+            }
+
+            eventService.createPending(eventId, KafkaTopic.CARRIER_COMMANDS)
+
             kafkaTemplate.send(record)
-                .doOnSuccess { result: SenderResult<*> ->  // ← явный тип для ясности
+                .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent {} to topic={}, eventId={}, carrierId={}, partition={}, offset={}",
                         event.eventType,
@@ -63,6 +72,7 @@ class CarrierCommandService(
                     )
                 }
                 .doOnError { error ->
+                    eventService.fail(eventId, error.message ?: "Unknown error")
                     log.error(
                         "Failed to send {} to Kafka: {}",
                         event.eventType,
@@ -71,16 +81,6 @@ class CarrierCommandService(
                     )
                 }
                 .thenReturn(eventId)
-        }
-    }
-
-    private fun extractUserId(principal: Principal?): UUID? {
-        if (principal == null) return null
-        return try {
-            UuidUtils.parseOrNull(principal.name)
-        } catch (e: Exception) {
-            log.warn("Failed to parse userId from principal: {}", principal.name)
-            null
         }
     }
 }

@@ -58,8 +58,9 @@ class BootstrapService(
             val keycloakId = keycloakAdminService.createUser(
                 email = bootstrapProperties.adminEmail,
                 password = bootstrapProperties.adminPassword,
-                temporary = true,
-                firstName = bootstrapProperties.adminFirstName
+                temporary = false,
+                firstName = bootstrapProperties.adminFirstName,
+                lastName = bootstrapProperties.adminFirstName
             )
 
             keycloakAdminService.assignRole(keycloakId, "SUPER_ADMIN")

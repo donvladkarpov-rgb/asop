@@ -113,6 +113,7 @@ services:
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/asop/protocol/openid-connect/certs
       GATEWAY_KEYSTORE_PASSWORD: changeit
       TRUSTSTORE_PASSWORD: changeit
+      ASOP_ENV: docker
     depends_on:
       kafka:
         condition: service_healthy

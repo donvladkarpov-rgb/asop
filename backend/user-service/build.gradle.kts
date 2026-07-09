@@ -27,6 +27,7 @@ dependencies {
     implementation(libs.r2dbc.postgresql)
     runtimeOnly(libs.postgresql.driver)
     implementation(libs.liquibase.core)
+    runtimeOnly("org.springframework.boot:spring-boot-starter-jdbc")
 
     // Keycloak Admin Client
     implementation(libs.keycloak.admin.client)

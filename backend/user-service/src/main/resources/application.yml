@@ -10,6 +10,13 @@ spring:
     username: ${DB_USER:asop}
     password: ${DB_PASSWORD:asop}
 
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:asop}
+    username: ${DB_USER:asop}
+    password: ${DB_PASSWORD:asop}
+    hikari:
+      maximum-pool-size: 2
+
   liquibase:
     enabled: true
     change-log: file:./infrastructure/db-migrations/user/db.changelog-master.yaml
@@ -18,7 +25,8 @@ spring:
     oauth2:
       resourceserver:
         jwt:
-          issuer-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/asop
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://keycloak:8080/realms/asop/protocol/openid-connect/certs}
+          issuer-uri: ${KEYCLOAK_URL:http://keycloak:8080}/realms/asop
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
