@@ -31,6 +31,24 @@
   flex: 1;
 }
 
+.sidebar-section-label {
+  padding: 8px 20px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b6b80;
+}
+
+.sidebar-subsection-label {
+  padding: 6px 20px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #5a5a70;
+}
+
 .sidebar-footer {
   padding: 12px;
   display: flex;

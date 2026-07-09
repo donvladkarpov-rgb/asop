@@ -23,6 +23,16 @@ class ServiceRegistry {
         "regions" to svc("admin-service", 8091),
         "territories" to svc("admin-service", 8091),
         "organizers" to svc("admin-service", 8091),
+        "roles" to svc("admin-service", 8091),
+        "card-types" to svc("admin-service", 8091),
+        "tariff-types" to svc("admin-service", 8091),
+        "session-types" to svc("admin-service", 8091),
+        "event-types" to svc("admin-service", 8091),
+        "transaction-types" to svc("admin-service", 8091),
+        "transaction-results" to svc("admin-service", 8091),
+        "services" to svc("admin-service", 8091),
+        "benefits" to svc("admin-service", 8091),
+        "benefit-steps" to svc("admin-service", 8091),
     )
 
     private fun svc(host: String, port: Int): String {

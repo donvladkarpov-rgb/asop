@@ -38,3 +38,68 @@ export interface OrganizerTerritory {
   territoryName?: string;
   regionName?: string;
 }
+
+export interface Role {
+  id: string;
+  roleName: string;
+}
+
+export interface CardType {
+  id: string;
+  cardTypeName: string;
+}
+
+export interface TariffType {
+  id: string;
+  code: string;
+  name: string;
+  description?: string;
+}
+
+export interface SessionType {
+  id: string;
+  sessionTypeCode: string;
+  sessionTypeName: string;
+}
+
+export interface EventType {
+  eventType: string;
+  eventTypeName: string;
+}
+
+export interface TransactionType {
+  id: string;
+  transactionTypeName: string;
+}
+
+export interface TransactionResult {
+  id: string;
+  transactionResultName: string;
+}
+
+export interface Service {
+  id: string;
+  serviceName: string;
+  description?: string;
+  priority: number;
+  regionId: string;
+}
+
+export interface Benefit {
+  id: string;
+  benefitCode: string;
+  benefitName: string;
+  regionId: string;
+  description?: string;
+  isActive: boolean;
+}
+
+export interface BenefitStep {
+  id: string;
+  benefitId: string;
+  stepOrder: number;
+  tripThresholdFrom: number;
+  tripThresholdTo?: number;
+  discountShare: number;
+  periodType: string;
+}
