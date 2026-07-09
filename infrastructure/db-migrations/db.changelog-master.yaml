@@ -1,0 +1,4 @@
+databaseChangeLog:
+  - include:
+      file: migrations/v001-init.yaml
+      relativeToChangelogFile: true

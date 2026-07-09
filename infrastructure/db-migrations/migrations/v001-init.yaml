@@ -1,0 +1,11 @@
+databaseChangeLog:
+  - changeSet:
+      id: v001-init
+      author: asop
+      changes:
+        - sqlFile:
+            path: v001-init.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: true
+            encoding: UTF-8

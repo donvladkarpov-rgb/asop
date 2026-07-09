@@ -1,0 +1,16 @@
+server:
+  port: 8091
+
+spring:
+  application:
+    name: admin-service
+
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:asop}
+    username: ${DB_USER:asop}
+    password: ${DB_PASSWORD:asop}
+
+logging:
+  level:
+    root: INFO
+    ru.asop: DEBUG
