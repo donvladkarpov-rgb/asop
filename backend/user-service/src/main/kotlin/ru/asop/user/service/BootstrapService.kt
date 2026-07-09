@@ -18,6 +18,8 @@ class BootstrapService(
 
     @EventListener(ApplicationReadyEvent::class)
     fun bootstrap() {
+        ensureOidcClient()
+
         if (!bootstrapProperties.enabled) {
             log.info("Bootstrap disabled")
             return
@@ -40,12 +42,8 @@ class BootstrapService(
             .subscribe()
     }
 
-    private fun performBootstrap(): reactor.core.publisher.Mono<Unit> {
-        log.info("Starting bootstrap — no users found in ASOP_USERS")
-
-        return try {
-            keycloakAdminService.createRealmIfNotExists()
-
+    private fun ensureOidcClient() {
+        try {
             keycloakAdminService.createOidcClient(
                 clientId = "asop-admin",
                 redirectUris = listOf(
@@ -53,6 +51,16 @@ class BootstrapService(
                     "http://localhost:*"
                 )
             )
+        } catch (e: Exception) {
+            log.warn("Failed to ensure OIDC client: {}", e.message)
+        }
+    }
+
+    private fun performBootstrap(): reactor.core.publisher.Mono<Unit> {
+        log.info("Starting bootstrap — no users found in ASOP_USERS")
+
+        return try {
+            keycloakAdminService.createRealmIfNotExists()
 
             keycloakAdminService.createRole("SUPER_ADMIN")
             keycloakAdminService.createRole("CARRIER_ADMIN")
