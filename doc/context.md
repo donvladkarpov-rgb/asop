@@ -45,7 +45,7 @@ backend/
 │   ├── asop-common/           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, UuidUtils
 │   ├── asop-dto/              # пусто (DTO перенесены в API-модули)
 │   ├── asop-kafka-contracts/  # Kafka события
-│   └── api/                   # API-контракты (10 модулей)
+│   └── api/                   # API-контракты (11 модулей)
 ├── gateway-service/           # API Gateway (WebFlux + двойная аутентификация)
 ├── crypto-service/            # Root CA, выпуск сертификатов
 ├── carrier-service/           # Управление перевозчиками (R2DBC)
@@ -55,7 +55,8 @@ backend/
 ├── user-service/              # Пользователи + Keycloak bootstrap
 ├── debt-service/              # Долги по картам
 ├── fiscal-service/            # Фискализация (ОФД)
-└── audit-service/             # КРС (контролёры)
+├── audit-service/             # КРС (контролёры)
+└── admin-service/             # Справочники (Regions, Territories, Organizers)
 ```
 
 ---
@@ -81,7 +82,7 @@ backend/shared/api/{name}-api/
 
 **Service → API dependency:** `implementation(project(":backend:shared:api:{domain}-api"))`
 
-### Все модули (22)
+### Все модули (25)
 ```
 :backend:shared:asop-common
 :backend:shared:asop-dto
@@ -96,6 +97,7 @@ backend/shared/api/{name}-api/
 :backend:shared:api:debt-api
 :backend:shared:api:fiscal-api
 :backend:shared:api:audit-api
+:backend:shared:api:reference-api
 :backend:gateway-service
 :backend:carrier-service
 :backend:crypto-service
@@ -106,6 +108,7 @@ backend/shared/api/{name}-api/
 :backend:debt-service
 :backend:fiscal-service
 :backend:audit-service
+:backend:admin-service
 ```
 
 ### Сервисы и порты
@@ -122,6 +125,7 @@ backend/shared/api/{name}-api/
 | `debt-service` | 8088 | Card debts |
 | `audit-service` | 8089 | Inspections (КРС) |
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
+| `admin-service` | 8091 | Справочники (Regions, Territories, Organizers) |
 
 ---
 
@@ -357,12 +361,33 @@ Root CA (self-signed, ECC P-256, 10 лет)
 - `ASOP_AUDIT_BRIGADES` — бригады
 - `ASOP_AUDIT_INSPECTIONS` — акты
 
+**Справочники:**
+- `ASOP_REGIONS` — регионы
+- `ASOP_TERRITORIES` — территории
+- `ASOP_ORGANIZERS` — организаторы
+- `ASOP_ORGANIZER_TERRITORIES` — привязка организаторов к территориям
+
 ### UUID v7
 Генерируется на уровне приложения через `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`).
 В БД есть fallback-функция `gen_uuid_v7()`.
 
 ### Миграции
-Liquibase в `infrastructure/db-migrations/{service}/`. Только `user-service` имеет активные миграции; у остальных `liquibase.enabled=false`.
+
+Liquibase запускается **отдельным Docker-контейнером** (`liquibase:4.27`) после `postgres:healthy` и завершается после наката миграций.
+
+**Структура:**
+- `db.changelog-master.yaml` → `migrations/v001-init.yaml` → `v001-init.sql` (единый SQL)
+- Все 67 таблиц, функции (gen_uuid_v7, set_timestamps, update_timestamps), seed roles
+- Все FK idempotent: `ADD CONSTRAINT IF NOT EXISTS ... DEFERRABLE INITIALLY DEFERRED`
+
+**Liquibase quirks:**
+- `$$` dollar quotes не работают — использовать `$body$`
+- `splitStatements: false` для sqlFile (JDBC сам разбивает многосоставные скрипты)
+- `relativeToChangelogFile: true` во всех include
+
+**Сервисы НЕ содержат Liquibase/DataSource/JDBC** — только R2DBC.
+
+**`asop_schema.sql`** — справочная копия `v001-init.sql`, не исполняется.
 
 ---
 
@@ -381,7 +406,9 @@ Liquibase в `infrastructure/db-migrations/{service}/`. Только `user-servi
 - `useCommand` hook: паттерн 202 + polling для write-команд
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`
+
+Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
 
 ---
 
@@ -470,6 +497,7 @@ desktop.ini
 2. Создаёт роли: `SUPER_ADMIN`, `CARRIER_ADMIN`, `DISPATCHER` и т.д.
 3. Создаёт администратора `admin@asop.local` (credentials inline — см. баг №2)
 4. Записывает в `ASOP_USERS` + `ASOP_USER_ROLES`
+5. Создаёт публичный OIDC-клиент `asop-admin` (redirectUris: `http://localhost:3000/*`) через `ensureOidcClient()`
 
 ### Переменные окружения
 - `BOOTSTRAP_ENABLED` — включить bootstrap
@@ -493,7 +521,8 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-se
 ```
 
 Каждый сервис имеет свой `Dockerfile` (`eclipse-temurin:21-jre`).
-Liquibase миграции монтируются из `infrastructure/db-migrations/` в `/db-migrations/` внутри контейнеров.
+Liquibase запускается отдельным контейнером (image: `liquibase:4.27`), который монтирует `infrastructure/db-migrations/` в `/db-migrations/`, выполняет миграции и завершается.
+Docker-compose включает 16 контейнеров + liquibase (exited 0).
 
 ---
 
@@ -511,6 +540,10 @@ Liquibase миграции монтируются из `infrastructure/db-migrat
 9. **Keycloak `POST /users` без credentials** — раздельный resetPassword выдаёт "Account is not fully set up"
 10. **Keycloak без firstName/lastName** — "Account is not fully set up"
 11. **Keycloak issuer mismatch в Docker** — `localhost:8180` vs `keycloak:8080`
+12. **Liquibase внутри Spring Boot + R2DBC** — конфликт DataSource (JDBC) и R2DBC. Liquibase должен быть отдельным контейнером.
+13. **`$$` dollar quotes в Liquibase sqlFile** — ломают парсинг. Использовать `$body$`.
+14. **`splitStatements: true` (default) для sqlFile** — разбивает CREATE FUNCTION на части. Использовать `splitStatements: false`.
+15. **`ReactiveCrudRepository.save()` с не-null UUID** — делает UPDATE вместо INSERT. Использовать `R2dbcEntityTemplate.insert()`.
 
 ### ✅ Что работает
 1. **Python для миграций** — надёжнее PowerShell, точное сравнение строк
@@ -522,6 +555,9 @@ Liquibase миграции монтируются из `infrastructure/db-migrat
 7. **Pass-through identity** — backend сервисы не валидируют JWT, доверяют gateway
 8. **Кастомный JWT decoder** — решает проблему issuer URL в Docker
 9. **Inline credentials в Keycloak** — единственный рабочий способ для 25.x
+10. **Liquibase отдельным контейнером** — решает проблему R2DBC ↔ JDBC в сервисах
+11. **Единый v001-init.sql** — проще поддерживать, чем множество changelog'ов
+12. **Gateway sync proxy для CRUD-справочников** — не требует Kafka для простых операций
 
 ### 📋 Чеклист для новых модулей
 - [ ] Создать API-модуль в `backend/shared/api/{name}-api/`
@@ -529,9 +565,13 @@ Liquibase миграции монтируются из `infrastructure/db-migrat
 - [ ] Создать build.gradle.kts с `platform(libs.spring.boot.dependencies)`
 - [ ] Создать API-интерфейс в `controller/`
 - [ ] Создать DTO в `dto/request/` и `dto/response/`
+- [ ] Добавить SQL-таблицы в `infrastructure/db-migrations/migrations/v001-init.sql`
+- [ ] Добавить маппинг в `ServiceRegistry.kt` gateway (для sync CRUD)
 - [ ] Добавить зависимость в сервис: `implementation(project(":backend:shared:api:{name}-api"))`
 - [ ] Реализовать интерфейс в контроллере сервиса
 - [ ] Добавить JwtDecoderConfig (или permitAll) для JWT issuer workaround
+- [ ] Создать Dockerfile для сервиса
+- [ ] Добавить сервис в docker-compose.yml
 - [ ] Проверить сборку: `./gradlew clean build`
 
 ---

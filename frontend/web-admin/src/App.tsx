@@ -5,6 +5,9 @@ import { DashboardPage } from './pages/Dashboard';
 import { UsersPage } from './pages/Users';
 import { TerminalsPage } from './pages/Terminals';
 import { CardsPage } from './pages/Cards';
+import { RegionsPage } from './pages/Regions';
+import { TerritoriesPage } from './pages/Territories';
+import { OrganizersPage } from './pages/Organizers';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
@@ -49,6 +52,9 @@ function AppRoutes() {
         <Route path="users" element={<UsersPage />} />
         <Route path="terminals" element={<TerminalsPage />} />
         <Route path="cards" element={<CardsPage />} />
+        <Route path="regions" element={<RegionsPage />} />
+        <Route path="territories" element={<TerritoriesPage />} />
+        <Route path="organizers" element={<OrganizersPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

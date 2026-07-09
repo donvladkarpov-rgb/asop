@@ -25,7 +25,7 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 -- Рекомендуется генерировать UUIDv7 на уровне приложения (Kotlin: UuidCreator.getTimeOrderedEpoch())
 -- Эта функция нужна только для SQL-функций, которые создают записи (например, fn_create_card_debt)
 CREATE OR REPLACE FUNCTION gen_uuid_v7()
-RETURNS UUID AS $$
+RETURNS UUID AS $body$
 DECLARE
     v_timestamp BIGINT;
     v_random_bytes BYTEA;
@@ -46,13 +46,13 @@ BEGIN
         substring(v_random_bytes from 2 for 8);
     RETURN encode(v_uuid_bytes, 'hex')::uuid;
 END;
-$$ LANGUAGE plpgsql VOLATILE;
+$body$ LANGUAGE plpgsql VOLATILE;
 COMMENT ON FUNCTION gen_uuid_v7() IS 'Генерация UUIDv7 (Time-Ordered) на стороне БД. Рекомендуется использовать генерацию на уровне приложения.';
 
 -- ========================
 -- 0. РЕГИОНЫ И ТЕРРИТОРИИ (ФИАС/ГАР)
 -- ========================
-CREATE TABLE ASOP_REGIONS
+CREATE TABLE IF NOT EXISTS ASOP_REGIONS
 (
     REGION_ID          UUID NOT NULL,  -- UUIDv7
     MUNICIPAL_DIVISION VARCHAR(255),
@@ -70,7 +70,7 @@ CREATE TABLE ASOP_REGIONS
 );
 COMMENT ON TABLE ASOP_REGIONS IS 'Справочник регионов на основе данных ФИАС/ГАР.';
 
-CREATE TABLE ASOP_TERRITORIES
+CREATE TABLE IF NOT EXISTS ASOP_TERRITORIES
 (
     TERRITORY_ID       UUID NOT NULL,  -- UUIDv7
     REGION_ID          UUID NOT NULL,
@@ -90,9 +90,9 @@ CREATE TABLE ASOP_TERRITORIES
     CONSTRAINT uq_territories_fias UNIQUE (FIAS_ID)
 );
 COMMENT ON TABLE ASOP_TERRITORIES IS 'Административно-территориальные единицы с гео-полигонами и реквизитами ФИАС.';
-CREATE INDEX idx_territories_geo ON ASOP_TERRITORIES USING GIST (GEO_POLYGON);
+CREATE INDEX IF NOT EXISTS idx_territories_geo ON ASOP_TERRITORIES USING GIST (GEO_POLYGON);
 
-CREATE TABLE ASOP_ORGANIZERS
+CREATE TABLE IF NOT EXISTS ASOP_ORGANIZERS
 (
     ORGANIZER_ID   UUID         NOT NULL,  -- UUIDv7
     ORGANIZER_NAME VARCHAR(255) NOT NULL,
@@ -100,7 +100,7 @@ CREATE TABLE ASOP_ORGANIZERS
 );
 COMMENT ON TABLE ASOP_ORGANIZERS IS 'Организаторы перевозок.';
 
-CREATE TABLE ASOP_ORGANIZER_TERRITORIES
+CREATE TABLE IF NOT EXISTS ASOP_ORGANIZER_TERRITORIES
 (
     ORGANIZER_ID UUID NOT NULL,
     TERRITORY_ID UUID NOT NULL,
@@ -278,6 +278,21 @@ CREATE INDEX idx_contracts_carrier ON ASOP_CONTRACTS (CARRIER_ID) WHERE CARRIER_
 CREATE INDEX idx_contracts_cards_distributor ON ASOP_CONTRACTS (CARDS_DISTRIBUTOR_ID) WHERE CARDS_DISTRIBUTOR_ID IS NOT NULL;
 CREATE INDEX idx_contracts_status ON ASOP_CONTRACTS (STATUS);
 
+CREATE TABLE ASOP_ROUTES
+(
+    ROUTE_ID             UUID         NOT NULL,  -- UUIDv7
+    ROUTE_NUMBER         VARCHAR(50)  NOT NULL,
+    ROUTE_NAME           VARCHAR(255) NOT NULL,
+    ORGANIZER_ID         UUID,
+    MINISTRY_REGISTRY_NO VARCHAR(50),
+    ROUTE_CATEGORY       VARCHAR(30) CHECK (ROUTE_CATEGORY IN ('CITY', 'SUBURBAN', 'INTERCITY', 'EXPRESS')),
+    REGION_ID            UUID         NOT NULL,
+    CONSTRAINT pk_routes PRIMARY KEY (ROUTE_ID),
+    CONSTRAINT fk_routes_organizer FOREIGN KEY (ORGANIZER_ID) REFERENCES ASOP_ORGANIZERS (ORGANIZER_ID),
+    CONSTRAINT fk_routes_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
+);
+COMMENT ON TABLE ASOP_ROUTES IS 'Справочник маршрутов (номер, название, категория).';
+
 CREATE TABLE ASOP_CONTRACT_ROUTES
 (
     CONTRACT_ID UUID NOT NULL,
@@ -373,7 +388,7 @@ CREATE TABLE ASOP_FARE_ZONES
     CONSTRAINT pk_fare_zones PRIMARY KEY (ZONE_ID),
     CONSTRAINT uq_fare_zones_code UNIQUE (ZONE_CODE),
     CONSTRAINT fk_fare_zones_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID),
-    CONSTRAINT chk_fare_zones_valid_polygon CHECK (ZONE_POLYGON IS NULL OR ST_IsValid(ZONE_POLYGON))
+    CONSTRAINT chk_fare_zones_valid_polygon CHECK (ZONE_POLYGON IS NULL OR ST_IsValid(ZONE_POLYGON::geometry))
 );
 
 -- ИСПРАВЛЕНО: Добавлен REGION_ID с FK
@@ -398,21 +413,6 @@ CREATE TABLE ASOP_TRANSPORT_STOPS
 COMMENT ON TABLE ASOP_TRANSPORT_STOPS IS 'Справочник остановок. REGION_ID обеспечивает прямой доступ к региону и поддержку RLS.';
 CREATE INDEX idx_transport_stops_geo ON ASOP_TRANSPORT_STOPS USING GIST (ZONE_POLYGON);
 CREATE INDEX idx_transport_stops_region ON ASOP_TRANSPORT_STOPS (REGION_ID);
-
-CREATE TABLE ASOP_ROUTES
-(
-    ROUTE_ID             UUID         NOT NULL,  -- UUIDv7
-    ROUTE_NUMBER         VARCHAR(50)  NOT NULL,
-    ROUTE_NAME           VARCHAR(255) NOT NULL,
-    ORGANIZER_ID         UUID,
-    MINISTRY_REGISTRY_NO VARCHAR(50),
-    ROUTE_CATEGORY       VARCHAR(30) CHECK (ROUTE_CATEGORY IN ('CITY', 'SUBURBAN', 'INTERCITY', 'EXPRESS')),
-    REGION_ID            UUID         NOT NULL,
-    CONSTRAINT pk_routes PRIMARY KEY (ROUTE_ID),
-    CONSTRAINT fk_routes_organizer FOREIGN KEY (ORGANIZER_ID) REFERENCES ASOP_ORGANIZERS (ORGANIZER_ID),
-    CONSTRAINT fk_routes_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
-);
-COMMENT ON TABLE ASOP_ROUTES IS 'Справочник маршрутов (номер, название, категория).';
 
 CREATE TABLE ASOP_PATHS
 (
@@ -610,7 +610,7 @@ COMMENT ON COLUMN ASOP_CARD_MIFARES.LAST_AUTH_TERMINAL IS 'Терминал, н�
 CREATE INDEX idx_mifare_role ON ASOP_CARD_MIFARES (CARD_ROLE);
 CREATE INDEX idx_mifare_cert_serial ON ASOP_CARD_MIFARES (CERTIFICATE_SERIAL) WHERE CERTIFICATE_SERIAL IS NOT NULL;
 CREATE INDEX idx_mifare_validity ON ASOP_CARD_MIFARES (VALID_FROM, VALID_UNTIL);
-CREATE INDEX idx_mifare_active ON ASOP_CARD_MIFARES (CARD_ID) WHERE REVOKED_AT IS NULL AND (VALID_UNTIL IS NULL OR VALID_UNTIL >= CURRENT_TIMESTAMP);
+CREATE INDEX idx_mifare_active ON ASOP_CARD_MIFARES (CARD_ID) WHERE REVOKED_AT IS NULL;
 CREATE INDEX idx_mifare_last_auth ON ASOP_CARD_MIFARES (LAST_AUTH_AT DESC) WHERE LAST_AUTH_AT IS NOT NULL;
 
 CREATE TABLE ASOP_CARD_BANKS
@@ -715,9 +715,6 @@ CREATE TABLE ASOP_CARD_DEBTS
     UPDATED_AT                 TIMESTAMP      NOT NULL,
     CONSTRAINT pk_card_debts PRIMARY KEY (DEBT_ID),
     CONSTRAINT fk_debt_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID),
-    CONSTRAINT fk_debt_transaction FOREIGN KEY (TRANSACTION_ID) REFERENCES ASOP_TRANSACTIONS (TRANSACTION_ID),
-    CONSTRAINT fk_debt_session FOREIGN KEY (SESSION_ID) REFERENCES ASOP_SESSIONS (SESSION_ID),
-    CONSTRAINT fk_debt_terminal FOREIGN KEY (TERMINAL_ID) REFERENCES ASOP_TERMINALS (TERMINAL_ID),
     CONSTRAINT fk_debt_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
     CONSTRAINT chk_debt_amount_positive CHECK (DEBT_AMOUNT > 0),
     CONSTRAINT chk_debt_dates CHECK (DEBT_DUE_DATE > DEBT_OPENED_AT)
@@ -748,7 +745,6 @@ CREATE TABLE ASOP_DEBT_RECOVERY_ATTEMPTS
     NEXT_RETRY_AT           TIMESTAMP,
     CONSTRAINT pk_debt_recovery_attempts PRIMARY KEY (ATTEMPT_ID),
     CONSTRAINT fk_dra_debt FOREIGN KEY (DEBT_ID) REFERENCES ASOP_CARD_DEBTS (DEBT_ID) ON DELETE CASCADE,
-    CONSTRAINT fk_dra_transaction FOREIGN KEY (RECOVERY_TRANSACTION_ID) REFERENCES ASOP_TRANSACTIONS (TRANSACTION_ID),
     CONSTRAINT uq_debt_attempt UNIQUE (DEBT_ID, ATTEMPT_NUMBER),
     CONSTRAINT chk_attempt_amount_positive CHECK (AMOUNT_ATTEMPTED > 0)
 );
@@ -848,7 +844,6 @@ CREATE TABLE ASOP_TIDS
     UPDATED_AT    TIMESTAMP   NOT NULL,
     CONSTRAINT pk_tids PRIMARY KEY (TID_ID),
     CONSTRAINT fk_tids_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
-    CONSTRAINT fk_tids_terminal FOREIGN KEY (TERMINAL_ID) REFERENCES ASOP_TERMINALS (TERMINAL_ID),
     CONSTRAINT uq_tids_value UNIQUE (TID_VALUE),
     CONSTRAINT chk_tid_status CHECK (STATUS IN ('UNUSED', 'ASSIGNED', 'REVOKED'))
 );
@@ -1105,7 +1100,6 @@ CREATE TABLE ASOP_PAYMENTS
     CONSTRAINT pk_payments PRIMARY KEY (PAYMENT_ID),
     CONSTRAINT fk_payments_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID),
     CONSTRAINT fk_payments_session FOREIGN KEY (SESSION_ID) REFERENCES ASOP_SESSIONS (SESSION_ID),
-    CONSTRAINT fk_payments_event FOREIGN KEY (EVENT_ID) REFERENCES ASOP_EVENTS (EVENT_ID),
     CONSTRAINT fk_payments_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
     CONSTRAINT fk_payments_distributor_terminal FOREIGN KEY (DISTRIBUTOR_TERMINAL_ID) REFERENCES ASOP_DISTRIBUTOR_TERMINALS (DISTRIBUTOR_TERMINAL_ID)
 );
@@ -1330,7 +1324,7 @@ CREATE OR REPLACE FUNCTION fn_get_active_fiscal_token(
     p_carrier_fiscalizer_id UUID,
     p_transaction_time TIMESTAMP
 )
-    RETURNS UUID AS $$
+    RETURNS UUID AS $body$
 DECLARE
     v_token_id UUID;
 BEGIN
@@ -1344,14 +1338,14 @@ BEGIN
     LIMIT 1;
     RETURN v_token_id;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$body$ LANGUAGE plpgsql STABLE;
 COMMENT ON FUNCTION fn_get_active_fiscal_token IS 'Возвращает ID токена, действующего на момент транзакции.';
 
 -- Функция: вычисление next_retry_at для фискализации
 CREATE OR REPLACE FUNCTION fn_calculate_next_retry(
     p_attempt_count INT
 )
-    RETURNS TIMESTAMP AS $$
+    RETURNS TIMESTAMP AS $body$
 DECLARE
     v_delay_minutes INT;
 BEGIN
@@ -1366,7 +1360,7 @@ BEGIN
         END CASE;
     RETURN NOW() + (v_delay_minutes || ' minutes')::INTERVAL;
 END;
-$$ LANGUAGE plpgsql;
+$body$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION fn_calculate_next_retry IS 'Вычисляет время следующей попытки отправки чека по экспоненциальной схеме.';
 
 -- Функция: создание долга при проезде в долг
@@ -1381,7 +1375,7 @@ CREATE OR REPLACE FUNCTION fn_create_card_debt(
     p_debt_amount NUMERIC,
     p_recovery_days INT DEFAULT 14
 )
-    RETURNS UUID AS $$
+    RETURNS UUID AS $body$
 DECLARE
     v_debt_id UUID;
 BEGIN
@@ -1402,7 +1396,7 @@ BEGIN
 
     RETURN v_debt_id;
 END;
-$$ LANGUAGE plpgsql;
+$body$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION fn_create_card_debt IS 'Создаёт долг по карте и добавляет карту в стоп-лист. UUIDv7 генерируется на уровне приложения.';
 
 -- Функция: погашение долга
@@ -1410,7 +1404,7 @@ CREATE OR REPLACE FUNCTION fn_recover_card_debt(
     p_debt_id UUID,
     p_recovery_transaction_id UUID
 )
-    RETURNS VOID AS $$
+    RETURNS VOID AS $body$
 DECLARE
     v_card_id UUID;
 BEGIN
@@ -1432,13 +1426,13 @@ BEGIN
       AND RELATED_DEBT_ID = p_debt_id
       AND AUTO_UNBLOCK_ON_RECOVERY = true;
 END;
-$$ LANGUAGE plpgsql;
+$body$ LANGUAGE plpgsql;
 
 -- Функция: списание просроченных долгов
 CREATE OR REPLACE FUNCTION fn_expire_overdue_debts(
     p_write_off_reason VARCHAR DEFAULT 'Истёк срок списания (14 дней)'
 )
-    RETURNS INT AS $$
+    RETURNS INT AS $body$
 DECLARE
     v_expired_count INT;
 BEGIN
@@ -1463,13 +1457,13 @@ BEGIN
 
     RETURN v_expired_count;
 END;
-$$ LANGUAGE plpgsql;
+$body$ LANGUAGE plpgsql;
 
 -- Функция: расчёт next_retry_at для попыток списания долга
 CREATE OR REPLACE FUNCTION fn_calculate_debt_recovery_retry(
     p_attempt_count INT
 )
-    RETURNS TIMESTAMP AS $$
+    RETURNS TIMESTAMP AS $body$
 DECLARE
     v_delay_minutes INT;
 BEGIN
@@ -1482,7 +1476,55 @@ BEGIN
         END CASE;
     RETURN NOW() + (v_delay_minutes || ' minutes')::INTERVAL;
 END;
-$$ LANGUAGE plpgsql;
+$body$ LANGUAGE plpgsql;
+
+-- ============================================================
+-- Deferred FK constraints (forward references, idempotent)
+-- ============================================================
+DO $body$ BEGIN
+    ALTER TABLE ASOP_CARD_DEBTS ADD CONSTRAINT fk_debt_transaction
+        FOREIGN KEY (TRANSACTION_ID) REFERENCES ASOP_TRANSACTIONS (TRANSACTION_ID);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $body$;
+DO $body$ BEGIN
+    ALTER TABLE ASOP_CARD_DEBTS ADD CONSTRAINT fk_debt_session
+        FOREIGN KEY (SESSION_ID) REFERENCES ASOP_SESSIONS (SESSION_ID);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $body$;
+DO $body$ BEGIN
+    ALTER TABLE ASOP_CARD_DEBTS ADD CONSTRAINT fk_debt_terminal
+        FOREIGN KEY (TERMINAL_ID) REFERENCES ASOP_TERMINALS (TERMINAL_ID);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $body$;
+DO $body$ BEGIN
+    ALTER TABLE ASOP_DEBT_RECOVERY_ATTEMPTS ADD CONSTRAINT fk_dra_transaction
+        FOREIGN KEY (RECOVERY_TRANSACTION_ID) REFERENCES ASOP_TRANSACTIONS (TRANSACTION_ID);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $body$;
+DO $body$ BEGIN
+    ALTER TABLE ASOP_TIDS ADD CONSTRAINT fk_tids_terminal
+        FOREIGN KEY (TERMINAL_ID) REFERENCES ASOP_TERMINALS (TERMINAL_ID);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $body$;
+DO $body$ BEGIN
+    ALTER TABLE ASOP_PAYMENTS ADD CONSTRAINT fk_payments_event
+        FOREIGN KEY (EVENT_ID) REFERENCES ASOP_EVENTS (EVENT_ID);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $body$;
+
+-- ============================================================
+-- Seed roles
+-- ============================================================
+INSERT INTO ASOP_ROLES (ROLE_ID, ROLE_NAME) VALUES
+    ('00000000-0000-0000-0000-000000000001', 'SUPER_ADMIN'),
+    ('00000000-0000-0000-0000-000000000002', 'CARRIER_ADMIN'),
+    ('00000000-0000-0000-0000-000000000003', 'CONTROLLER_ADMIN'),
+    ('00000000-0000-0000-0000-000000000004', 'DISTRIBUTOR_ADMIN'),
+    ('00000000-0000-0000-0000-000000000005', 'DISPATCHER'),
+    ('00000000-0000-0000-0000-000000000006', 'DRIVER'),
+    ('00000000-0000-0000-0000-000000000007', 'CONTROLLER'),
+    ('00000000-0000-0000-0000-000000000008', 'PASSENGER')
+ON CONFLICT (ROLE_ID) DO NOTHING;
 
 -- ============================================================
 -- ГОТОВО! Все UUID — v7 (Time-Ordered), генерируются на уровне приложения.

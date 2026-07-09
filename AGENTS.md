@@ -57,8 +57,8 @@ Gateway обрабатывает запросы двумя способами:
 :backend:shared:asop-common          # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, util
 :backend:shared:asop-dto             # пусто (DTO перенесены в API-модули)
 :backend:shared:asop-kafka-contracts # Kafka event classes
-:backend:shared:api:{domain}-api     # Controller interfaces + DTO (10 модулей)
-:backend:{domain}-service            # Spring Boot apps (10 сервисов)
+:backend:shared:api:{domain}-api     # Controller interfaces + DTO (11 модулей)
+:backend:{domain}-service            # Spring Boot apps (11 сервисов)
 ```
 
 Service → API dependency: `implementation(project(":backend:shared:api:{domain}-api"))`.
@@ -78,6 +78,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 | `debt-service` | 8088 | Card debts |
 | `audit-service` | 8089 | Inspections (КРС) |
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
+| `admin-service` | 8091 | Справочники (Regions, Territories, Organizers) |
 
 ### Gateway dual auth
 
@@ -91,7 +92,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
-- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Regions, Territories, Organizers
 - Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
 ### Kafka topic naming
@@ -105,7 +106,11 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **Gateway returns**: `202 Accepted` + `X-Event-Id` header + `AcceptedResponse` body (with `eventId`, `topic`, `acceptedAt`, `locationHint`)
 - **API modules** contain only interfaces + DTOs, no implementation. Package: `ru.asop.api.{domain}`.
 - **Service packages**: `ru.asop.{domain}` (e.g. `ru.asop.gateway`, `ru.asop.crypto`)
-- **Liquibase migrations**: all in `infrastructure/db-migrations/{service}/` (e.g. `infrastructure/db-migrations/user/`). Only `user-service` has migrations now; others have `liquibase.enabled=false` until changelogs are added.
+- **Liquibase migrations**: единый changelog в `infrastructure/db-migrations/` → `migrations/v001-init.yaml` → `v001-init.sql` (67 таблиц + функции + seed roles). Выполняется отдельным Docker-контейнером `liquibase:4.27` после `postgres:healthy`. Сервисы НЕ содержат Liquibase/DataSource/JDBC (только R2DBC).
+- **asop_schema.sql** — справочная копия v001-init.sql, не монтируется в init скрипты.
+- **idempotent FK**: `ALTER TABLE ... ADD CONSTRAINT IF NOT EXISTS ... DEFERRABLE INITIALLY DEFERRED`.
+- **Liquibase quirks**: `$$` → `$body$` (dollar quoting), `splitStatements: false` для sqlFile (JDBC сам разбивает), `relativeToChangelogFile: true` во всех include.
+- **Save bug**: `ReactiveCrudRepository.save()` с не-null UUID делает UPDATE. Использовать `R2dbcEntityTemplate.insert()`.
 - **InnValidator** lives in `asop-common`, used in gateway for carrier creation
 
 ## Endpoints (реализовано)
@@ -154,10 +159,10 @@ Client                     Gateway                         Service
 
 ## Infrastructure
 
-- **Docker Compose** in `infrastructure/docker/docker-compose.yml` — все 10 сервисов + Postgres + Kafka + Keycloak на общей сети `asop-net`
+- **Docker Compose** in `infrastructure/docker/docker-compose.yml` — все 11 сервисов + Postgres + Kafka + Keycloak + Liquibase на общей сети `asop-net`
 - **PostgreSQL 14** with PostGIS
 - **Keycloak 25.0.4** on port 8180, realm `asop`
-- **Bootstrap** (`BootstrapService` in `user-service`): on `ApplicationReadyEvent`, checks `ASOP_USERS` — if empty, creates Keycloak realm + roles + admin user (`admin@asop.local`, temporary password from `BOOTSTRAP_ADMIN_PASSWORD`). Records in `ASOP_USERS` + `ASOP_USER_ROLES`. Env vars: `BOOTSTRAP_ENABLED`, `BOOTSTRAP_ADMIN_PASSWORD`, `KEYCLOAK_URL`, `KEYCLOAK_ADMIN_PASSWORD`
+- **Bootstrap** (`BootstrapService` in `user-service`): on `ApplicationReadyEvent`, checks `ASOP_USERS` — if empty, creates Keycloak realm + roles + admin user (`admin@asop.local`, temporary password from `BOOTSTRAP_ADMIN_PASSWORD`). Also creates public OIDC client `asop-admin` via `ensureOidcClient()` (redirectUris: `http://localhost:3000/*`). Records in `ASOP_USERS` + `ASOP_USER_ROLES`. Env vars: `BOOTSTRAP_ENABLED`, `BOOTSTRAP_ADMIN_PASSWORD`, `KEYCLOAK_URL`, `KEYCLOAK_ADMIN_PASSWORD`
   - **Keycloak 25.0.4 bug**: realm creation with bare `{realm: "asop", enabled: true}` breaks Direct Access Grant. Must include `resetPasswordAllowed: true`, `directGrantFlow: "direct grant"`, `registrationAllowed: false`, etc.
   - **Keycloak 25.0.4 bug**: `POST /users` без credentials + `PUT /reset-password` → "Account is not fully set up". Фикс: передавать credentials inline в `UserRepresentation`.
   - **Keycloak 25.0.4 bug**: пользователь без BOTH `firstName` и `lastName` → "Account is not fully set up". Оба поля обязательны.
@@ -176,7 +181,7 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-service
 ```
 
-Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse-temurin:21-jre). Liquibase migrations for Docker mounted from `infrastructure/db-migrations/` into `/db-migrations/` inside containers.
+Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse-temurin:21-jre). Liquibase migrations for Docker mounted from `infrastructure/db-migrations/` into `/db-migrations/` inside the liquibase container.
 
 ## Crypto (crypto-service)
 

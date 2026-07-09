@@ -12,12 +12,29 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ../db-migrations:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U asop -d asop"]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - asop-net
+
+  liquibase:
+    mem_limit: 256m
+    image: liquibase/liquibase:4.27
+    working_dir: /liquibase/changelog
+    command:
+      - --changeLogFile=db.changelog-master.yaml
+      - --url=jdbc:postgresql://postgres:5432/asop
+      - --username=asop
+      - --password=asop
+      - update
+    volumes:
+      - ../db-migrations:/liquibase/changelog
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - asop-net
 
@@ -142,9 +159,6 @@ services:
       KEYCLOAK_ADMIN_PASSWORD: admin
       BOOTSTRAP_ENABLED: "true"
       BOOTSTRAP_ADMIN_PASSWORD: admin
-      SPRING_LIQUIBASE_CHANGE_LOG: file:/db-migrations/user/db.changelog-master.yaml
-    volumes:
-      - ../db-migrations:/db-migrations
     depends_on:
       postgres:
         condition: service_healthy
@@ -326,6 +340,25 @@ services:
       kafka:
         condition: service_healthy
       keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  admin-service:
+    mem_limit: 256m
+    build:
+      context: ../../backend/admin-service
+      dockerfile: Dockerfile
+    ports:
+      - "8091:8091"
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+    depends_on:
+      postgres:
         condition: service_healthy
     networks:
       - asop-net

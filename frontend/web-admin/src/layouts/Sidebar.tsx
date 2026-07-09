@@ -11,6 +11,12 @@ const navItems = [
   { to: '/sessions', label: 'Смены', icon: '🔐' },
 ];
 
+const refItems = [
+  { to: '/regions', label: 'Регионы', icon: '🗺️' },
+  { to: '/territories', label: 'Территории', icon: '📍' },
+  { to: '/organizers', label: 'Организаторы', icon: '🏢' },
+];
+
 const bottomItems = [
   { to: '/password', label: 'Сменить пароль', icon: '🔑' },
 ];
@@ -29,6 +35,21 @@ export function Sidebar() {
             key={item.to}
             to={item.to}
             end={item.to === '/'}
+            className={({ isActive }) =>
+              cn('nav-link', isActive && 'active')
+            }
+          >
+            <span className="nav-icon">{item.icon}</span>
+            <span className="nav-label">{item.label}</span>
+          </NavLink>
+        ))}
+      </nav>
+      <div className="sidebar-section-label">Справочники</div>
+      <nav className="sidebar-nav">
+        {refItems.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
             className={({ isActive }) =>
               cn('nav-link', isActive && 'active')
             }
