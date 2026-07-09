@@ -1,289 +1,289 @@
-# ASOP Platform Architecture
+# Архитектура платформы ASOP
 
-**Version:** 1.0  
-**Date:** 2026-07-09  
-**Status:** MVP in development
+**Версия:** 1.0
+**Дата:** 2026-07-09
+**Статус:** MVP в разработке
 
 ---
 
-## Table of Contents
+## Содержание
 
-1. [Technology Stack](#1-technology-stack)
-2. [Module Structure](#2-module-structure)
-3. [Gateway Architecture](#3-gateway-architecture)
-4. [Authentication & Authorization](#4-authentication--authorization)
+1. [Технологический стек](#1-технологический-стек)
+2. [Структура модулей](#2-структура-модулей)
+3. [Архитектура Gateway](#3-архитектура-gateway)
+4. [Аутентификация и авторизация](#4-аутентификация-и-авторизация)
 5. [Pass-Through Identity](#5-pass-through-identity)
-6. [Keycloak Integration](#6-keycloak-integration)
-7. [Kafka Messaging](#7-kafka-messaging)
-8. [Crypto & PKI](#8-crypto--pki)
-9. [Database](#9-database)
-10. [Frontend](#10-frontend)
-11. [Build & Deploy](#11-build--deploy)
-12. [Key Decisions & Rationale](#12-key-decisions--rationale)
+6. [Интеграция с Keycloak](#6-интеграция-с-keycloak)
+7. [Kafka-сообщения](#7-kafka-сообщения)
+8. [Криптография и PKI](#8-криптография-и-pki)
+9. [База данных](#9-база-данных)
+10. [Фронтенд](#10-фронтенд)
+11. [Сборка и деплой](#11-сборка-и-деплой)
+12. [Ключевые решения и обоснование](#12-ключевые-решения-и-обоснование)
 
 ---
 
-## 1. Technology Stack
+## 1. Технологический стек
 
-| Component | Version | Purpose |
-|-----------|---------|---------|
-| Kotlin | 2.0.21 | Primary language |
-| Spring Boot | 3.3.5 (WebFlux) | Reactive framework |
-| PostgreSQL | 14 + PostGIS | Database |
-| Kafka | 3.7.1 | Async messaging |
-| Keycloak | 25.0.4 | OIDC provider |
-| Bouncy Castle | 1.78.1 | Crypto (ECC P-256) |
-| Gradle | 8.10.2 | Build system |
-| React | 18 + Vite | Admin frontend |
-| oidc-client-ts | — | OIDC client library |
+| Компонент | Версия | Назначение |
+|-----------|--------|------------|
+| Kotlin | 2.0.21 | Основной язык |
+| Spring Boot | 3.3.5 (WebFlux) | Реактивный фреймворк |
+| PostgreSQL | 14 + PostGIS | База данных |
+| Kafka | 3.7.1 | Асинхронная шина |
+| Keycloak | 25.0.4 | OIDC-провайдер |
+| Bouncy Castle | 1.78.1 | Криптография (ECC P-256) |
+| Gradle | 8.10.2 | Система сборки |
+| React | 18 + Vite | Админка |
+| oidc-client-ts | — | OIDC-клиент |
 
-### JVM Limits (critical)
+### Ограничения JVM (критично)
 - Gradle daemon: `-Xmx4g`
 - Kotlin daemon: `-Xmx2g`
-- Without these, build OOMs on 22 modules.
-- `org.gradle.configuration-cache=false` — breaks Kotlin compilation (ClasspathSnapshotProperties).
+- Без этих настроек сборка падает с OOM на 22 модулях
+- `org.gradle.configuration-cache=false` — ломает компиляцию Kotlin (ClasspathSnapshotProperties)
 
 ---
 
-## 2. Module Structure
+## 2. Структура модулей
 
-22 modules organized in a layered hierarchy:
+22 модуля в иерархии:
 
 ```
-:backend:shared:asop-common           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, util (InnValidator, UuidUtils)
-:backend:shared:asop-dto              # Empty — DTOs moved to API modules
-:backend:shared:asop-kafka-contracts  # Kafka event class definitions
-:backend:shared:api:{domain}-api      # 10 modules: controller interfaces + DTOs (no implementation)
-:backend:{domain}-service             # 10 Spring Boot apps with implementation
+:backend:shared:asop-common           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, утилиты
+:backend:shared:asop-dto              # Пусто — DTO перенесены в API-модули
+:backend:shared:asop-kafka-contracts  # Классы Kafka-событий
+:backend:shared:api:{domain}-api      # 10 модулей: интерфейсы контроллеров + DTO (без реализации)
+:backend:{domain}-service             # 10 Spring Boot приложений с реализацией
 ```
 
-### Dependency graph
+### Граф зависимостей
 ```
-Service → API (implementation) → asop-common (api platform)
+Сервис → API (implementation) → asop-common (api platform)
 ```
 
-### API module pattern
-Package: `ru.asop.api.{domain}`
+### Структура API-модуля
+Пакет: `ru.asop.api.{domain}`
 ```
 backend/shared/api/{name}-api/
 ├── build.gradle.kts
 └── src/main/kotlin/ru/asop/api/{package}/
-    ├── controller/          # Controller interfaces (@RequestMapping)
-    ├── dto/request/         # Request DTOs
-    ├── dto/response/        # Response DTOs
-    └── exception/           # API exceptions
+    ├── controller/          # Интерфейсы контроллеров (@RequestMapping)
+    ├── dto/request/         # Request DTO
+    ├── dto/response/        # Response DTO
+    └── exception/           # Исключения API
 ```
 
-### Service module pattern
-Package: `ru.asop.{domain}` (e.g. `ru.asop.gateway`, `ru.asop.crypto`)
+### Структура сервисного модуля
+Пакет: `ru.asop.{domain}` (например `ru.asop.gateway`, `ru.asop.crypto`)
 
-### Service ports
+### Порты сервисов
 
-| Service | Port | Role |
-|---------|------|------|
+| Сервис | Порт | Роль |
+|--------|------|------|
 | gateway-service | 8080 | API Gateway: JWT + mTLS, Kafka producer |
-| crypto-service | 8081 | Root CA, X.509 cert issuance |
-| user-service | 8082 | Users + Keycloak bootstrap |
-| terminal-service | 8084 | Terminal management |
-| session-service | 8085 | Sessions/shifts (tree hierarchy) |
-| card-service | 8086 | Cards (MIFARE, bank) |
-| carrier-service | 8087 | Carriers, contracts, vehicles (R2DBC) |
-| debt-service | 8088 | Card debts |
-| audit-service | 8089 | Inspections |
-| fiscal-service | 8090 | Fiscalization (OFD) |
+| crypto-service | 8081 | Root CA, выпуск X.509 сертификатов |
+| user-service | 8082 | Пользователи + Keycloak bootstrap |
+| terminal-service | 8084 | Управление терминалами |
+| session-service | 8085 | Сессии/смены (иерархия) |
+| card-service | 8086 | Карты (MIFARE, банковские) |
+| carrier-service | 8087 | Перевозчики, договоры, ТС (R2DBC) |
+| debt-service | 8088 | Долги по картам |
+| audit-service | 8089 | КРС (проверки) |
+| fiscal-service | 8090 | Фискализация (ОФД) |
 
 ---
 
-## 3. Gateway Architecture
+## 3. Архитектура Gateway
 
-**Core principle:** Gateway does NOT write to the database. It validates auth, pushes commands to Kafka, returns `202 Accepted`.
+**Основной принцип:** Gateway не пишет в БД. Валидирует аутентификацию, пушит команды в Kafka, возвращает `202 Accepted`.
 
-### Routing patterns
+### Паттерны маршрутизации
 
-#### 1. Async writes (POST/PUT/DELETE with explicit controller)
-- Command sent to Kafka
-- Gateway returns `202 Accepted` + `X-Event-Id` header + `AcceptedResponse` body
-- `keycloakId` passed in Kafka headers (`X-Keycloak-Id`)
-- Example: `CarrierController` / `CarrierCommandService`
+#### 1. Async writes (POST/PUT/DELETE с явным контроллером)
+- Команда отправляется в Kafka
+- Gateway возвращает `202 Accepted` + заголовок `X-Event-Id` + тело `AcceptedResponse`
+- `keycloakId` передаётся в Kafka headers (`X-Keycloak-Id`)
+- Пример: `CarrierController` / `CarrierCommandService`
 
-#### 2. Sync proxy (GET + unhandled requests)
-- `ProxyController` forwards to backend services via `WebClient`
-- Resource → base URL mapping in `ServiceRegistry` (`ServiceRegistry.kt`):
-  - `ASOP_ENV=local` (default) → `localhost:{port}`
-  - `ASOP_ENV=docker` → Docker service hostnames
-- Gateway adds `X-Keycloak-Id` header, removes `Authorization`
+#### 2. Sync proxy (GET + необработанные запросы)
+- `ProxyController` пересылает запросы в backend-сервисы через `WebClient`
+- Маппинг ресурса → base URL в `ServiceRegistry`:
+  - `ASOP_ENV=local` (по умолчанию) → `localhost:{port}`
+  - `ASOP_ENV=docker` → Docker hostname сервиса
+- Gateway добавляет заголовок `X-Keycloak-Id`, **удаляет** `Authorization`
 
 #### 3. Event tracking
-- After Kafka send, `EventService` stores status `PENDING` (in-memory `ConcurrentHashMap` with 30-min TTL)
-- Frontend polls `GET /api/v1/events/{eventId}` until `COMPLETED` or `FAILED`
-- Status stays PENDING forever unless services publish events to `.events` topics
+- После отправки в Kafka `EventService` сохраняет статус `PENDING` (in-memory `ConcurrentHashMap`, TTL 30 мин)
+- Фронт поллит `GET /api/v1/events/{eventId}` до `COMPLETED` или `FAILED`
+- Статус навсегда PENDING, пока сервисы не публикуют события в `.events` топики
 
-### Key gateway components
+### Ключевые компоненты Gateway
 
-| File | Purpose |
-|------|---------|
-| `config/ServiceRegistry.kt` | Resource → service URL mapping |
-| `config/WebClientConfig.kt` | WebClient bean for proxy |
-| `controller/ProxyController.kt` | Catch-all sync proxy |
-| `controller/EventController.kt` | Event status endpoint |
+| Файл | Назначение |
+|------|------------|
+| `config/ServiceRegistry.kt` | Маппинг resource → URL сервиса |
+| `config/WebClientConfig.kt` | WebClient bean для proxy |
+| `controller/ProxyController.kt` | Sync proxy (catch-all) |
+| `controller/EventController.kt` | Эндпоинт статуса события |
 | `service/EventService.kt` | In-memory event store |
 | `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) |
 
 ---
 
-## 4. Authentication & Authorization
+## 4. Аутентификация и авторизация
 
-### Dual auth in Gateway
+### Двойная аутентификация в Gateway
 
-**Chain 1** (`@Order(1)`): mTLS for terminal endpoints
-- Paths: `/api/v1/terminals/**`, `/api/v1/sync/**`
-- Principal = `CN` from X.509 certificate
-- `X509PrincipalExtractor` from `org.springframework.security.web.authentication.preauth.x509` (synchronous, returns `Any`)
+**Chain 1** (`@Order(1)`): mTLS для терминалов
+- Пути: `/api/v1/terminals/**`, `/api/v1/sync/**`
+- Principal = `CN` из X.509 сертификата
+- `X509PrincipalExtractor` из `org.springframework.security.web.authentication.preauth.x509` (синхронный, возвращает `Any`)
 
-**Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else
-- JWKS cached locally, verified every 60s
-- No network calls to Keycloak per-request
+**Chain 2** (`@Order(2)`): JWT (Keycloak) для всего остального
+- JWKS кэшируется локально, проверка каждые 60 сек
+- Нет сетевых вызовов к Keycloak на каждый запрос
 
-### JWT Issuer workaround
+### Проблема JWT issuer
 
-In Docker, Keycloak (`KC_HOSTNAME=localhost`) issues tokens with `iss: http://localhost:8180/realms/asop`, but services reach Keycloak at `http://keycloak:8080`. Standard Spring Security validator rejects mismatched issuer.
+В Docker Keycloak (`KC_HOSTNAME=localhost`) выдаёт токены с `iss: http://localhost:8180/realms/asop`, но сервисы внутри Docker обращаются к Keycloak по `http://keycloak:8080`. Стандартный валидатор Spring Security отвергает несовпадающий issuer.
 
-**Solution:** Custom `ReactiveJwtDecoder` (`JwtDecoderConfig.kt`) that:
-- Uses JWKS (`jwk-set-uri`) for signature verification
-- Does NOT validate `iss` (accepts any issuer)
-- Validates `exp` and `nbf` manually
+**Решение:** Кастомный `ReactiveJwtDecoder` (`JwtDecoderConfig.kt`):
+- Использует JWKS (`jwk-set-uri`) для проверки подписи
+- Не проверяет `iss` (принимает любой issuer)
+- Проверяет `exp` и `nbf` вручную
 
-Currently applied in: gateway-service, user-service.
+Применён в: gateway-service, user-service.
 
 ---
 
 ## 5. Pass-Through Identity
 
-Gateway validates JWT, extracts `sub` (keycloakId), passes it to backend services **without** forwarding the original JWT.
+Gateway проверяет JWT, извлекает `sub` (keycloakId), передаёт backend-сервисам **без** оригинального JWT.
 
-### Flow
+### Схема
 ```
-Client                     Gateway                         Service
+Клиент                      Gateway                         Сервис
   │                         │                                │
   │ POST /password/change   │                                │
   │ Authorization: JWT      │                                │
   │────────────────────────>│                                │
-  │                         │ JWT validation (JWKS, exp/nbf) │
-  │                         │ extract sub (keycloakId)       │
+  │                         │ Проверка JWT (JWKS, exp/nbf)   │
+  │                         │ Извлечение sub (keycloakId)    │
   │                         │                                │
   │                         │ POST /password/change          │
   │                         │ X-Keycloak-Id: <sub>          │
-  │                         │ (no Authorization)             │
+  │                         │ (без Authorization)            │
   │                         │──────────────────────────────>│
   │                         │                                │
-  │                         │ resolve keycloakId → userId   │
-  │                         │ process request                │
+  │                         │ keycloakId → userId            │
+  │                         │ обработка запроса              │
   │                         │<──────────────────────────────│
   │<────────────────────────│                                │
   │ 204 / 202 / 4xx / 5xx   │                                │
 ```
 
-### Implementation
-- **Gateway**: `ProxyController.extractIdentity()` uses `ReactiveSecurityContextHolder` to get JWT, extracts `sub`
-- **Kafka async**: `X-Keycloak-Id` in Kafka headers
-- **Backend services**: do NOT validate JWT (except user-service which has `permitAll`)
-- Backend services trust `X-Keycloak-Id` from gateway (internal network trust)
+### Реализация
+- **Gateway**: `ProxyController.extractIdentity()` использует `ReactiveSecurityContextHolder` для получения JWT, извлекает `sub`
+- **Kafka async**: `X-Keycloak-Id` в Kafka headers
+- **Backend сервисы**: не валидируют JWT (user-service с `permitAll`)
+- Backend доверяет `X-Keycloak-Id` от gateway (внутренняя сеть)
 
-### Future improvement
-Create a shared `UserResolver` in `asop-common` to resolve `keycloakId` → `userId` + roles from database.
+### Улучшение в будущем
+Создать общий `UserResolver` в `asop-common` для resolve keycloakId → userId + роли из БД.
 
 ---
 
-## 6. Keycloak Integration
+## 6. Интеграция с Keycloak
 
-### Keycloak 25.0.4 bugs
+### Баги Keycloak 25.0.4
 
-Three bugs found when creating realm/users via Admin API:
+Три бага при создании realm/users через Admin API:
 
-1. **Realm creation**
-   - Bare `{realm: "asop", enabled: true}` breaks Direct Access Grant
-   - Required: `resetPasswordAllowed=true`, `directGrantFlow="direct grant"`, `registrationAllowed=false`, `verifyEmail=false`, `loginWithEmailAllowed=true`
+1. **Создание realm**
+   - Голый `{realm: "asop", enabled: true}` ломает Direct Access Grant
+   - Требуется: `resetPasswordAllowed=true`, `directGrantFlow="direct grant"`, `registrationAllowed=false`, `verifyEmail=false`, `loginWithEmailAllowed=true`
 
-2. **User credentials**
-   - `POST /users` without credentials + separate `PUT /reset-password` → "Account is not fully set up"
-   - Fix: pass credentials **inline** in `UserRepresentation`
+2. **Учётные данные пользователя**
+   - `POST /users` без credentials + отдельный `PUT /reset-password` → "Account is not fully set up"
+   - Фикс: credentials **inline** в `UserRepresentation`
 
-3. **User names**
-   - Missing `firstName` or `lastName` → "Account is not fully set up"
-   - Both fields are mandatory
+3. **Имена пользователя**
+   - Отсутствие `firstName` или `lastName` → "Account is not fully set up"
+   - Оба поля обязательны
 
-### Bootstrap service
+### Bootstrap
 
-On `ApplicationReadyEvent`, if `ASOP_USERS` table is empty:
-1. Creates Keycloak realm `asop` with full configuration
-2. Creates roles: `SUPER_ADMIN`, `CARRIER_ADMIN`, `DISPATCHER`, etc.
-3. Creates admin user `admin@asop.local` with inline credentials
-4. Records user in `ASOP_USERS` + `ASOP_USER_ROLES`
+На `ApplicationReadyEvent`, если таблица `ASOP_USERS` пуста:
+1. Создаёт realm `asop` с полной конфигурацией
+2. Создаёт роли: `SUPER_ADMIN`, `CARRIER_ADMIN`, `DISPATCHER` и т.д.
+3. Создаёт администратора `admin@asop.local` с inline credentials
+4. Записывает в `ASOP_USERS` + `ASOP_USER_ROLES`
 
-### Auth flows
+### Потоки аутентификации
 
-| Environment | Flow | Status |
-|------------|------|--------|
-| MVP/dev | Direct Access Grant (password grant) | Active |
-| Production | OIDC Auth Code + PKCE (via oidc-client-ts) | Planned |
+| Окружение | Поток | Статус |
+|-----------|-------|--------|
+| MVP/dev | Direct Access Grant (password grant) | Активен |
+| Production | OIDC Auth Code + PKCE (через oidc-client-ts) | Запланирован |
 
-### Endpoints
+### Эндпоинты
 
-| Method | Path | Service | Type |
-|--------|------|---------|------|
+| Метод | Путь | Сервис | Тип |
+|-------|------|--------|-----|
 | POST | `/api/v1/users/password/change` | user-service | sync (pass-through) |
 
 ---
 
-## 7. Kafka Messaging
+## 7. Kafka-сообщения
 
-### Topic naming
-Pattern: `asop.{domain}.{commands|events}`
+### Именование топиков
+Шаблон: `asop.{domain}.{commands|events}`
 
-Defined in `KafkaTopic` object in `asop-common`:
-- `asop.carrier.commands` — carrier write commands
-- `asop.session.events` — session domain events
+Определён в `KafkaTopic` в `asop-common`:
+- `asop.carrier.commands` — команды записи перевозчиков
+- `asop.session.events` — доменные события сессий
 
-### Async command flow
-1. Gateway validates request, extracts identity
-2. Gateway sends command to `asop.{domain}.commands` topic
-3. Gateway returns `202 Accepted` + `X-Event-Id`
-4. Backend service consumes command, processes, publishes event to `asop.{domain}.events`
-5. Event consumer updates event status (future: persistence)
+### Поток асинхронной команды
+1. Gateway проверяет запрос, извлекает identity
+2. Gateway отправляет команду в `asop.{domain}.commands`
+3. Gateway возвращает `202 Accepted` + `X-Event-Id`
+4. Backend-сервис потребляет команду, обрабатывает, публикует событие в `asop.{domain}.events`
+5. Consumer обновляет статус события (в будущем: персистентность)
 
-### Headers
-- `X-Keycloak-Id`: authenticated user's keycloakId (identity tracing)
+### Заголовки
+- `X-Keycloak-Id`: keycloakId аутентифицированного пользователя (трассировка)
 
 ---
 
-## 8. Crypto & PKI
+## 8. Криптография и PKI
 
-### Certificate hierarchy
+### Иерархия сертификатов
 ```
-Root CA (self-signed, ECC P-256, 10 years)
-└── Intermediate CA (signed by Root CA, 5 years)
-    ├── Terminal Certificates (1 year)
-    ├── Smart Card Certificates (1 year)
-    └── Driver Certificates (1 year)
+Root CA (self-signed, ECC P-256, 10 лет)
+└── Intermediate CA (подписан Root CA, 5 лет)
+    ├── Сертификаты терминалов (1 год)
+    ├── Сертификаты смарт-карт (1 год)
+    └── Сертификаты водителей (1 год)
 ```
 
-### Implementation
-- Root CA in PKCS#12 (`./data/root-ca.p12`), auto-generated on first start
-- ECC P-256 via Bouncy Castle
-- All signing via Intermediate CA (regenerated on each restart in MVP)
-- `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` not available in Spring 6.1 — use `"application/x-pem-file"`
+### Реализация
+- Root CA в PKCS#12 (`./data/root-ca.p12`), авто-генерация при первом старте
+- ECC P-256 через Bouncy Castle
+- Все подписи через Intermediate CA (пересоздаётся при каждом рестарте в MVP)
+- `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` нет в Spring 6.1 — использовать `"application/x-pem-file"`
 
-### Crypto-service endpoints
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/v1/terminals/register` | Terminal cert issuance |
-| POST | `/api/v1/smart-cards/issue` | Smart card cert issuance |
-| GET | `/api/v1/terminals/root-ca(/{format})` | Root CA in PEM/DER |
+### Эндпоинты crypto-service
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/v1/terminals/register` | Выпуск сертификата терминала |
+| POST | `/api/v1/smart-cards/issue` | Выпуск сертификата смарт-карты |
+| GET | `/api/v1/terminals/root-ca(/{format})` | Root CA в PEM/DER |
 
-### Smart card roles
+### Роли смарт-карт
 `PASSENGER_ANONYMOUS`, `PASSENGER_BENEFIT`, `DRIVER`, `CONTROLLER`, `DISPATCHER`, `CARRIER_ADMIN`, `REGION_ADMIN`, `SUPER_ADMIN`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_TERMINAL`, `SERVICE`
 
-### DN templates
+### DN-шаблоны
 ```yaml
 DRIVER: "CN={cardId}, OU=DRIVER:{carrierId}, O=ASOP"
 CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
@@ -291,43 +291,43 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 
 ---
 
-## 9. Database
+## 9. База данных
 
-### Key tables
-- `ASOP_USERS`, `ASOP_USER_ROLES`, `ASOP_USER_CARRIERS` — users
-- `ASOP_CARRIERS`, `ASOP_CONTRACTS`, `ASOP_VEHICLES` — carriers
-- `ASOP_CARDS`, `ASOP_CARD_MIFARES`, `ASOP_CARD_TARIFFS`, `ASOP_CARD_BANKS` — cards
-- `ASOP_TERMINALS`, `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — terminals
-- `ASOP_SESSIONS`, `ASOP_TRANSACTIONS`, `ASOP_CARD_DEBTS` — transactions
-- `ASOP_AUDIT_TASKS`, `ASOP_AUDIT_BRIGADES`, `ASOP_AUDIT_INSPECTIONS` — inspections
+### Ключевые таблицы
+- `ASOP_USERS`, `ASOP_USER_ROLES`, `ASOP_USER_CARRIERS` — пользователи
+- `ASOP_CARRIERS`, `ASOP_CONTRACTS`, `ASOP_VEHICLES` — перевозчики
+- `ASOP_CARDS`, `ASOP_CARD_MIFARES`, `ASOP_CARD_TARIFFS`, `ASOP_CARD_BANKS` — карты
+- `ASOP_TERMINALS`, `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — терминалы
+- `ASOP_SESSIONS`, `ASOP_TRANSACTIONS`, `ASOP_CARD_DEBTS` — транзакции
+- `ASOP_AUDIT_TASKS`, `ASOP_AUDIT_BRIGADES`, `ASOP_AUDIT_INSPECTIONS` — КРС
 
-### Conventions
-- **All IDs**: UUID v7 via `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`)
-- **Migrations**: Liquibase, stored in `infrastructure/db-migrations/{service}/`
-- Currently only user-service has active migrations; others have `liquibase.enabled=false`
+### Соглашения
+- **Все ID**: UUID v7 через `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`)
+- **Миграции**: Liquibase, в `infrastructure/db-migrations/{service}/`
+- Активные миграции только в user-service; у остальных `liquibase.enabled=false`
 
 ---
 
-## 10. Frontend
+## 10. Фронтенд
 
-### Stack
+### Стек
 - Vite + React 18 + TypeScript
-- React Router (client-side routing)
-- TanStack Query (server state)
+- React Router (клиентская маршрутизация)
+- TanStack Query (серверное состояние)
 - oidc-client-ts (OIDC Auth Code + PKCE)
-- Axios (API client)
+- Axios (HTTP-клиент)
 
-### Architecture
-- Proxy `/api` → `http://localhost:8080` (gateway) in Vite dev mode
-- API client: `BASE=/api/v1`, Bearer token from oidc-client-ts
-- `useCommand` hook: 202 + polling pattern for write commands
+### Архитектура
+- Vite dev mode проксирует `/api` → `http://localhost:8080` (gateway)
+- API-клиент: `BASE=/api/v1`, Bearer token из oidc-client-ts
+- `useCommand` hook: паттерн 202 + polling для write-команд
 
-### Pages
+### Страницы
 `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`
 
 ---
 
-## 11. Build & Deploy
+## 11. Сборка и деплой
 
 ### Docker
 ```bash
@@ -335,35 +335,35 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 ```
 
-Each service has a `Dockerfile` (eclipse-temurin:21-jre). Liquibase migrations mounted from `infrastructure/db-migrations/` into `/db-migrations/` inside containers.
+Каждый сервис имеет `Dockerfile` (eclipse-temurin:21-jre). Liquibase миграции монтируются из `infrastructure/db-migrations/` в `/db-migrations/` внутри контейнера.
 
 ### Docker Compose
-All 10 services + PostgreSQL + Kafka + Keycloak on shared network `asop-net`.
+Все 10 сервисов + PostgreSQL + Kafka + Keycloak на общей сети `asop-net`.
 
-### Key environment variables
-| Variable | Purpose |
-|----------|---------|
-| `BOOTSTRAP_ENABLED` | Enable bootstrap on startup |
-| `BOOTSTRAP_ADMIN_PASSWORD` | Initial admin password |
-| `KEYCLOAK_URL` | Keycloak internal URL |
-| `KEYCLOAK_ADMIN_PASSWORD` | Keycloak admin password |
-| `ROOT_CA_KEYSTORE_PASSWORD` | Root CA keystore password |
-| `ASOP_ENV` | `local` (default) or `docker` |
-| `KC_HOSTNAME` | Keycloak hostname (localhost in Docker) |
+### Ключевые переменные окружения
+| Переменная | Назначение |
+|-----------|------------|
+| `BOOTSTRAP_ENABLED` | Включить bootstrap при старте |
+| `BOOTSTRAP_ADMIN_PASSWORD` | Начальный пароль администратора |
+| `KEYCLOAK_URL` | Внутренний URL Keycloak |
+| `KEYCLOAK_ADMIN_PASSWORD` | Пароль admin Keycloak |
+| `ROOT_CA_KEYSTORE_PASSWORD` | Пароль хранилища Root CA |
+| `ASOP_ENV` | `local` (по умолчанию) или `docker` |
+| `KC_HOSTNAME` | Hostname Keycloak (localhost в Docker) |
 
 ---
 
-## 12. Key Decisions & Rationale
+## 12. Ключевые решения и обоснование
 
-| Decision | Rationale |
-|----------|-----------|
-| **Gateway → Kafka → Services** (no DB writes in gateway) | CQRS-like separation; gateway is just a router/validator |
-| **Pass-through identity** | Backend services don't need to validate JWT; trust internal network |
-| **Custom JWT decoder (no issuer validation)** | Keycloak issuer URL differs between Docker network and external access |
-| **API modules as separate Gradle subprojects** | Clean contract separation; service and client share same DTOs/interfaces |
-| **UUID v7** | Time-ordered → better B-tree index performance than UUID v4 |
-| **ECC P-256 for certs** | Smaller keys than RSA; hardware support in Android StrongBox, DESFire EV3 |
-| **In-memory event store (TTL 30 min)** | MVP simplicity; events are ephemeral (tracking only until service confirms) |
-| **mTLS for terminals** | Offline-capable device auth; no dependency on Keycloak availability |
-| **Chain 1 + Chain 2 in SecurityConfig** | Clean separation of terminal (mTLS) and web (JWT) auth flows |
-| **Liquibase in separate directory** | Centralized migration management; not embedded in service JARs |
+| Решение | Обоснование |
+|---------|-------------|
+| **Gateway → Kafka → Сервисы** (без записи в БД из gateway) | CQRS-подобное разделение; gateway — только роутер/валидатор |
+| **Pass-through identity** | Backend-сервисам не нужно валидировать JWT; доверие во внутренней сети |
+| **Кастомный JWT decoder (без проверки issuer)** | URL issuer Keycloak отличается внутри Docker и снаружи |
+| **API-модули как отдельные Gradle-подпроекты** | Чистое разделение контрактов; сервис и клиент используют одни DTO/интерфейсы |
+| **UUID v7** | Time-ordered → лучшая производительность B-tree индексов чем UUID v4 |
+| **ECC P-256 для сертификатов** | Ключи меньше RSA; аппаратная поддержка в Android StrongBox, DESFire EV3 |
+| **In-memory event store (TTL 30 мин)** | MVP-простота; события эфемерны (только отслеживание до подтверждения сервисом) |
+| **mTLS для терминалов** | Аутентификация устройств офлайн; независимость от Keycloak |
+| **Chain 1 + Chain 2 в SecurityConfig** | Чистое разделение mTLS (терминалы) и JWT (веб) потоков |
+| **Liquibase в отдельной директории** | Централизованное управление миграциями; не встроено в JAR сервисов |
