@@ -3,16 +3,16 @@ import { cn } from '../lib/utils';
 import { useAuth } from '../auth/useAuth';
 
 const navItems = [
-  { to: '/', label: 'Dashboard', icon: '📊' },
-  { to: '/users', label: 'Users', icon: '👥' },
-  { to: '/terminals', label: 'Terminals', icon: '💳' },
-  { to: '/cards', label: 'Cards', icon: '🪪' },
-  { to: '/carriers', label: 'Carriers', icon: '🚌' },
-  { to: '/sessions', label: 'Sessions', icon: '🔐' },
+  { to: '/', label: 'Панель управления', icon: '📊' },
+  { to: '/users', label: 'Пользователи', icon: '👥' },
+  { to: '/terminals', label: 'Терминалы', icon: '💳' },
+  { to: '/cards', label: 'Карты', icon: '🪪' },
+  { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
+  { to: '/sessions', label: 'Смены', icon: '🔐' },
 ];
 
 const bottomItems = [
-  { to: '/password', label: 'Change Password', icon: '🔑' },
+  { to: '/password', label: 'Сменить пароль', icon: '🔑' },
 ];
 
 export function Sidebar() {
@@ -53,7 +53,7 @@ export function Sidebar() {
         ))}
         <button className="nav-link logout-btn" onClick={() => logout()}>
           <span className="nav-icon">🚪</span>
-          <span className="nav-label">Logout</span>
+          <span className="nav-label">Выйти</span>
         </button>
       </div>
     </aside>

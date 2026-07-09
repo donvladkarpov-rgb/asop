@@ -15,6 +15,6 @@ export function CallbackPage() {
       });
   }, [navigate]);
 
-  if (error) return <div>Auth error: {error}</div>;
-  return <div>Signing in...</div>;
+  if (error) return <div>Ошибка авторизации: {error}</div>;
+  return <div>Выполняется вход...</div>;
 }

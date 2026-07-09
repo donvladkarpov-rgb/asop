@@ -8,22 +8,22 @@ export function TerminalsPage() {
     queryFn: () => getTerminals(),
   });
 
-  if (isLoading) return <div>Loading...</div>;
-  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading) return <div>Загрузка...</div>;
+  if (error) return <div>Ошибка: {error.message}</div>;
 
   return (
     <div>
       <div className="page-header">
-        <h1>Terminals</h1>
+        <h1>Терминалы</h1>
       </div>
       <table className="data-table">
         <thead>
           <tr>
-            <th>Serial Number</th>
-            <th>Model</th>
-            <th>Status</th>
-            <th>Location</th>
-            <th>Last Seen</th>
+            <th>Серийный номер</th>
+            <th>Модель</th>
+            <th>Статус</th>
+            <th>Расположение</th>
+            <th>Последняя активность</th>
           </tr>
         </thead>
         <tbody>

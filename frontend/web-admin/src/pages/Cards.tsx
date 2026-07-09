@@ -8,23 +8,23 @@ export function CardsPage() {
     queryFn: () => getCards(),
   });
 
-  if (isLoading) return <div>Loading...</div>;
-  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading) return <div>Загрузка...</div>;
+  if (error) return <div>Ошибка: {error.message}</div>;
 
   return (
     <div>
       <div className="page-header">
-        <h1>Cards</h1>
+        <h1>Карты</h1>
       </div>
       <table className="data-table">
         <thead>
           <tr>
             <th>UID</th>
-            <th>Type</th>
-            <th>Holder</th>
-            <th>Status</th>
-            <th>Issued</th>
-            <th>Expires</th>
+            <th>Тип</th>
+            <th>Владелец</th>
+            <th>Статус</th>
+            <th>Выпущена</th>
+            <th>Истекает</th>
           </tr>
         </thead>
         <tbody>

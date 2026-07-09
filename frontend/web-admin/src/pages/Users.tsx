@@ -8,22 +8,22 @@ export function UsersPage() {
     queryFn: () => getUsers(),
   });
 
-  if (isLoading) return <div>Loading...</div>;
-  if (error) return <div>Error: {error.message}</div>;
+  if (isLoading) return <div>Загрузка...</div>;
+  if (error) return <div>Ошибка: {error.message}</div>;
 
   return (
     <div>
       <div className="page-header">
-        <h1>Users</h1>
+        <h1>Пользователи</h1>
       </div>
       <table className="data-table">
         <thead>
           <tr>
             <th>Email</th>
-            <th>Name</th>
-            <th>Roles</th>
-            <th>Status</th>
-            <th>Created</th>
+            <th>Имя</th>
+            <th>Роли</th>
+            <th>Статус</th>
+            <th>Создан</th>
           </tr>
         </thead>
         <tbody>
@@ -32,7 +32,7 @@ export function UsersPage() {
               <td>{user.email}</td>
               <td>{user.firstName} {user.lastName}</td>
               <td>{user.roles.join(', ')}</td>
-              <td>{user.enabled ? 'Active' : 'Disabled'}</td>
+              <td>{user.enabled ? 'Активен' : 'Отключён'}</td>
               <td>{formatDate(user.createdAt)}</td>
             </tr>
           ))}

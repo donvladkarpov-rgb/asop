@@ -8,9 +8,9 @@ export function LoginPage() {
       <div className="login-form">
         <h1>ASOP Admin</h1>
         <p style={{ marginBottom: 24, color: '#6b7280', textAlign: 'center' }}>
-          Sign in with your Keycloak account
+          Войдите с помощью учётной записи Keycloak
         </p>
-        <button onClick={handleLogin} type="button">Sign In with Keycloak</button>
+        <button onClick={handleLogin} type="button">Войти через Keycloak</button>
       </div>
     </div>
   );

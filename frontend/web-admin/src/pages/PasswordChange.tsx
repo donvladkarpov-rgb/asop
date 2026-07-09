@@ -14,26 +14,26 @@ export function PasswordChangePage() {
     setError('');
 
     if (!current || !newPass || !confirm) {
-      setError('All fields are required');
+      setError('Все поля обязательны');
       return;
     }
     if (newPass.length < 6) {
-      setError('New password must be at least 6 characters');
+      setError('Новый пароль должен содержать минимум 6 символов');
       return;
     }
     if (newPass !== confirm) {
-      setError('New passwords do not match');
+      setError('Новые пароли не совпадают');
       return;
     }
 
     try {
       await changePassword(current, newPass);
-      setMessage('Password changed successfully');
+      setMessage('Пароль успешно изменён');
       setCurrent('');
       setNewPass('');
       setConfirm('');
     } catch (err: unknown) {
-      const detail = err instanceof Error ? err.message : 'Failed to change password';
+      const detail = err instanceof Error ? err.message : 'Не удалось изменить пароль';
       setError(detail);
     }
   };
@@ -41,14 +41,14 @@ export function PasswordChangePage() {
   return (
     <div>
       <div className="page-header">
-        <h1>Change Password</h1>
+        <h1>Смена пароля</h1>
       </div>
       <div className="form-card">
         <form onSubmit={handleSubmit}>
           {message && <div className="form-success">{message}</div>}
           {error && <div className="form-error">{error}</div>}
 
-          <label htmlFor="current">Current Password</label>
+          <label htmlFor="current">Текущий пароль</label>
           <input
             id="current"
             type="password"
@@ -57,7 +57,7 @@ export function PasswordChangePage() {
             autoComplete="current-password"
           />
 
-          <label htmlFor="newPass">New Password</label>
+          <label htmlFor="newPass">Новый пароль</label>
           <input
             id="newPass"
             type="password"
@@ -66,7 +66,7 @@ export function PasswordChangePage() {
             autoComplete="new-password"
           />
 
-          <label htmlFor="confirm">Confirm New Password</label>
+          <label htmlFor="confirm">Подтвердите новый пароль</label>
           <input
             id="confirm"
             type="password"
@@ -75,7 +75,7 @@ export function PasswordChangePage() {
             autoComplete="new-password"
           />
 
-          <button type="submit" className="btn-primary">Change Password</button>
+          <button type="submit" className="btn-primary">Сменить пароль</button>
         </form>
       </div>
     </div>

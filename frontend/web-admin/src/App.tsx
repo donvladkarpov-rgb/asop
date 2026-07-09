@@ -23,7 +23,7 @@ const queryClient = new QueryClient({
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { loading, user } = useAuth();
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div>Загрузка...</div>;
   if (!user) return <Navigate to="/login" replace />;
 
   return <>{children}</>;
@@ -32,7 +32,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   const { loading } = useAuth();
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div>Загрузка...</div>;
 
   return (
     <Routes>

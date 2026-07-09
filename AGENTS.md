@@ -92,6 +92,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
 - Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards
+- Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
 ### Kafka topic naming
 
