@@ -330,6 +330,19 @@ services:
     networks:
       - asop-net
 
+  web-admin:
+    mem_limit: 64m
+    build:
+      context: ../../frontend/web-admin
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      gateway-service:
+        condition: service_started
+    networks:
+      - asop-net
+
 networks:
   asop-net:
     driver: bridge

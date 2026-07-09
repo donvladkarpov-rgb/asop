@@ -46,6 +46,14 @@ class BootstrapService(
         return try {
             keycloakAdminService.createRealmIfNotExists()
 
+            keycloakAdminService.createOidcClient(
+                clientId = "asop-admin",
+                redirectUris = listOf(
+                    "http://localhost:3000/*",
+                    "http://localhost:*"
+                )
+            )
+
             keycloakAdminService.createRole("SUPER_ADMIN")
             keycloakAdminService.createRole("CARRIER_ADMIN")
             keycloakAdminService.createRole("CONTROLLER_ADMIN")

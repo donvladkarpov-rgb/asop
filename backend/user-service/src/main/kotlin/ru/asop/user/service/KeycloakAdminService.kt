@@ -3,6 +3,7 @@ package ru.asop.user.service
 import jakarta.ws.rs.core.Response
 import org.keycloak.admin.client.Keycloak
 import org.keycloak.admin.client.KeycloakBuilder
+import org.keycloak.representations.idm.ClientRepresentation
 import org.keycloak.representations.idm.CredentialRepresentation
 import org.keycloak.representations.idm.RoleRepresentation
 import org.keycloak.representations.idm.UserRepresentation
@@ -145,6 +146,39 @@ class KeycloakAdminService(
             log.info("Password updated for Keycloak user '{}'", userId)
         } catch (e: Exception) {
             log.error("Failed to update password for user '{}': {}", userId, e.message)
+            throw e
+        } finally {
+            keycloak.close()
+        }
+    }
+
+    fun createOidcClient(clientId: String, redirectUris: List<String>) {
+        val keycloak = adminClient()
+        try {
+            val realmResource = keycloak.realm(properties.realm)
+            val existing = realmResource.clients().findByClientId(clientId)
+            if (existing.isNotEmpty()) {
+                log.info("OIDC client '{}' already exists in Keycloak", clientId)
+                return
+            }
+            realmResource.clients().create(
+                ClientRepresentation().apply {
+                    this.clientId = clientId
+                    isEnabled = true
+                    isPublicClient = true
+                    isStandardFlowEnabled = true
+                    isDirectAccessGrantsEnabled = false
+                    this.redirectUris = redirectUris
+                    webOrigins = listOf("*")
+                    protocol = "openid-connect"
+                    attributes = mapOf(
+                        "post.logout.redirect.uris" to "+"
+                    )
+                }
+            )
+            log.info("Created OIDC client '{}' in realm '{}'", clientId, properties.realm)
+        } catch (e: Exception) {
+            log.error("Failed to create OIDC client '{}': {}", clientId, e.message)
             throw e
         } finally {
             keycloak.close()

@@ -7,6 +7,7 @@ import { TerminalsPage } from './pages/Terminals';
 import { CardsPage } from './pages/Cards';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
+import { PasswordChangePage } from './pages/PasswordChange';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -48,6 +49,7 @@ function AppRoutes() {
         <Route path="users" element={<UsersPage />} />
         <Route path="terminals" element={<TerminalsPage />} />
         <Route path="cards" element={<CardsPage />} />
+        <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
