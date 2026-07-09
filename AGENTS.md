@@ -25,7 +25,7 @@
 
 Gateway обрабатывает запросы двумя способами:
 
-1. **Async writes (POST/PUT/DELETE с явным контроллером)** — команда уходит в Kafka, gateway возвращает `202 Accepted` + `X-Event-Id`. Пример: `CarrierController` / `CarrierCommandService`.
+1. **Async writes (POST/PUT/DELETE с явным контроллером)** — команда уходит в Kafka, gateway возвращает `202 Accepted` + `X-Event-Id`. Пример: `CarrierController` / `CarrierCommandService`. keycloakId передаётся в Kafka headers (`X-Keycloak-Id`).
 
 2. **Sync proxy (GET + остальные запросы)** — `ProxyController` пересылает запросы в backend-сервисы через `WebClient`. Маппинг ресурсов (`users`, `carriers`, `cards`, etc.) → base URL сервиса определён в `ServiceRegistry`. Для local dev `ASOP_ENV=local` (default → `localhost`), для Docker `ASOP_ENV=docker` (→ Docker hostnames).
 
@@ -91,6 +91,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards
 
 ### Kafka topic naming
 
@@ -182,10 +183,6 @@ Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse
 - ECC P-256 via Bouncy Castle, all signing via Intermediate CA (regenerated on each restart in MVP)
 - `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` not available in Spring 6.1 — use `"application/x-pem-file"`
 - Endpoints: `POST /api/v1/terminals/register`, `POST /api/v1/smart-cards/issue`, `GET /api/v1/terminals/root-ca(/{format})`
-
-## Frontends
-
-Both empty: `frontend/web-admin/`, `frontend/android-terminal/`.
 
 ## Reference docs
 
