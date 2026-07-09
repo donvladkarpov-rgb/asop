@@ -1,8 +1,8 @@
 # Архитектура аутентификации и авторизации ASOP
 
-**Версия:** 1.0  
-**Дата:** 2026-07-01  
-**Статус:** Утверждено  
+**Версия:** 1.1
+**Дата:** 2026-07-09
+**Статус:** Утверждено
 **Область:** Backend, Gateway, Terminal Android, NFC-персонализация, Keycloak, PKI
 
 ---
@@ -21,8 +21,8 @@
 1. **Offline-first для терминалов**: терминал способен работать без связи часами, накапливая сессии и транзакции локально.
 2. **Аппаратная защита ключей**: приватные ключи никогда не покидают защищённую среду (HSM для Root CA, Android Keystore/StrongBox для терминалов, чип DESFire для водителей).
 3. **Zero-Trust на уровне устройств**: каждый терминал и каждая карта водителя имеют криптографический паспорт, проверяемый через Root CA.
-4. **Асинхронная архитектура Gateway**: Gateway не пишет в БД. Он принимает запросы, валидирует аутентификацию/авторизацию, пушит команды в Kafka и возвращает `202 Accepted`.
-5. **Минимум изменений в БД**: в схему добавляется только одно поле (`ASOP_VEHICLES.CARRIER_ID` → `NULL`). Новые таблицы не создаются.
+4. **Gateway не пишет в БД**: принимает запросы, валидирует аутентификацию/авторизацию, пушит команды в Kafka, возвращает `202 Accepted`.
+5. **Pass-through identity**: gateway проверяет JWT, извлекает `sub` (keycloakId), передаёт внутренним сервисам через заголовок `X-Keycloak-Id` без оригинального JWT.
 
 ---
 
@@ -31,7 +31,7 @@
 ### 2.1. Root CA (Корневой Центр Сертификации)
 - **Назначение**: единая точка доверия. Подписывает сертификаты терминалов и сертификаты водителей (на MIFARE-картах).
 - **Хранение приватного ключа**:
-    - MVP: PKCS#12 файл + пароль в HashiCorp Vault / AWS Secrets Manager
+    - MVP: PKCS#12 файл + пароль
     - Production: HSM (Thales Luna, YubiHSM 2, AWS CloudHSM) с защитой от физического вскрытия
 - **Управление доступом**: M-of-N (минимум 3 из 5 администраторов для подписи сертификата или отзыва)
 - **Онлайн-операции**: выполняются через Intermediate CA, который подписывается Root CA. Root CA физически отключён от сети.
@@ -85,16 +85,143 @@
 
 ---
 
-## 3. Детальные сценарии (Flows)
+## 3. Pass-Through Identity
 
-### 3.1. Аутентификация vs Авторизация в Gateway
+Gateway проверяет JWT, извлекает `sub` (keycloakId), передаёт внутренним сервисам **без** оригинального JWT.
+
+### Схема работы
+```
+Client                     Gateway                         Service
+  │                         │                                │
+  │ POST /password/change   │                                │
+  │ Authorization: JWT      │                                │
+  │────────────────────────>│                                │
+  │                         │ JWT validation (JWKS, exp/nbf) │
+  │                         │ extract sub (keycloakId)       │
+  │                         │                                │
+  │                         │ POST /password/change          │
+  │                         │ X-Keycloak-Id: <sub>          │
+  │                         │ (без Authorization)            │
+  │                         │──────────────────────────────>│
+  │                         │                                │
+  │                         │ resolve keycloakId → userId   │
+  │                         │ process request                │
+  │                         │<──────────────────────────────│
+  │<────────────────────────│                                │
+  │ 204 / 202 / 4xx / 5xx   │                                │
+```
+
+### Мотивация
+- **Безопасность**: backend сервисы не имеют доступа к JWT, не могут его украсть или переиспользовать
+- **Упрощение**: сервисы не валидируют JWT, не нуждаются в JWKS, Keycloak connectivity
+- **Аудит**: единая точка проверки identity — gateway
+
+### Детали реализации
+
+#### ProxyController.extractIdentity()
+```kotlin
+private fun extractIdentity(exchange: ServerWebExchange): Mono<String> =
+    ReactiveSecurityContextHolder.getContext()
+        .map { it.authentication }
+        .filter { it.isAuthenticated }
+        .map { it.name }  // sub из JWT
+        .switchIfEmpty(Mono.just("anonymous"))
+```
+
+#### Kafka async writes
+- `X-Keycloak-Id` передаётся в Kafka headers
+- Пример: `CarrierCommandService.sendCreateCommand()`
+
+#### Backend сервисы
+- User-service: `SecurityConfig` с `permitAll`, без JWT
+- Другие сервисы: либо `permitAll`, либо кастомный `JwtDecoderConfig` (без проверки issuer)
+
+### JWT issuer workaround (Docker)
+
+Keycloak в Docker (`KC_HOSTNAME=localhost`) выдаёт `iss: http://localhost:8180/realms/asop`, но сервисы обращаются к Keycloak по `http://keycloak:8080`.
+
+**Решение:** Кастомный `ReactiveJwtDecoder` (`JwtDecoderConfig.kt`):
+```kotlin
+@Bean
+fun reactiveJwtDecoder(): ReactiveJwtDecoder {
+    val decoder = NimbusReactiveJwtDecoder(jwkSetUri)
+    decoder.setJwtValidator { jwt ->
+        val errors = mutableListOf<OAuth2Error>()
+        // Проверка exp
+        if (jwt.expiresAt?.isBefore(Instant.now()) == true)
+            errors.add(OAuth2Error("token_expired"))
+        // Проверка nbf
+        if (jwt.notBefore?.isAfter(Instant.now()) == true)
+            errors.add(OAuth2Error("token_not_before"))
+        // НЕ проверяем iss
+        Mono.just(OAuth2TokenValidatorResult.success())
+    }
+    return decoder
+}
+```
+
+Применён в: gateway-service, user-service.
+
+---
+
+## 4. Gateway dual auth
+
+### SecurityConfig
+```kotlin
+@Configuration
+@EnableWebFluxSecurity
+class SecurityConfig {
+
+    @Bean @Order(1)
+    fun terminalSecurityFilterChain(http: ServerHttpSecurity) = http
+        .securityMatcher(ServerWebExchangeMatchers.pathMatchers(
+            "/api/v1/terminals/**", "/api/v1/sync/**"))
+        .x509 { it.principalExtractor(TerminalPrincipalExtractor()) }
+        .authorizeExchange { it.anyExchange().authenticated() }
+        .build()
+
+    @Bean @Order(2)
+    fun webSecurityFilterChain(http: ServerHttpSecurity) = http
+        .oauth2ResourceServer { it.jwt { } }
+        .authorizeExchange { it.anyExchange().authenticated() }
+        .build()
+}
+```
+
+### TerminalPrincipalExtractor
+```kotlin
+class TerminalPrincipalExtractor : X509PrincipalExtractor {
+    override fun extractPrincipal(x509Certificate: X509Certificate): Any {
+        val cn = x509Certificate.subjectX500Principal.name
+            .split(",").map { it.trim() }
+            .firstOrNull { it.startsWith("CN=") }
+            ?.substringAfter("CN=")
+        return cn ?: throw UsernameNotFoundException("CN not found")
+    }
+}
+```
+
+**⚠️ Важно:** `X509PrincipalExtractor` находится в пакете `org.springframework.security.web.authentication.preauth.x509`, а не `web.server.authentication`. Интерфейс синхронный — возвращает `Any`, не `Mono<Any>`.
+
+---
+
+## 5. Детальные сценарии (Flows)
+
+### 5.1. Аутентификация vs Авторизация в Gateway
 | Этап | Вопрос | Механизм | Результат |
 |------|--------|----------|-----------|
 | Аутентификация | Кто ты? | Проверка подписи JWT (JWKS) или валидация Client Cert (mTLS) | `Principal` / `X.509Certificate` |
 | Авторизация | Что тебе можно? | Проверка ролей/скопов в токете, RBAC в Spring Security | `200 OK` / `403 Forbidden` |
-| Аудит | Кто совершил действие? | `userId` из JWT или `terminal_serial` из mTLS передаётся в Kafka-событие | `correlationId`, `userId` в event |
+| Аудит | Кто совершил действие? | `userId` из JWT или `terminal_serial` из mTLS → `X-Keycloak-Id` в запросе к сервису | `correlationId`, `userId` в event |
 
-### 3.2. Открытие смены терминалом (полный цикл)
+### 5.2. Смена пароля (pass-through identity)
+1. Клиент шлёт `POST /api/v1/users/password/change` с JWT
+2. Gateway проверяет JWT, извлекает `sub` (keycloakId)
+3. Gateway проксирует запрос в user-service с `X-Keycloak-Id` header
+4. User-service обновляет пароль в Keycloak Admin API
+5. User-service обновляет `BOOTSTRAP_ADMIN_PASSWORD` в БД
+
+### 5.3. Открытие смены терминалом (полный цикл)
 1. **Синхронизация (online)**: терминал загружает CRL, льготы, тарифы, чёрный список карт.
 2. **Выбор транспорта**:
    ```sql
@@ -104,3 +231,100 @@
    FROM ASOP_VEHICLES
    WHERE CARRIER_ID = :terminal_carrier_id OR CARRIER_ID IS NULL
    ORDER BY priority, VEHICLE_NUMBER;
+   ```
+
+### 5.4. Создание перевозчика (async)
+1. Клиент шлёт `POST /api/v1/carriers` с JWT
+2. Gateway проверяет JWT, извлекает `sub`
+3. Gateway отправляет команду в `asop.carrier.commands` Kafka topic с `X-Keycloak-Id` header
+4. Gateway сохраняет EventStatus.PENDING
+5. Gateway возвращает `202 Accepted` + `X-Event-Id`
+6. Клиент поллит `GET /api/v1/events/{eventId}`
+
+---
+
+## 6. Keycloak 25.0.4 известные баги
+
+### 6.1. Создание realm
+```kotlin
+// Обязательные поля:
+resetPasswordAllowed = true
+directGrantFlow = "direct grant"
+registrationAllowed = false
+verifyEmail = false
+loginWithEmailAllowed = true
+```
+
+### 6.2. Создание пользователя
+Credentials должны быть **inline**:
+```kotlin
+credentials = listOf(CredentialRepresentation().apply {
+    type = CredentialRepresentation.PASSWORD
+    value = password
+    temporary = true
+})
+```
+
+### 6.3. firstName + lastName
+Оба поля обязательны. Отсутствие любого → `"Account is not fully set up"`.
+
+---
+
+## 7. Асинхронная архитектура Gateway
+
+### Команды (async writes)
+- POST/PUT/DELETE с явным контроллером отправляются в Kafka
+- Gateway возвращает `202 Accepted` + `AcceptResponse { eventId, topic, acceptedAt }`
+- Статус отслеживается через `EventService` (in-memory)
+
+### Прокси (sync proxy)
+- GET и необработанные запросы через `ProxyController`
+- Gateway добавляет `X-Keycloak-Id`, удаляет `Authorization`
+- Маппинг ресурсов в `ServiceRegistry`
+
+### Kafka topic naming
+`asop.{domain}.{commands|events}`, например:
+- `asop.carrier.commands`
+- `asop.session.events`
+
+---
+
+## 8. Таблица атак и контрмер
+
+| Атака | Вектор | Контрмера |
+|-------|--------|-----------|
+| Подделка JWT | Кража/утечка секрета Keycloak | JWKS, короткий TTL (5 мин), refresh token |
+| Replay JWT | Перехват network traffic | HTTPS обязательно, короткий TTL |
+| mTLS spoofing | Кража сертификата терминала | Аппаратное хранение (StrongBox, TPM), CRL |
+| Offline атака на карту водителя | Физический доступ к чипу | ECDSA P-256, PIN (2-й фактор), файловая система DESFire |
+| Gateway impersonation | MITM между клиентом и gateway | mTLS в обе стороны (client-cert на gateway) |
+| Backend service spoofing | Фальшивый сервис в Docker сети | Внутренняя сеть (`asop-net`), без открытых портов |
+| JWT на прямом запросе к сервису | Обход gateway | Сервисы слушают только на internal network; gateway — единственная точка входа |
+
+---
+
+## 9. Auth-зависимости
+
+Для запуска pass-through identity требуется:
+- **gateway-service**: JwtDecoderConfig, WebClient, ServiceRegistry
+- **user-service**: SecurityConfig (permitAll), JwtDecoderConfig (для healthchecks etc.)
+
+Для других сервисов требуется один из вариантов:
+1. `JwtDecoderConfig.kt` (как в gateway) — если нужно различать сервисы
+2. `SecurityConfig` с `permitAll` (как в user-service) — если сервис только внутренний
+
+---
+
+## 📎 Ссылки
+
+- `doc/architecture.md` — архитектурные решения (English)
+- `doc/context.md` — полный гайд проекта
+- `backend/gateway-service/.../config/JwtDecoderConfig.kt` — кастомный JWT decoder
+- `backend/gateway-service/.../controller/ProxyController.kt` — pass-through identity
+- `backend/user-service/.../controller/UserController.kt` — пример сервиса с pass-through
+- `backend/user-service/.../config/SecurityConfig.kt` — permitAll
+
+---
+
+**Конец документа.**
+*Версия: 1.1 — добавлен pass-through identity, JWT issuer workaround*

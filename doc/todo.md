@@ -3,7 +3,7 @@
 ## 1. Certificate Architecture: crypto-service как единый CA
 
 ### Проблема
-Сейчас `gateway-service` использует **self-signed** `gateway-keystore.p12` и `truststore.p12`, 
+Сейчас `gateway-service` использует **self-signed** `gateway-keystore.p12` и `truststore.p12`,
 сгенерированные `keytool` вручную. Это небезопасно и не масштабируется.
 
 ### Решение
@@ -20,10 +20,10 @@
   - Сохраняет сертификат в БД или файловое хранилище
 
 - [ ] **Bootstrap gateway** — при старте gateway-service:
-  1. Проверить, есть ли валидный сертификат (`/data/gateway.p12`)
-  2. Если нет → запросить у crypto-service новый сертификат
-  3. Сохранить p12 в volume (`/data/`)
-  4. Перезагрузить SSL-контекст (или перезапустить)
+   1. Проверить, есть ли валидный сертификат (`/data/gateway.p12`)
+   2. Если нет → запросить у crypto-service новый сертификат
+   3. Сохранить p12 в volume (`/data/`)
+   4. Перезагрузить SSL-контекст (или перезапустить)
 
 - [ ] **Docker volumes**
   - Общий volume `certs` для gateway-service и crypto-service
@@ -58,38 +58,68 @@
   - [ ] Редактирование терминала
   - [ ] Выпуск карты
 
-- [ ] **Смена пароля**:
-  - [ ] Форма смены пароля в профиле
-  - [ ] `POST /api/v1/users/password/change`
+- [x] **Смена пароля**:
+  - [x] Форма смены пароля в профиле
+  - [x] `POST /api/v1/users/password/change`
 
 ## 3. Keycloak 25 Совместимость
 
-- [ ] **Password Grant** выключен в Keycloak 25 для новых realm:
-  - Ошибка: `"Account is not fully set up"` / `resolve_required_actions`
-  - Текущий workaround: Authorization Code flow (PKCE) через `oidc-client-ts`
-  - Нужно разобраться, можно ли включить Direct Access Grant через политики
+- [ ] **Prod: отключить Direct Access Grant**, оставить только OIDC Auth Code + PKCE
+  - Сейчас в MVP используется Direct Access Grant для разработки
+  - В production все клиенты должны идти через Authorization Code Flow
 
-- [ ] **Bootstrap**:
-  - `KeycloakAdminService.createUser()` — Keycloak 25 игнорирует `UserRepresentation.credentials`
-  - Фикс: создаём пользователя без credentials, затем вызываем `resetPassword()` отдельно
+- [x] **Bootstrap фикс**:
+  - Inline credentials в `UserRepresentation`
+  - firstName + lastName обязательны
+  - realm с полными настройками
   - ✅ Исправлено
 
-## 4. Liquibase / Миграции
+## 4. Shared UserResolver
+
+- [ ] **Создать shared UserResolver в `asop-common`**
+  - Интерфейс: `fun resolveUserId(keycloakId: String): Mono<UUID>`
+  - Возвращает `userId` (UUID) по keycloakId
+  - Кеширование результата (Caffeine)
+  - Используется всеми сервисами для resolve keycloakId → userId
+
+## 5. JWT decoder для всех сервисов
+
+- [ ] **Добавить JwtDecoderConfig или permitAll в сервисы:**
+  - [ ] carrier-service
+  - [ ] terminal-service
+  - [ ] session-service
+  - [ ] card-service
+  - [ ] debt-service
+  - [ ] audit-service
+  - [ ] fiscal-service
+
+  Каждый сервис должен иметь либо `JwtDecoderConfig.kt` (как в gateway), либо `SecurityConfig` с `permitAll` (как в user-service).
+
+## 6. Liquibase / Миграции
 
 - [ ] **user-service**:
-  - `spring-boot-starter-jdbc` добавлен как `runtimeOnly`, но `LiquibaseAutoConfiguration` 
+  - `spring-boot-starter-jdbc` добавлен как `runtimeOnly`, но `LiquibaseAutoConfiguration`
     не срабатывает. Нужно разобраться почему.
   - Текущий workaround: создание таблиц вручную через `psql` в контейнере
   - Возможно, конфликт R2DBC + JDBC
 
-- [ ] **Другие сервисы** нигде не включили Liquibase (`liquibase.enabled=false`)
+- [ ] **Другие сервисы** — включить Liquibase после добавления changelogs:
+  - [ ] carrier-service
+  - [ ] terminal-service
+  - [ ] session-service
+  - [ ] card-service
+  - [ ] debt-service
+  - [ ] audit-service
+  - [ ] fiscal-service
 
-## 5. Прочее
+## 7. Прочее
 
-- [ ] **Dockerfile bug** — во всех 10 Dockerfile `COPY build/libs/*.jar app.jar` 
-  копирует `-plain.jar` первой (алфавитно). 
+- [x] **Dockerfile bug** — во всех 10 Dockerfile `COPY build/libs/*.jar app.jar`
+  копирует `-plain.jar` первой (алфавитно).
   Исправлено на `COPY build/libs/*-SNAPSHOT.jar app.jar`.
   ✅ Исправлено
 
-- [ ] **Gateway SSL** — `server.ssl.enabled: true` включен всегда. 
+- [ ] **Gateway SSL** — `server.ssl.enabled: true` включен всегда.
   Для dev можно добавить профиль `dev` без SSL.
+
+- [ ] **Переход на cert-managed crypto-service** — Gateway получает сертификат от crypto-service вместо self-signed.
