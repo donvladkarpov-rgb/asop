@@ -89,6 +89,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 ### Frontend
 
 - **`frontend/web-admin/`**: Vite + React + TypeScript + react-router + TanStack Query + oidc-client-ts
+- **`frontend/android-terminal/`**: Android (Kotlin + Jetpack Compose) — приложение для терминала. mTLS auth через X.509 сертификат crypto-service.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
