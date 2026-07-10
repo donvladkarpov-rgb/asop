@@ -1,13 +1,15 @@
 package ru.asop.terminal.cert
 
 import android.content.Context
-import android.security.KeyChain
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Base64
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayInputStream
 import java.security.*
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
+import java.security.spec.ECGenParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -15,73 +17,82 @@ import javax.inject.Singleton
 class MtlsManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-
     companion object {
-        private const val KEY_ALIAS = "asop_terminal_key"
-        private const val CERT_ALIAS = "asop_terminal_cert"
+        private const val KEY_ALIAS = "asop_terminal"
+        private const val PREFS_NAME = "asop_terminal_cert"
+        private const val KEY_CERT_PEM = "cert_chain_pem"
+        private const val KEY_PUBLIC_B64 = "public_key_b64"
     }
 
-    fun hasKeyPair(): Boolean = keyStore.containsAlias(KEY_ALIAS)
+    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun hasCertificate(): Boolean {
-        val prefs = context.getSharedPreferences("asop_cert", Context.MODE_PRIVATE)
-        return prefs.contains("cert_pem")
+    fun hasKeyPair(): Boolean {
+        return try {
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            ks.containsAlias(KEY_ALIAS) && ks.isKeyEntry(KEY_ALIAS)
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    fun generateKeyPair(): KeyPair {
-        val generator = KeyPairGenerator.getInstance("EC", "AndroidKeyStore")
-        val spec = java.security.spec.ECGenParameterSpec("secp256r1")
+    fun hasCertificate(): Boolean = prefs.contains(KEY_CERT_PEM)
+
+    fun generateKeyPair() {
+        if (hasKeyPair()) return
+
+        val spec = KeyGenParameterSpec.Builder(
+            KEY_ALIAS,
+            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+        )
+            .setKeySize(256)
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384)
+            .build()
+
+        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
         generator.initialize(spec)
         val keyPair = generator.generateKeyPair()
 
-        val publicKey = keyPair.public as java.security.interfaces.ECPublicKey
-        val prefs = context.getSharedPreferences("asop_cert", Context.MODE_PRIVATE)
-        prefs.edit().putString("public_key", Base64.encodeToString(publicKey.encoded, Base64.NO_WRAP)).apply()
-
-        return keyPair
+        prefs.edit()
+            .putString(KEY_PUBLIC_B64, Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP))
+            .apply()
     }
 
     fun getPublicKeyBase64(): String {
-        val prefs = context.getSharedPreferences("asop_cert", Context.MODE_PRIVATE)
-        return prefs.getString("public_key", null) ?: run {
-            val keyPair = generateKeyPair()
-            Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP)
-        }
+        prefs.getString(KEY_PUBLIC_B64, null)?.let { return it }
+
+        if (!hasKeyPair()) generateKeyPair()
+
+        val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val cert = ks.getCertificate(KEY_ALIAS) ?: return ""
+        val b64 = Base64.encodeToString(cert.publicKey.encoded, Base64.NO_WRAP)
+        prefs.edit().putString(KEY_PUBLIC_B64, b64).apply()
+        return b64
+    }
+
+    fun storeCertificateChain(pemChain: List<String>) {
+        val combined = pemChain.joinToString("\n")
+        prefs.edit().putString(KEY_CERT_PEM, combined).apply()
     }
 
     fun storeCertificate(certPem: String) {
-        val prefs = context.getSharedPreferences("asop_cert", Context.MODE_PRIVATE)
-        prefs.edit().putString("cert_pem", certPem).apply()
+        storeCertificateChain(listOf(certPem))
     }
 
-    fun loadCertificate(): X509Certificate? {
-        val prefs = context.getSharedPreferences("asop_cert", Context.MODE_PRIVATE)
-        val certPem = prefs.getString("cert_pem", null) ?: return null
-
-        val derBytes = certPem
-            .replace("-----BEGIN CERTIFICATE-----", "")
-            .replace("-----END CERTIFICATE-----", "")
-            .replace("\\s".toRegex(), "")
-        val decoded = Base64.decode(derBytes, Base64.NO_WRAP)
-
+    fun loadCertificateChain(): List<X509Certificate>? {
+        val combined = prefs.getString(KEY_CERT_PEM, null) ?: return null
         val cf = CertificateFactory.getInstance("X.509")
-        return cf.generateCertificate(ByteArrayInputStream(decoded)) as X509Certificate
-    }
+        val pems = combined.split("(?=-----BEGIN CERTIFICATE-----)".toRegex())
+            .filter { it.contains("-----BEGIN CERTIFICATE-----") }
 
-    fun installIntoKeyChain() {
-        val cert = loadCertificate() ?: throw IllegalStateException("No certificate stored")
-        val alias = "ASOP Terminal"
-
-        try {
-            KeyChain.createInstallIntent().apply {
-                putExtra(KeyChain.EXTRA_CERTIFICATE, cert.encoded)
-                putExtra(KeyChain.EXTRA_NAME, alias)
-                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                context.startActivity(this)
-            }
-        } catch (_: Exception) {
-            // Fallback: cert already stored in app prefs + AndroidKeyStore
+        return pems.map { pem ->
+            val der = pem
+                .replace("-----BEGIN CERTIFICATE-----", "")
+                .replace("-----END CERTIFICATE-----", "")
+                .replace("\\s".toRegex(), "")
+            cf.generateCertificate(ByteArrayInputStream(Base64.decode(der, Base64.NO_WRAP))) as X509Certificate
         }
     }
+
+    fun loadCertificate(): X509Certificate? = loadCertificateChain()?.firstOrNull()
 }

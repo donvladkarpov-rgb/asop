@@ -37,9 +37,16 @@ class CertificateService @Inject constructor(
             )
         )
 
-        val certPem = response.certificateBase64
-        mtlsManager.storeCertificate(certPem)
-        mtlsManager.installIntoKeyChain()
+        val terminalPem = buildString {
+            appendLine("-----BEGIN CERTIFICATE-----")
+            append(response.certificateBase64)
+            appendLine()
+            appendLine("-----END CERTIFICATE-----")
+        }
+
+        val caChain = cryptoApi.getCaChain()
+
+        mtlsManager.storeCertificateChain(listOf(terminalPem, caChain))
         return response
     }
 }
