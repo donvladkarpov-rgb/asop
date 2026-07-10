@@ -37,8 +37,14 @@ class KeycloakProxyController(
                         values.forEach { headers.add(name, it) }
                     }
                 }
-                headers.set("X-Forwarded-Host", request.uri.host ?: "localhost")
-                headers.set("X-Forwarded-Proto", request.uri.scheme ?: "http")
+                val forwardedHost = request.headers.getFirst("X-Forwarded-Host")
+                    ?: request.headers.getFirst("Host")
+                    ?: request.uri.host
+                    ?: "localhost"
+                headers.set("X-Forwarded-Host", forwardedHost)
+                headers.set("X-Forwarded-Proto", request.headers.getFirst("X-Forwarded-Proto")
+                    ?: request.uri.scheme
+                    ?: "http")
             }
             .body(BodyInserters.fromDataBuffers(request.body))
             .exchangeToMono { clientResponse ->

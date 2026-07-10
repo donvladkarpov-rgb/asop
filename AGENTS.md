@@ -33,8 +33,8 @@ Gateway обрабатывает запросы двумя способами:
 
 ### Gateway files
 
-- `config/ServiceRegistry.kt` — маппинг `resource` → `http://service:port/api/v1/{resource}`
-- `config/WebClientConfig.kt` — `WebClient` bean для proxy
+- `config/ServiceRegistry.kt` — маппинг `resource` → `https://service:port/api/v1/{resource}`
+- `config/WebClientConfig.kt` — `WebClient` bean для proxy (SSL truststore из `/tmp/certs/truststore.p12`, hostname verification отключён)
 - `controller/ProxyController.kt` — catch-all `/api/v1/{resource}/**` для GET + необработанных запросов
 - `controller/EventController.kt` — `GET /api/v1/events/{eventId}`
 - `service/EventService.kt` — in-memory `ConcurrentHashMap<UUID, EventStatus>` с TTL-очисткой
@@ -112,6 +112,9 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **Liquibase quirks**: `$$` → `$body$` (dollar quoting), `splitStatements: false` для sqlFile (JDBC сам разбивает), `relativeToChangelogFile: true` во всех include.
 - **Save bug**: `ReactiveCrudRepository.save()` с не-null UUID делает UPDATE. Использовать `R2dbcEntityTemplate.insert()`.
 - **InnValidator** lives in `asop-common`, used in gateway for carrier creation
+- **Crypto DN bug**: `X500Name(cert.subjectX500Principal.name)` в `RootCaService.signCertificate()` переупорядочивает DN компоненты (через RFC2253), что ломает PKIX chain validation на byte-level сравнении. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(cert.subjectX500Principal.encoded))`.
+- **SAN missing bug**: `provision.sh` не передавал `dnsNames` в JSON если `$DNS_NAMES == $SERVICE_NAME`, из-за чего сертификаты выпускались без SAN. Java 17+ требует SAN для hostname verification. Фикс: всегда передавать `dnsNames` в JSON.
+- **Hostname verification**: В WebClient gateway отключена (`SslProvider.DefaultConfigurationType.NONE`) из-за сертификатов без SAN. Для production нужно исправить — выпускать корректные сертификаты с SAN.
 
 ## Endpoints (реализовано)
 
@@ -273,10 +276,14 @@ Keycloak проксируется через gateway, чтобы браузер 
 Browser → nginx/vite → Gateway (/realms/**) → Keycloak (internal)
 ```
 
-- nginx `location /realms/` → `proxy_pass http://gateway-service:8080`
-- Gateway: `KeycloakProxyController` catch-all `/realms/**` → forward to Keycloak
+- nginx `location /realms/` → `proxy_pass https://gateway-service:8080` (with `Host $http_host`, `X-Forwarded-Proto $scheme`)
+- nginx `location /resources/` → `proxy_pass https://keycloak:8443` (статический контент темы логина Keycloak)
+- Gateway: `KeycloakProxyController` catch-all `/realms/**` → forward to Keycloak (`http://keycloak:8080`)
+  - `X-Forwarded-Host` берётся из `X-Forwarded-Host` header → `Host` header → `request.uri.host` (preserves port)
+  - `X-Forwarded-Proto` аналогично
+  - Issuer в OIDC ответах = `https://{forwarded-host}/realms/asop` (например `https://localhost:3443/realms/asop`)
 - Gateway: `SecurityConfig` → `pathMatchers("/realms/**").permitAll()`
-- Keycloak: `KC_PROXY=edge`, `KC_HOSTNAME=localhost`
+- Keycloak: `KC_PROXY=edge`, `KC_HOSTNAME=localhost`, `KC_HTTPS_PORT=8443`
 
 ## Reference docs
 

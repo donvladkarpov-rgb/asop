@@ -156,8 +156,9 @@ backend/shared/api/{name}-api/
 | Файл | Назначение |
 |------|------------|
 | `config/ServiceRegistry.kt` | Маппинг resource → service URL |
-| `config/WebClientConfig.kt` | WebClient bean для proxy |
+| `config/WebClientConfig.kt` | WebClient bean для proxy (SSL truststore, hostname verification отключён) |
 | `config/JwtDecoderConfig.kt` | Кастомный ReactiveJwtDecoder (без проверки issuer) |
+| `config/KeycloakProxyController.kt` | Проксирование `/realms/**` в Keycloak с корректными `X-Forwarded-*` |
 | `controller/ProxyController.kt` | Catch-all sync proxy |
 | `controller/EventController.kt` | GET /api/v1/events/{eventId} |
 | `controller/CarrierController.kt` | POST /api/v1/carriers (async) |
@@ -544,6 +545,9 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 13. **`$$` dollar quotes в Liquibase sqlFile** — ломают парсинг. Использовать `$body$`.
 14. **`splitStatements: true` (default) для sqlFile** — разбивает CREATE FUNCTION на части. Использовать `splitStatements: false`.
 15. **`ReactiveCrudRepository.save()` с не-null UUID** — делает UPDATE вместо INSERT. Использовать `R2dbcEntityTemplate.insert()`.
+16. **`X500Name(cert.subjectX500Principal.name)` в crypto-service** — Java переупорядочивает DN в RFC2253, ломает PKIX на byte-level сравнении
+17. **`provision.sh` без dnsNames при DNS_NAMES == SERVICE_NAME** — сертификаты без SAN, Java 17+ отклоняет hostname verification
+18. **Gateway service URL scheme `http://`** — все сервисы слушают только HTTPS, `http://` вызывал PrematureCloseException
 
 ### ✅ Что работает
 1. **Python для миграций** — надёжнее PowerShell, точное сравнение строк
@@ -558,6 +562,9 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 10. **Liquibase отдельным контейнером** — решает проблему R2DBC ↔ JDBC в сервисах
 11. **Единый v001-init.sql** — проще поддерживать, чем множество changelog'ов
 12. **Gateway sync proxy для CRUD-справочников** — не требует Kafka для простых операций
+13. **Keycloak proxy через gateway** — единый origin, без CORS, issuer адаптируется под `X-Forwarded-*` заголовки
+14. **`X500Name.getInstance(ASN1Sequence.getInstance(encoded))`** — фикс DN байтового сравнения при PKIX chain validation
+15. **`start.sh` с wave-based запуском** — последовательный запуск зависимостей через healthcheck
 
 ### 📋 Чеклист для новых модулей
 - [ ] Создать API-модуль в `backend/shared/api/{name}-api/`
@@ -586,4 +593,4 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 ---
 
 **Конец документа.**
-*Версия: 0.2.0 — обновлено 09 июля 2026*
+*Версия: 0.2.1 — обновлено 10 июля 2026*

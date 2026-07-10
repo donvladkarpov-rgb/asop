@@ -1,3 +1,6 @@
+x-jvm-opts: &jvm-opts
+  JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/tmp/certs/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+
 services:
   # === Infrastructure ===
 
@@ -21,7 +24,7 @@ services:
       - asop-net
 
   liquibase:
-    mem_limit: 256m
+    mem_limit: 128m
     image: liquibase/liquibase:4.27
     working_dir: /liquibase/changelog
     command:
@@ -54,7 +57,7 @@ services:
       - asop-net
 
   zookeeper:
-    mem_limit: 256m
+    mem_limit: 128m
     image: confluentinc/cp-zookeeper:7.5.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -64,33 +67,34 @@ services:
       - asop-net
 
   kafka:
-    mem_limit: 1g
+    mem_limit: 512m
     image: confluentinc/cp-kafka:7.5.0
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: SSL://kafka:9093
-      KAFKA_LISTENERS: SSL://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,SSL://kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,SSL://0.0.0.0:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,SSL:SSL
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_SSL_KEYSTORE_TYPE: PKCS12
-      KAFKA_SSL_KEYSTORE_LOCATION: /certs/kafka.p12
-      KAFKA_SSL_KEYSTORE_PASSWORD: changeit
-      KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
-      KAFKA_SSL_TRUSTSTORE_LOCATION: /certs/truststore.p12
-      KAFKA_SSL_TRUSTSTORE_PASSWORD: changeit
-      KAFKA_SSL_KEY_PASSWORD: changeit
+      KAFKA_SSL_KEYSTORE_FILENAME: kafka.p12
+      KAFKA_SSL_KEYSTORE_CREDENTIALS: kafka_keystore_cred
+      KAFKA_SSL_KEY_CREDENTIALS: kafka_sslkey_cred
+      KAFKA_SSL_TRUSTSTORE_FILENAME: truststore.p12
+      KAFKA_SSL_TRUSTSTORE_CREDENTIALS: kafka_truststore_cred
       KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ""
     ports:
       - "9093:9093"
     volumes:
-      - certs_data:/certs:ro
+      - certs_data:/etc/kafka/secrets:ro
     depends_on:
       zookeeper:
         condition: service_started
       certs-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9093"]
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -99,7 +103,7 @@ services:
       - asop-net
 
   keycloak:
-    mem_limit: 512m
+    mem_limit: 256m
     image: quay.io/keycloak/keycloak:25.0.4
     command:
       - "start-dev"
@@ -138,7 +142,7 @@ services:
   # === Application Services ===
 
   crypto-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/crypto-service
       dockerfile: Dockerfile
@@ -147,6 +151,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: crypto-service
       KEY_ALIAS: crypto-service
       DNS_NAMES: crypto-service,localhost
@@ -172,7 +177,7 @@ services:
       - asop-net
 
   gateway-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/gateway-service
       dockerfile: Dockerfile
@@ -181,14 +186,15 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: gateway
       KEY_ALIAS: gateway
       DNS_NAMES: localhost,gateway
       KEYSTORE_PATH: file:/tmp/certs/gateway.p12
       TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
-      KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
-      KEYCLOAK_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-https://keycloak:8443/realms/asop/protocol/openid-connect/certs}
+      KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
+      KEYCLOAK_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-http://keycloak:8080/realms/asop/protocol/openid-connect/certs}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
       ASOP_ENV: docker
     volumes:
@@ -204,7 +210,7 @@ services:
       - asop-net
 
   user-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/user-service
       dockerfile: Dockerfile
@@ -213,6 +219,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: user-service
       KEY_ALIAS: user-service
       DNS_NAMES: user-service
@@ -223,10 +230,10 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL_INTERNAL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_URL_INTERNAL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
       KEYCLOAK_ADMIN_PASSWORD: admin
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       BOOTSTRAP_ENABLED: "true"
       BOOTSTRAP_ADMIN_PASSWORD: admin
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
@@ -245,7 +252,7 @@ services:
       - asop-net
 
   terminal-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/terminal-service
       dockerfile: Dockerfile
@@ -254,6 +261,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: terminal-service
       KEY_ALIAS: terminal-service
       DNS_NAMES: terminal-service
@@ -264,8 +272,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -282,7 +290,7 @@ services:
       - asop-net
 
   session-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/session-service
       dockerfile: Dockerfile
@@ -291,6 +299,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: session-service
       KEY_ALIAS: session-service
       DNS_NAMES: session-service
@@ -301,8 +310,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -319,7 +328,7 @@ services:
       - asop-net
 
   card-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/card-service
       dockerfile: Dockerfile
@@ -328,6 +337,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: card-service
       KEY_ALIAS: card-service
       DNS_NAMES: card-service
@@ -338,8 +348,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -354,7 +364,7 @@ services:
       - asop-net
 
   carrier-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/carrier-service
       dockerfile: Dockerfile
@@ -363,6 +373,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: carrier-service
       KEY_ALIAS: carrier-service
       DNS_NAMES: carrier-service
@@ -373,8 +384,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -391,7 +402,7 @@ services:
       - asop-net
 
   debt-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/debt-service
       dockerfile: Dockerfile
@@ -400,6 +411,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: debt-service
       KEY_ALIAS: debt-service
       DNS_NAMES: debt-service
@@ -410,8 +422,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -428,7 +440,7 @@ services:
       - asop-net
 
   audit-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/audit-service
       dockerfile: Dockerfile
@@ -437,6 +449,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: audit-service
       KEY_ALIAS: audit-service
       DNS_NAMES: audit-service
@@ -447,8 +460,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -465,7 +478,7 @@ services:
       - asop-net
 
   fiscal-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/fiscal-service
       dockerfile: Dockerfile
@@ -474,6 +487,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: fiscal-service
       KEY_ALIAS: fiscal-service
       DNS_NAMES: fiscal-service
@@ -484,8 +498,8 @@ services:
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
-      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
@@ -502,7 +516,7 @@ services:
       - asop-net
 
   admin-service:
-    mem_limit: 256m
+    mem_limit: 128m
     build:
       context: ../../backend/admin-service
       dockerfile: Dockerfile
@@ -511,6 +525,7 @@ services:
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
+      <<: *jvm-opts
       SERVICE_NAME: admin-service
       KEY_ALIAS: admin-service
       DNS_NAMES: admin-service

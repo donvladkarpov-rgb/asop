@@ -7,13 +7,10 @@ CERT_FILE="${CERT_DIR}/web-admin.crt"
 KEY_FILE="${CERT_DIR}/web-admin.key"
 
 # ---- Generate nginx config from template ----
-export PROXY_PROTOCOL="${PROXY_PROTOCOL:-http}"
-
 if [ -f /etc/nginx/templates/default.conf.template ]; then
-  echo "Generating nginx config (proxy protocol: $PROXY_PROTOCOL)..."
-  PROXY_PROTOCOL="$PROXY_PROTOCOL" envsubst '${PROXY_PROTOCOL}' \
-    < /etc/nginx/templates/default.conf.template \
-    > /etc/nginx/conf.d/default.conf
+  echo "Generating nginx config..."
+  cp /etc/nginx/templates/default.conf.template /etc/nginx/conf.d/default.conf
+  rm -f /etc/nginx/templates/default.conf.template
 fi
 
 if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then

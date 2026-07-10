@@ -30,11 +30,21 @@ for service in kafka keycloak; do
   # Fetch CA chain and build truststore (only once, shared)
   if [ ! -f "$CERT_DIR/truststore.p12" ]; then
     CA_CHAIN=$(curl -skf "$CRYPTO_URL/api/v1/certificates/ca-chain")
-    echo "$CA_CHAIN" | awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; if (c==2) in_cert=1} in_cert {print} /-----END CERTIFICATE-----/ {if (in_cert) exit}' > /tmp/root-ca.pem
+    echo "$CA_CHAIN" > /tmp/ca-chain.pem
+
+    # Split chain: first cert = intermediate, second cert = root
+    awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; if (c==1) in_cert=1} in_cert {print} /-----END CERTIFICATE-----/ {if (in_cert && c==1) {in_cert=0; exit}}' \
+      /tmp/ca-chain.pem > /tmp/intermediate-ca.pem
+    awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; if (c==2) in_cert=1} in_cert {print} /-----END CERTIFICATE-----/ {if (in_cert) exit}' \
+      /tmp/ca-chain.pem > /tmp/root-ca.pem
+
     keytool -importcert -keystore "$CERT_DIR/truststore.p12" -storepass "$PASSWORD" \
       -storetype PKCS12 -alias root-ca -file /tmp/root-ca.pem -noprompt
-    rm -f /tmp/root-ca.pem
-    info "Truststore created at $CERT_DIR/truststore.p12"
+    keytool -importcert -keystore "$CERT_DIR/truststore.p12" -storepass "$PASSWORD" \
+      -storetype PKCS12 -alias intermediate-ca -file /tmp/intermediate-ca.pem -noprompt
+
+    rm -f /tmp/root-ca.pem /tmp/intermediate-ca.pem /tmp/ca-chain.pem
+    info "Truststore created at $CERT_DIR/truststore.p12 (Root CA + Intermediate CA)"
   fi
 
   # Generate EC keypair
@@ -50,16 +60,30 @@ for service in kafka keycloak; do
   echo "$CERT_B64" | base64 -d > /tmp/$service-cert.der
   openssl x509 -inform DER -in /tmp/$service-cert.der -out /tmp/$service-cert.pem
 
-  # Build PKCS12 keystore
+  # Build PKCS12 keystore with CA chain
   rm -f "$CERT_DIR/$service.p12"
+  curl -skf "$CRYPTO_URL/api/v1/certificates/ca-chain" > /tmp/ca-chain.pem
   openssl pkcs12 -export \
     -in /tmp/$service-cert.pem \
     -inkey /tmp/$service-key.pem \
+    -certfile /tmp/ca-chain.pem \
     -name "$service" \
     -out "$CERT_DIR/$service.p12" \
     -password "pass:$PASSWORD"
+  rm -f /tmp/ca-chain.pem
+
+  chmod 644 "$CERT_DIR/$service.p12"
+  chmod 644 "$CERT_DIR/truststore.p12"
 
   rm -f /tmp/$service-key.pem /tmp/$service-cert.der /tmp/$service-cert.pem /tmp/$service-pub.b64
+
+  if [ "$service" = "kafka" ]; then
+    echo "changeit" > "$CERT_DIR/kafka_keystore_cred"
+    echo "changeit" > "$CERT_DIR/kafka_sslkey_cred"
+    echo "changeit" > "$CERT_DIR/kafka_truststore_cred"
+    chmod 644 "$CERT_DIR/kafka_keystore_cred" "$CERT_DIR/kafka_sslkey_cred" "$CERT_DIR/kafka_truststore_cred"
+    info "Kafka credential files created"
+  fi
 
   info "$service.p12 created at $CERT_DIR/$service.p12"
 done

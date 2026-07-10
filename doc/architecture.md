@@ -91,6 +91,7 @@ backend/shared/api/{name}-api/
 | debt-service | 8088 | Долги по картам |
 | audit-service | 8089 | КРС (проверки) |
 | fiscal-service | 8090 | Фискализация (ОФД) |
+| admin-service | 8091 | Справочники (Regions, Territories, Organizers) |
 
 ---
 
@@ -338,7 +339,7 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 Каждый сервис имеет `Dockerfile` (eclipse-temurin:21-jre). Liquibase миграции монтируются из `infrastructure/db-migrations/` в `/db-migrations/` внутри контейнера.
 
 ### Docker Compose
-Все 10 сервисов + PostgreSQL + Kafka + Keycloak на общей сети `asop-net`.
+Все 11 сервисов + PostgreSQL + Kafka + Keycloak + Zookeeper + Liquibase + web-admin на общей сети `asop-net`.
 
 ### Ключевые переменные окружения
 | Переменная | Назначение |

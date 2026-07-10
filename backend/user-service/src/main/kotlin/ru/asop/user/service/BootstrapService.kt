@@ -18,8 +18,6 @@ class BootstrapService(
 
     @EventListener(ApplicationReadyEvent::class)
     fun bootstrap() {
-        ensureOidcClient()
-
         if (!bootstrapProperties.enabled) {
             log.info("Bootstrap disabled")
             return
@@ -82,6 +80,8 @@ class BootstrapService(
             )
 
             keycloakAdminService.assignRole(keycloakId, "SUPER_ADMIN")
+
+            ensureOidcClient()
 
             val userId = UuidUtils.newId()
             val roleId = java.util.UUID.fromString("00000000-0000-0000-0000-000000000001")

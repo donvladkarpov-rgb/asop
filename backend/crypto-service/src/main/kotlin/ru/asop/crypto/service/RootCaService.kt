@@ -1,5 +1,6 @@
 package ru.asop.crypto.service
 
+import org.bouncycastle.asn1.ASN1Sequence
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.BasicConstraints
 import org.bouncycastle.asn1.x509.Extension
@@ -148,7 +149,7 @@ class RootCaService(
     private fun generateIntermediateCa() {
         val keyPair = generateEcKeyPair()
 
-        val rootDn = X500Name(rootCaCert.subjectX500Principal.name)
+        val rootDn = X500Name.getInstance(ASN1Sequence.getInstance(rootCaCert.subjectX500Principal.encoded))
         val intermediateDn = X500Name(properties.intermediateCa.dn)
         val serialNumber = BigInteger.valueOf(System.currentTimeMillis())
         val notBefore = Date()
@@ -206,7 +207,7 @@ class RootCaService(
         validityYears: Int,
         dnsNames: List<String> = emptyList()
     ): X509Certificate {
-        val issuerDn = X500Name(intermediateCaCert.subjectX500Principal.name)
+        val issuerDn = X500Name.getInstance(ASN1Sequence.getInstance(intermediateCaCert.subjectX500Principal.encoded))
         val subjectDn = X500Name(dn)
         val serialNumber = BigInteger.valueOf(System.currentTimeMillis())
         val notBefore = Date()

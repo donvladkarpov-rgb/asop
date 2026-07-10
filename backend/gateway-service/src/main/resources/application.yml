@@ -39,7 +39,7 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9093}
     ssl:
-      trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/certs/truststore.p12}
+      trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/tmp/certs/truststore.p12}
       trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
     properties:
       security.protocol: SSL

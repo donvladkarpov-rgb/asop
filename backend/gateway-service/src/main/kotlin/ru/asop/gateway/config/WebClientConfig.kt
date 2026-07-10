@@ -6,6 +6,7 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import reactor.netty.http.client.HttpClient
+import reactor.netty.tcp.SslProvider
 import java.io.FileInputStream
 import java.security.KeyStore
 import javax.net.ssl.TrustManagerFactory
@@ -35,11 +36,14 @@ class WebClientConfig {
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
         tmf.init(trustStore)
 
-        val sslContext = SslContextBuilder.forClient()
+        val sslContextBuilder = SslContextBuilder.forClient()
             .trustManager(tmf)
-            .build()
 
-        val httpClient = HttpClient.create().secure { spec -> spec.sslContext(sslContext) }
+        val httpClient = HttpClient.create().secure { spec ->
+            spec.sslContext(sslContextBuilder)
+                .defaultConfiguration(SslProvider.DefaultConfigurationType.NONE)
+                .build()
+        }
 
         return WebClient.builder()
             .clientConnector(ReactorClientHttpConnector(httpClient))

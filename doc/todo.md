@@ -74,7 +74,14 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - [ ] audit-service
   - [ ] fiscal-service
 
-## 7. i18n / Многоязычность
+## 7. PKI / Сертификаты
+
+- [x] **DN encoding bug** — `X500Name(name)` в crypto-service переупорядочивает компоненты DN, PKIX chain validation падает. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(encoded))`.
+- [x] **SAN in certs** — provision.sh всегда передаёт `dnsNames` в JSON при запросе сертификата.
+- [ ] **Production SSL**: отключить `defaultConfiguration(NONE)` в gateway WebClient и включить hostname verification.
+- [ ] **Production: выпускать сертификаты с SAN из provision.sh** — сейчас gateway работает с отключенной проверкой.
+
+## 8. i18n / Многоязычность
 
 - [ ] **Добавить i18n (react-intl или i18next)**
   - [ ] Создать файлы переводов: ru.json, en.json

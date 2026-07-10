@@ -17,8 +17,8 @@ if [ "$SERVICE_NAME" = "crypto-service" ]; then
   KEYSTORE_PATH="${KEYSTORE_PATH:-file:/data/server.p12}"
   KEYSTORE_FILE=$(echo "$KEYSTORE_PATH" | sed 's/^file://')
 
-  if [ -f "$KEYSTORE_FILE" ]; then
-    info "Keystore exists, skipping"
+  if [ -f "$KEYSTORE_FILE" ] && [ -f "$CERT_DIR/truststore.p12" ]; then
+    info "Keystore and truststore exist, skipping"
     exec "$@"
   fi
 
@@ -66,14 +66,18 @@ info "Fetching CA chain from crypto-service..."
 CA_CHAIN=$(curl -skf "$CRYPTO_URL/api/v1/certificates/ca-chain")
 echo "$CA_CHAIN" > "$CERT_DIR/ca-chain.pem"
 
-# Extract Root CA (second cert in chain)
+# Extract Intermediate CA (first cert) and Root CA (second cert) from chain
+awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; if (c==1) in_cert=1} in_cert {print} /-----END CERTIFICATE-----/ {if (in_cert && c==1) {in_cert=0; exit}}' \
+  "$CERT_DIR/ca-chain.pem" > "$CERT_DIR/intermediate-ca.pem"
 awk 'BEGIN {c=0} /-----BEGIN CERTIFICATE-----/ {c++; if (c==2) in_cert=1} in_cert {print} /-----END CERTIFICATE-----/ {if (in_cert) exit}' \
   "$CERT_DIR/ca-chain.pem" > "$CERT_DIR/root-ca.pem"
 
-info "Building truststore..."
+info "Building truststore (Root CA + Intermediate CA)..."
 rm -f "$CERT_DIR/truststore.p12"
 keytool -importcert -keystore "$CERT_DIR/truststore.p12" -storepass "$PASSWORD" \
   -storetype PKCS12 -alias root-ca -file "$CERT_DIR/root-ca.pem" -noprompt
+keytool -importcert -keystore "$CERT_DIR/truststore.p12" -storepass "$PASSWORD" \
+  -storetype PKCS12 -alias intermediate-ca -file "$CERT_DIR/intermediate-ca.pem" -noprompt
 
 # ---- Generate EC keypair ----
 info "Generating EC P-256 keypair..."
@@ -84,14 +88,14 @@ openssl ec -in "$CERT_DIR/$SERVICE_NAME-key.pem" -pubout -outform DER 2>/dev/nul
 PUBKEY=$(tr -d '\n' < "$CERT_DIR/$SERVICE_NAME-pub.b64")
 
 # ---- Build JSON payload ----
-IFS=',' read -ra DNS_ARRAY <<< "$DNS_NAMES"
-if [ ${#DNS_ARRAY[@]} -eq 0 ]; then
-  JSON="{\"commonName\":\"$SERVICE_NAME\",\"publicKeyBase64\":\"$PUBKEY\"}"
-else
-  DNS_JSON=$(printf ',"%s"' "${DNS_ARRAY[@]}")
-  DNS_JSON="[${DNS_JSON:1}]"
-  JSON="{\"commonName\":\"$SERVICE_NAME\",\"publicKeyBase64\":\"$PUBKEY\",\"dnsNames\":$DNS_JSON}"
-fi
+DNS_JSON=""
+OLD_IFS="$IFS"; IFS=","
+for dns in $DNS_NAMES; do
+  DNS_JSON="${DNS_JSON}\"${dns}\","
+done
+IFS="$OLD_IFS"
+DNS_JSON="[${DNS_JSON%,}]"
+JSON="{\"commonName\":\"$SERVICE_NAME\",\"publicKeyBase64\":\"$PUBKEY\",\"dnsNames\":$DNS_JSON}"
 
 # ---- Request server cert ----
 info "Requesting server cert from crypto-service..."
@@ -113,7 +117,7 @@ openssl pkcs12 -export \
 
 rm -f "$CERT_DIR/$SERVICE_NAME-key.pem" "$CERT_DIR/$SERVICE_NAME-pub.b64" \
       "$CERT_DIR/$SERVICE_NAME-cert.der" "$CERT_DIR/$SERVICE_NAME-cert.pem" \
-      "$CERT_DIR/ca-chain.pem" "$CERT_DIR/root-ca.pem"
+      "$CERT_DIR/ca-chain.pem" "$CERT_DIR/root-ca.pem" "$CERT_DIR/intermediate-ca.pem"
 
 info "Provisioning complete: $CERT_DIR/$SERVICE_NAME.p12"
 exec "$@"

@@ -37,7 +37,7 @@ class ServiceRegistry {
 
     private fun svc(host: String, port: Int): String {
         val h = if (isDocker) host else "localhost"
-        return "http://$h:$port"
+        return "https://$h:$port"
     }
 
     fun getBaseUrl(resource: String): String? {
