@@ -158,7 +158,11 @@ class KeycloakAdminService(
             val realmResource = keycloak.realm(properties.realm)
             val existing = realmResource.clients().findByClientId(clientId)
             if (existing.isNotEmpty()) {
-                log.info("OIDC client '{}' already exists in Keycloak", clientId)
+                val client = existing.first()
+                val clientResource = realmResource.clients().get(client.id)
+                client.redirectUris = redirectUris
+                clientResource.update(client)
+                log.info("Updated OIDC client '{}' redirect URIs", clientId)
                 return
             }
             realmResource.clients().create(
@@ -169,7 +173,7 @@ class KeycloakAdminService(
                     isStandardFlowEnabled = true
                     isDirectAccessGrantsEnabled = false
                     this.redirectUris = redirectUris
-                    webOrigins = listOf("*")
+                    webOrigins = listOf("+")
                     protocol = "openid-connect"
                     attributes = mapOf(
                         "post.logout.redirect.uris" to "+"
@@ -178,7 +182,7 @@ class KeycloakAdminService(
             )
             log.info("Created OIDC client '{}' in realm '{}'", clientId, properties.realm)
         } catch (e: Exception) {
-            log.error("Failed to create OIDC client '{}': {}", clientId, e.message)
+            log.error("Failed to create/update OIDC client '{}': {}", clientId, e.message)
             throw e
         } finally {
             keycloak.close()

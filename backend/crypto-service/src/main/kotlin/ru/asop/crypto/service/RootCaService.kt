@@ -3,6 +3,8 @@ package ru.asop.crypto.service
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.BasicConstraints
 import org.bouncycastle.asn1.x509.Extension
+import org.bouncycastle.asn1.x509.GeneralName
+import org.bouncycastle.asn1.x509.GeneralNames
 import org.bouncycastle.asn1.x509.KeyUsage
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
@@ -35,13 +37,9 @@ class RootCaService(
 
     init {
         initializeCaHierarchy()
+        ensureServerCert()
     }
 
-    /**
-     * Инициализация иерархии CA при старте сервиса.
-     * Root CA загружается из PKCS#12 хранилища (или генерируется).
-     * Intermediate CA генерируется каждый раз (для MVP).
-     */
     private fun initializeCaHierarchy() {
         val keystoreFile = File(properties.rootCa.keystorePath)
 
@@ -53,18 +51,20 @@ class RootCaService(
             generateRootCa()
         }
 
-        // Intermediate CA генерируется при каждом старте (для MVP)
-        // В production его тоже нужно сохранять в хранилище
-        generateIntermediateCa()
+        val intermediateFile = File(properties.intermediateCa.keystorePath)
+        if (intermediateFile.exists()) {
+            log.info("Loading existing Intermediate CA from {}", properties.intermediateCa.keystorePath)
+            loadIntermediateCa()
+        } else {
+            log.info("Generating new Intermediate CA")
+            generateIntermediateCa()
+        }
 
         log.info("CA hierarchy initialized. Root CA subject: {}, Intermediate CA subject: {}",
             rootCaCert.subjectX500Principal.name,
             intermediateCaCert.subjectX500Principal.name)
     }
 
-    /**
-     * Загрузка Root CA из PKCS#12 хранилища
-     */
     private fun loadRootCa() {
         val keyStore = KeyStore.getInstance("PKCS12")
         FileInputStream(properties.rootCa.keystorePath).use { fis ->
@@ -81,9 +81,22 @@ class RootCaService(
         log.info("Root CA loaded successfully. Valid until: {}", rootCaCert.notAfter)
     }
 
-    /**
-     * Генерация нового Root CA (self-signed сертификат)
-     */
+    private fun loadIntermediateCa() {
+        val keyStore = KeyStore.getInstance("PKCS12")
+        FileInputStream(properties.intermediateCa.keystorePath).use { fis ->
+            keyStore.load(fis, properties.intermediateCa.keystorePassword.toCharArray())
+        }
+
+        intermediateCaPrivateKey = keyStore.getKey(
+            properties.intermediateCa.keyAlias,
+            properties.intermediateCa.keystorePassword.toCharArray()
+        ) as PrivateKey
+
+        intermediateCaCert = keyStore.getCertificate(properties.intermediateCa.keyAlias) as X509Certificate
+
+        log.info("Intermediate CA loaded successfully. Valid until: {}", intermediateCaCert.notAfter)
+    }
+
     private fun generateRootCa() {
         val keyPair = generateEcKeyPair()
 
@@ -100,7 +113,6 @@ class RootCaService(
             dn, serialNumber, notBefore, notAfter, dn, keyPair.public
         )
 
-        // Root CA — это CA, может подписывать другие CA
         certBuilder.addExtension(Extension.basicConstraints, true, BasicConstraints(true))
         certBuilder.addExtension(
             Extension.keyUsage, true,
@@ -116,9 +128,6 @@ class RootCaService(
         log.info("Root CA generated and saved to {}", properties.rootCa.keystorePath)
     }
 
-    /**
-     * Сохранение Root CA в PKCS#12 хранилище
-     */
     private fun saveRootCa(keyPair: KeyPair, certificate: X509Certificate) {
         val keyStore = KeyStore.getInstance("PKCS12")
         keyStore.load(null, properties.rootCa.keystorePassword.toCharArray())
@@ -136,9 +145,6 @@ class RootCaService(
         }
     }
 
-    /**
-     * Генерация Intermediate CA (подписывается Root CA)
-     */
     private fun generateIntermediateCa() {
         val keyPair = generateEcKeyPair()
 
@@ -156,7 +162,6 @@ class RootCaService(
             rootDn, serialNumber, notBefore, notAfter, intermediateDn, keyPair.public
         )
 
-        // Intermediate CA — это CA с глубиной 0 (может подписывать только end-entity)
         certBuilder.addExtension(Extension.basicConstraints, true, BasicConstraints(0))
         certBuilder.addExtension(
             Extension.keyUsage, true,
@@ -167,28 +172,40 @@ class RootCaService(
         intermediateCaCert = JcaX509CertificateConverter().getCertificate(certHolder)
         intermediateCaPrivateKey = keyPair.private
 
-        log.info("Intermediate CA generated. Valid until: {}", intermediateCaCert.notAfter)
+        saveIntermediateCa(keyPair, intermediateCaCert)
+
+        log.info("Intermediate CA generated and saved to {}", properties.intermediateCa.keystorePath)
     }
 
-    /**
-     * Генерация ECC P-256 ключевой пары
-     */
+    private fun saveIntermediateCa(keyPair: KeyPair, certificate: X509Certificate) {
+        val keyStore = KeyStore.getInstance("PKCS12")
+        keyStore.load(null, properties.intermediateCa.keystorePassword.toCharArray())
+
+        keyStore.setKeyEntry(
+            properties.intermediateCa.keyAlias,
+            keyPair.private,
+            properties.intermediateCa.keystorePassword.toCharArray(),
+            arrayOf(certificate)
+        )
+
+        File(properties.intermediateCa.keystorePath).parentFile?.mkdirs()
+        FileOutputStream(properties.intermediateCa.keystorePath).use { fos ->
+            keyStore.store(fos, properties.intermediateCa.keystorePassword.toCharArray())
+        }
+    }
+
     private fun generateEcKeyPair(): KeyPair {
         val keyPairGenerator = KeyPairGenerator.getInstance("EC")
         keyPairGenerator.initialize(256)
         return keyPairGenerator.generateKeyPair()
     }
 
-    /**
-     * Подписать публичный ключ и выпустить X.509 сертификат.
-     * Используется для выпуска сертификатов терминалов и водителей.
-     *
-     * @param publicKey Публичный ключ, который нужно подписать
-     * @param dn Distinguished Name для сертификата
-     * @param validityYears Срок действия в годах
-     * @return Подписанный X.509 сертификат
-     */
-    fun signCertificate(publicKey: PublicKey, dn: String, validityYears: Int): X509Certificate {
+    fun signCertificate(
+        publicKey: PublicKey,
+        dn: String,
+        validityYears: Int,
+        dnsNames: List<String> = emptyList()
+    ): X509Certificate {
         val issuerDn = X500Name(intermediateCaCert.subjectX500Principal.name)
         val subjectDn = X500Name(dn)
         val serialNumber = BigInteger.valueOf(System.currentTimeMillis())
@@ -202,24 +219,51 @@ class RootCaService(
             issuerDn, serialNumber, notBefore, notAfter, subjectDn, publicKey
         )
 
-        // End-entity сертификат — не CA
         certBuilder.addExtension(Extension.basicConstraints, true, BasicConstraints(false))
         certBuilder.addExtension(
             Extension.keyUsage, true,
             KeyUsage(KeyUsage.digitalSignature or KeyUsage.keyEncipherment)
         )
 
+        if (dnsNames.isNotEmpty()) {
+            val names = dnsNames.map { GeneralName(GeneralName.dNSName, it) }.toTypedArray()
+            certBuilder.addExtension(
+                Extension.subjectAlternativeName, false,
+                GeneralNames(names)
+            )
+        }
+
         val certHolder = certBuilder.build(contentSigner)
         return JcaX509CertificateConverter().getCertificate(certHolder)
     }
 
-    /**
-     * Получить публичный сертификат Root CA (для экспорта клиентам)
-     */
     fun getRootCaCertificate(): X509Certificate = rootCaCert
 
-    /**
-     * Получить публичный сертификат Intermediate CA
-     */
     fun getIntermediateCaCertificate(): X509Certificate = intermediateCaCert
+
+    fun getServerCertInfo(): Pair<String, String> {
+        val cfg = properties.serverCert
+        return Pair(cfg.keystorePath, cfg.keystorePassword)
+    }
+
+    private fun ensureServerCert() {
+        val cfg = properties.serverCert
+        val keystoreFile = File(cfg.keystorePath)
+        if (keystoreFile.exists()) {
+            log.info("Server cert keystore exists at {}", cfg.keystorePath)
+            return
+        }
+
+        log.info("Generating bootstrap server cert for crypto-service at {}", cfg.keystorePath)
+        val keyPair = generateEcKeyPair()
+        val dn = "CN=${cfg.commonName}, O=ASOP"
+        val cert = signCertificate(keyPair.public, dn, cfg.validityYears, cfg.dnsNames)
+
+        val keyStore = KeyStore.getInstance("PKCS12")
+        keyStore.load(null, cfg.keystorePassword.toCharArray())
+        keyStore.setKeyEntry(cfg.keyAlias, keyPair.private, cfg.keystorePassword.toCharArray(), arrayOf(cert))
+        keystoreFile.parentFile?.mkdirs()
+        FileOutputStream(keystoreFile).use { keyStore.store(it, cfg.keystorePassword.toCharArray()) }
+        log.info("Bootstrap server cert generated: serial={}", cert.serialNumber.toString(16))
+    }
 }

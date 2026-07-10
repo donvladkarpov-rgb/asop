@@ -3,11 +3,11 @@ server:
   shutdown: graceful
   ssl:
     enabled: true
-    key-store: classpath:gateway-keystore.p12
-    key-store-password: ${GATEWAY_KEYSTORE_PASSWORD:changeit}
+    key-store: ${KEYSTORE_PATH:/certs/service.p12}
+    key-store-password: ${KEYSTORE_PASSWORD:changeit}
     key-store-type: PKCS12
-    key-alias: gateway
-    trust-store: classpath:truststore.p12
+    key-alias: ${KEY_ALIAS:service}
+    trust-store: ${TRUSTSTORE_PATH:/certs/truststore.p12}
     trust-store-password: ${TRUSTSTORE_PASSWORD:changeit}
     trust-store-type: PKCS12
     client-auth: want
@@ -32,12 +32,17 @@ spring:
           # JWKS endpoint Keycloak для валидации JWT
           # Для локальной разработки: http://localhost:8180/realms/asop/protocol/openid-connect/certs
           # Для prod: подставлять через ENV
-          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://localhost:8180/realms/asop/protocol/openid-connect/certs}
-          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://localhost:8180/realms/asop}
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:https://keycloak:8443/realms/asop/protocol/openid-connect/certs}
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:https://keycloak:8443/realms/asop}
 
   # Kafka (reactor-kafka producer)
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9093}
+    ssl:
+      trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/certs/truststore.p12}
+      trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
+    properties:
+      security.protocol: SSL
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer

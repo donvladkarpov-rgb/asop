@@ -38,6 +38,21 @@ services:
     networks:
       - asop-net
 
+  certs-init:
+    mem_limit: 64m
+    build:
+      context: ./certs
+      dockerfile: Dockerfile.certs-init
+    environment:
+      CRYPTO_URL: https://crypto-service:8081
+    volumes:
+      - certs_data:/certs
+    depends_on:
+      crypto-service:
+        condition: service_healthy
+    networks:
+      - asop-net
+
   zookeeper:
     mem_limit: 256m
     image: confluentinc/cp-zookeeper:7.5.0
@@ -54,15 +69,28 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: SSL://kafka:9093
+      KAFKA_LISTENERS: SSL://0.0.0.0:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SSL_KEYSTORE_TYPE: PKCS12
+      KAFKA_SSL_KEYSTORE_LOCATION: /certs/kafka.p12
+      KAFKA_SSL_KEYSTORE_PASSWORD: changeit
+      KAFKA_SSL_TRUSTSTORE_TYPE: PKCS12
+      KAFKA_SSL_TRUSTSTORE_LOCATION: /certs/truststore.p12
+      KAFKA_SSL_TRUSTSTORE_PASSWORD: changeit
+      KAFKA_SSL_KEY_PASSWORD: changeit
+      KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ""
     ports:
-      - "9092:9092"
+      - "9093:9093"
+    volumes:
+      - certs_data:/certs:ro
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_started
+      certs-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9093"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -73,20 +101,31 @@ services:
   keycloak:
     mem_limit: 512m
     image: quay.io/keycloak/keycloak:25.0.4
-    command: start-dev --import-realm
+    command:
+      - "start-dev"
+      - "--import-realm"
+      - "--https-key-store-file=/certs/keycloak.p12"
+      - "--https-key-store-password=changeit"
     environment:
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres/asop
       KC_DB_USERNAME: asop
       KC_DB_PASSWORD: asop
       KC_HOSTNAME: localhost
+      KC_PROXY: edge
+      KC_HTTPS_PORT: 8443
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
     ports:
       - "8180:8080"
+      - "8443:8443"
+    volumes:
+      - certs_data:/certs:ro
     depends_on:
       postgres:
         condition: service_healthy
+      certs-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
       interval: 10s
@@ -105,15 +144,30 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8081:8081"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVICE_NAME: crypto-service
+      KEY_ALIAS: crypto-service
+      DNS_NAMES: crypto-service,localhost
+      KEYSTORE_PATH: file:/data/server.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
+      SERVER_KEYSTORE_PATH: file:/data/server.p12
+      SERVER_KEYSTORE_PASSWORD: changeit
+      INTERMEDIATE_CA_KEYSTORE_PATH: /data/intermediate-ca.p12
+      INTERMEDIATE_CA_KEYSTORE_PASSWORD: changeit
       ROOT_CA_KEYSTORE_PATH: /data/root-ca.p12
       ROOT_CA_KEYSTORE_PASSWORD: changeit
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
     volumes:
+      - ./certs/provision.sh:/provision.sh:ro
       - crypto_data:/data
-    depends_on:
-      kafka:
-        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -skf https://localhost:8081/actuator/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     networks:
       - asop-net
 
@@ -124,20 +178,28 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/asop
-      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/asop/protocol/openid-connect/certs
-      GATEWAY_KEYSTORE_PASSWORD: changeit
-      TRUSTSTORE_PASSWORD: changeit
+      SERVICE_NAME: gateway
+      KEY_ALIAS: gateway
+      DNS_NAMES: localhost,gateway
+      KEYSTORE_PATH: file:/tmp/certs/gateway.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
+      KEYCLOAK_INTERNAL_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      KEYCLOAK_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-https://keycloak:8443/realms/asop/protocol/openid-connect/certs}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
       ASOP_ENV: docker
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
       kafka:
         condition: service_healthy
       keycloak:
         condition: service_healthy
       crypto-service:
-        condition: service_started
+        condition: service_healthy
     networks:
       - asop-net
 
@@ -148,18 +210,31 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8082:8082"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: user-service
+      KEY_ALIAS: user-service
+      DNS_NAMES: user-service
+      KEYSTORE_PATH: file:/tmp/certs/user-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL_INTERNAL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
       KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
       BOOTSTRAP_ENABLED: "true"
       BOOTSTRAP_ADMIN_PASSWORD: admin
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -176,15 +251,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8084:8084"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: terminal-service
+      KEY_ALIAS: terminal-service
+      DNS_NAMES: terminal-service
+      KEYSTORE_PATH: file:/tmp/certs/terminal-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -201,15 +288,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8085:8085"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: session-service
+      KEY_ALIAS: session-service
+      DNS_NAMES: session-service
+      KEYSTORE_PATH: file:/tmp/certs/session-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -226,14 +325,24 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8086:8086"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: card-service
+      KEY_ALIAS: card-service
+      DNS_NAMES: card-service
+      KEYSTORE_PATH: file:/tmp/certs/card-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -251,15 +360,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8087:8087"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: carrier-service
+      KEY_ALIAS: carrier-service
+      DNS_NAMES: carrier-service
+      KEYSTORE_PATH: file:/tmp/certs/carrier-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -276,15 +397,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8088:8088"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: debt-service
+      KEY_ALIAS: debt-service
+      DNS_NAMES: debt-service
+      KEYSTORE_PATH: file:/tmp/certs/debt-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -301,15 +434,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8089:8089"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: audit-service
+      KEY_ALIAS: audit-service
+      DNS_NAMES: audit-service
+      KEYSTORE_PATH: file:/tmp/certs/audit-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -326,15 +471,27 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8090:8090"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: fiscal-service
+      KEY_ALIAS: fiscal-service
+      DNS_NAMES: fiscal-service
+      KEYSTORE_PATH: file:/tmp/certs/fiscal-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
-      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-https://keycloak:8443}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-https://keycloak:8443/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       kafka:
@@ -351,13 +508,24 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8091:8091"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
     environment:
+      SERVICE_NAME: admin-service
+      KEY_ALIAS: admin-service
+      DNS_NAMES: admin-service
+      KEYSTORE_PATH: file:/tmp/certs/admin-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: asop
       DB_USER: asop
       DB_PASSWORD: asop
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      crypto-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     networks:
@@ -370,9 +538,17 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:80"
+      - "3443:443"
+    environment:
+      CRYPTO_URL: https://crypto-service:8081
+      PROXY_PROTOCOL: "${PROXY_PROTOCOL:-https}"
+    volumes:
+      - web_admin_certs:/certs
     depends_on:
       gateway-service:
         condition: service_started
+      crypto-service:
+        condition: service_healthy
     networks:
       - asop-net
 
@@ -383,3 +559,5 @@ networks:
 volumes:
   postgres_data:
   crypto_data:
+  certs_data:
+  web_admin_certs:

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import { useAuth } from '../auth/useAuth';
@@ -34,6 +35,19 @@ const bottomItems = [
   { to: '/password', label: 'Сменить пароль', icon: '🔑' },
 ];
 
+function CollapsibleSection({ label, defaultOpen = false, children }: { label: string; defaultOpen?: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <>
+      <div className="section-toggle" onClick={() => setOpen(!open)}>
+        <span className="section-toggle-label">{label}</span>
+        <span className={cn('chevron', open && 'chevron-open')}>▶</span>
+      </div>
+      {open && children}
+    </>
+  );
+}
+
 export function Sidebar() {
   const { logout } = useAuth();
 
@@ -42,7 +56,7 @@ export function Sidebar() {
       <div className="sidebar-header">
         <h2>ASOP Admin</h2>
       </div>
-      <nav className="sidebar-nav">
+      <nav className="sidebar-nav sidebar-nav-main">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
@@ -57,36 +71,38 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="sidebar-section-label">Регионы и территории</div>
-      <nav className="sidebar-nav">
-        {regionItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              cn('nav-link', isActive && 'active')
-            }
-          >
-            <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-          </NavLink>
-        ))}
-      </nav>
-      <div className="sidebar-section-label">Справочники</div>
-      <nav className="sidebar-nav">
-        {refItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              cn('nav-link', isActive && 'active')
-            }
-          >
-            <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      <CollapsibleSection label="Регионы и территории">
+        <nav className="sidebar-nav">
+          {regionItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
+      <CollapsibleSection label="Справочники">
+        <nav className="sidebar-nav">
+          {refItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
       <div className="sidebar-footer">
         {bottomItems.map((item) => (
           <NavLink

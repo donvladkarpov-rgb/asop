@@ -1,10 +1,27 @@
 server:
   port: 8081
+  ssl:
+    enabled: true
+    key-store: ${SERVER_KEYSTORE_PATH:./data/server.p12}
+    key-store-password: ${SERVER_KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: crypto-service
+    trust-store: ${TRUSTSTORE_PATH:/certs/truststore.p12}
+    trust-store-password: ${TRUSTSTORE_PASSWORD:changeit}
+    trust-store-type: PKCS12
   shutdown: graceful
 
 spring:
   application:
     name: crypto-service
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    ssl:
+      trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/certs/truststore.p12}
+      trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
+    properties:
+      security.protocol: SSL
 
   jackson:
     serialization:
@@ -23,6 +40,9 @@ asop:
     intermediate-ca:
       validity-years: 5
       dn: "CN=ASOP Intermediate CA, O=ASOP, C=RU"
+      keystore-path: ${INTERMEDIATE_CA_KEYSTORE_PATH:./data/intermediate-ca.p12}
+      keystore-password: ${INTERMEDIATE_CA_KEYSTORE_PASSWORD:changeit}
+      key-alias: asop-intermediate-ca
 
     terminal-cert:
       validity-years: 1

@@ -168,27 +168,115 @@ Client                     Gateway                         Service
   - **Keycloak 25.0.4 bug**: пользователь без BOTH `firstName` и `lastName` → "Account is not fully set up". Оба поля обязательны.
 - **Password change**: `POST /api/v1/users/password/change` через gateway → pass-through identity. Gateway извлекает `sub` из JWT, передаёт `X-Keycloak-Id` header в user-service. User-service не валидирует JWT (permitAll), читает `X-Keycloak-Id` из header, обновляет пароль в Keycloak Admin API. Запросы напрямую к user-service тоже разрешены (без JWT).
 
-### Docker deploy
+### Docker deploy (fresh start)
+
+**Договорённость:** Docker стартует с нуля каждый раз. Все volumes удаляются между запусками.
 
 ```bash
 # 1. Build JARs
 ./gradlew bootJar
 
-# 2. Build & start all containers
+# 2. Полный перезапуск с очисткой всех данных
+docker compose -f infrastructure/docker/docker-compose.yml down -v
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 
-# 3. Drop specific service
+# 3. Пересобрать и запустить конкретный сервис
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-service
+
+# Просмотр логов
+docker compose -f infrastructure/docker/docker-compose.yml logs -f gateway-service
+```
+
+**Что происходит при старте:**
+1. `crypto-service` стартует, не находит Root CA / Intermediate CA → генерирует новые
+2. `certs-init` запускается, ждёт crypto-service, генерирует EC P-256 keypair для kafka + keycloak, запрашивает сертификаты, собирает truststore
+3. Каждый сервис через `provision.sh` генерирует свой keypair, получает сертификат от crypto-service, собирает PKCS#12 keystore
+4. Liquibase накатывает миграции (67 таблиц + функции + seed roles)
+5. user-service при пустой `ASOP_USERS` создаёт realm + admin в Keycloak
+
+**Важно:** `down -v` удаляет `crypto_data`, `certs_data`, `postgres_data` — всё пересоздаётся с нуля. Без `-v` старые CA и сертификаты остаются, и новые сервисы не смогут подключиться (старый truststore не совпадает с новыми сертификатами).
+
+### Docker single-service rebuild
+
+```bash
+# Пересобрать образ и перезапустить один сервис
+docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-service
+
+# При этом зависимости (kafka, postgres, keycloak, crypto) не перезапускаются
 ```
 
 Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse-temurin:21-jre). Liquibase migrations for Docker mounted from `infrastructure/db-migrations/` into `/db-migrations/` inside the liquibase container.
 
+### Тестовые данные
+
+Пока скриптов нет. Будут заполняться специальными скриптами после успешного запуска всех сервисов. Следить за `infrastructure/docker/todo.md`.
+
 ## Crypto (crypto-service)
 
 - Root CA in PKCS#12 (`./data/root-ca.p12`), auto-generated on first start
-- ECC P-256 via Bouncy Castle, all signing via Intermediate CA (regenerated on each restart in MVP)
+- Intermediate CA in PKCS#12 (`./data/intermediate-ca.p12`), persisted (not regenerated on restart)
+- ECC P-256 via Bouncy Castle, all signing via Intermediate CA
 - `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` not available in Spring 6.1 — use `"application/x-pem-file"`
-- Endpoints: `POST /api/v1/terminals/register`, `POST /api/v1/smart-cards/issue`, `GET /api/v1/terminals/root-ca(/{format})`
+- Endpoints: `POST /api/v1/terminals/register`, `POST /api/v1/smart-cards/issue`, `GET /api/v1/terminals/root-ca(/{format})`, `POST /api/v1/certificates/server`, `GET /api/v1/certificates/ca-chain`
+- `ServerCertRequest.dnsNames` — список DNS-имён для SAN (Subject Alternative Name) в серверном сертификате
+
+## Full TLS setup
+
+Весь трафик между gateway и внутренними сервисами шифруется. Схема сертификатов:
+
+```
+Root CA (self-signed, persisted)
+└── Intermediate CA (signed by Root CA, persisted)
+    ├── gateway.p12, user-service.p12, card-service.p12, ...
+    ├── keycloak.p12 (HTTPS на порту 8443)
+    └── kafka.p12 (SSL listener на порту 9093)
+```
+
+### Генерация сертификатов
+
+В Docker сертификаты генерируются автоматически при каждом `docker compose up`:
+1. `certs-init` — для инфраструктурных сервисов (kafka, keycloak)
+2. `provision.sh` (entrypoint каждого сервиса) — для application-сервисов
+
+Оба скрипта:
+- Ждут crypto-service
+- Запрашивают CA chain, собирают truststore
+- Генерируют EC P-256 keypair
+- Запрашивают подписанный сертификат у crypto-service (с SAN)
+- Собирают PKCS#12 keystore
+
+For local dev (without Docker) there's `infrastructure/docker/certs/generate-certs.sh`.
+
+### Сертификация всегда включена
+
+SSL включён всегда, переменная `SSL_ENABLED` больше не используется. Все сервисы слушают HTTPS, Kafka использует SSL (9093), Keycloak использует HTTPS (8443).
+
+### Gateway mTLS для терминалов
+
+Gateway настроен с `client-auth: want` — запрашивает, но не требует клиентский сертификат.
+- Если терминал предъявляет сертификат → аутентификация через X509 (SecurityConfig, Order 1)
+- Если нет (браузер) → аутентификация через JWT (Order 2)
+- Truststore gateway содержит Root CA crypto-service — валидация терминальных сертификатов через цепочку до Intermediate CA
+
+### Kafka SSL
+
+- Kafka слушает SSL (9093) — PLAINTEXT отключён
+- Сертификат Kafka подписан Intermediate CA, SAN: kafka
+- Endpoint identification algorithm отключён для внутренней сети
+- Каждый сервис конфигурируется через `spring.kafka.ssl.*`
+
+### Keycloak proxy через gateway
+
+Keycloak проксируется через gateway, чтобы браузер всегда обращался к одному origin (избежать CORS/origin errors):
+
+```
+Browser → nginx/vite → Gateway (/realms/**) → Keycloak (internal)
+```
+
+- nginx `location /realms/` → `proxy_pass http://gateway-service:8080`
+- Gateway: `KeycloakProxyController` catch-all `/realms/**` → forward to Keycloak
+- Gateway: `SecurityConfig` → `pathMatchers("/realms/**").permitAll()`
+- Keycloak: `KC_PROXY=edge`, `KC_HOSTNAME=localhost`
 
 ## Reference docs
 

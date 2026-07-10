@@ -6,5 +6,9 @@ COPY . .
 RUN npm run build
 
 FROM nginx:alpine
+RUN apk add --no-cache openssl curl gettext
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY provision-certs.sh /provision-certs.sh
+RUN chmod +x /provision-certs.sh
+ENTRYPOINT ["/provision-certs.sh"]

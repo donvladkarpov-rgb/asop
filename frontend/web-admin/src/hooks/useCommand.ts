@@ -51,7 +51,7 @@ export function useCommand<TData = unknown>(
   const pollEvent = useCallback(async (id: string): Promise<PollResult<TData>> => {
     const baseUrl = import.meta.env.VITE_API_URL || '/api/v1';
     const token = sessionStorage.getItem(
-      `oidc.user:${import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180'}/realms/asop:asop-admin`,
+      `oidc.user:${import.meta.env.VITE_KEYCLOAK_URL || ''}/realms/asop:asop-admin`,
     );
 
     for (let attempt = 0; attempt < maxPolls; attempt++) {

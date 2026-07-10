@@ -48,7 +48,9 @@ class BootstrapService(
                 clientId = "asop-admin",
                 redirectUris = listOf(
                     "http://localhost:3000/*",
-                    "http://localhost:*"
+                    "http://localhost:*",
+                    "https://localhost:3443/*",
+                    "https://localhost:*"
                 )
             )
         } catch (e: Exception) {

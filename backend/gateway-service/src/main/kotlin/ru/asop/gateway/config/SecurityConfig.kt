@@ -58,6 +58,7 @@ class SecurityConfig {
             .authorizeExchange { exchanges ->
                 exchanges
                     .pathMatchers("/actuator/health", "/actuator/info").permitAll()
+                    .pathMatchers("/realms/**").permitAll()
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .anyExchange().authenticated()
             }

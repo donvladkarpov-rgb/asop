@@ -1,5 +1,14 @@
 server:
   port: 8082
+  ssl:
+    enabled: true
+    key-store: ${KEYSTORE_PATH:/certs/service.p12}
+    key-store-password: ${KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: ${KEY_ALIAS:service}
+    trust-store: ${TRUSTSTORE_PATH:/certs/truststore.p12}
+    trust-store-password: ${TRUSTSTORE_PASSWORD:changeit}
+    trust-store-type: PKCS12
 
 spring:
   application:
@@ -26,10 +35,15 @@ spring:
       resourceserver:
         jwt:
           jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:http://keycloak:8080/realms/asop/protocol/openid-connect/certs}
-          issuer-uri: ${KEYCLOAK_URL:http://keycloak:8080}/realms/asop
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:http://keycloak:8080/realms/asop}
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    ssl:
+      trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/certs/truststore.p12}
+      trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
+    properties:
+      security.protocol: SSL
 
 asop:
   bootstrap:
@@ -40,7 +54,7 @@ asop:
     admin-last-name-initial: A
 
   keycloak:
-    url: ${KEYCLOAK_URL:http://localhost:8180}
+    url: ${KEYCLOAK_URL_INTERNAL:http://keycloak:8080}
     realm: asop
     admin-user: ${KEYCLOAK_ADMIN_USER:admin}
     admin-password: ${KEYCLOAK_ADMIN_PASSWORD:admin}

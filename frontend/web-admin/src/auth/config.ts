@@ -1,6 +1,6 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
 
-const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:8180';
+const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || '';
 const realm = 'asop';
 const clientId = 'asop-admin';
 
