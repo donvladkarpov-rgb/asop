@@ -55,7 +55,9 @@ spring:
 # ASOP custom properties
 asop:
   kafka:
-    # Таймаут ожидания подтверждения от Kafka
+    topics:
+      terminal-cert-events: asop.terminal.cert.events
+    # ������� �������� ���⢥ত���� �� Kafka
     send-timeout-ms: 5000
 
 # Logging

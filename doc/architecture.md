@@ -116,8 +116,38 @@ backend/shared/api/{name}-api/
 
 #### 3. Event tracking
 - После отправки в Kafka `EventService` сохраняет статус `PENDING` (in-memory `ConcurrentHashMap`, TTL 30 мин)
-- Фронт поллит `GET /api/v1/events/{eventId}` до `COMPLETED` или `FAILED`
-- Статус навсегда PENDING, пока сервисы не публикуют события в `.events` топики
+- Фронт поллит `GET /api/v1/events/{eventId}`:
+  - `202 Accepted` пока PENDING
+  - `200 OK` с `resultData` (JSON) когда COMPLETED (cert saga — PEM)
+  - `422 Unprocessable Entity` с `errorMessage` когда FAILED
+  - `404 Not Found` если eventId неизвестен
+- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус навсегда PENDING.
+
+#### 4. Cert signing flow (choreographed saga, 4 hops)
+Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg при первой регистрации):
+
+```
+Android → POST /api/v1/terminals/cert-sign (HTTPS plain)
+       → 202 + X-Event-Id
+       ↓
+Gateway → Kafka asop.terminal.cert.commands (X-Event-Id header)
+       ↓
+crypto-service @KafkaListener → выпускает X.509 через Intermediate CA
+                            → Kafka asop.terminal.cert.issued (X-Event-Id пробрасывается)
+       ↓
+terminal-service @KafkaListener → ensureTerminal (findByTerminalSerial → insert если новый)
+                              → TransactionalOperator.transactional:
+                                markAllAsNotCurrent(terminalId)
+                                R2dbcEntityTemplate.insert(TerminalCertEntity IS_CURRENT=true)
+                              → Kafka asop.terminal.cert.events (CertStored | CertSignFailed)
+       ↓
+Gateway CertEventConsumer → EventService.complete(eventId, resultData=CertStoredResult JSON)
+                          или fail(eventId, reason)
+       ↓
+Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManager.storeCertificateChain()
+```
+
+XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true` + `TransactionalOperator` для атомарности.
 
 ### Ключевые компоненты Gateway
 
@@ -126,9 +156,12 @@ backend/shared/api/{name}-api/
 | `config/ServiceRegistry.kt` | Маппинг resource → URL сервиса |
 | `config/WebClientConfig.kt` | WebClient bean для proxy |
 | `controller/ProxyController.kt` | Sync proxy (catch-all) |
+| `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (async через Kafka) |
 | `controller/EventController.kt` | Эндпоинт статуса события |
-| `service/EventService.kt` | In-memory event store |
-| `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) |
+| `service/EventService.kt` | In-memory event store с методами complete/fail |
+| `service/CertCommandService.kt` | Producer CertSignRequested в `asop.terminal.cert.commands` |
+| `kafka/CertEventConsumer.kt` | Listener `asop.terminal.cert.events` → EventService.complete/fail |
+| `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) + `resultData: String?` |
 
 ---
 
@@ -140,6 +173,7 @@ backend/shared/api/{name}-api/
 - Пути: `/api/v1/terminals/**`, `/api/v1/sync/**`
 - Principal = `CN` из X.509 сертификата
 - `X509PrincipalExtractor` из `org.springframework.security.web.authentication.preauth.x509` (синхронный, возвращает `Any`)
+- **Исключение**: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала)
 
 **Chain 2** (`@Order(2)`): JWT (Keycloak) для всего остального
 - JWKS кэшируется локально, проверка каждые 60 сек
@@ -244,13 +278,19 @@ Gateway проверяет JWT, извлекает `sub` (keycloakId), пере�
 Определён в `KafkaTopic` в `asop-common`:
 - `asop.carrier.commands` — команды записи перевозчиков
 - `asop.session.events` — доменные события сессий
+- `asop.terminal.cert.commands` — команды выпуска X.509 (gateway → crypto-service)
+- `asop.terminal.cert.issued` — выпущенные сертификаты (crypto-service → terminal-service)
+- `asop.terminal.cert.events` — сохранённые сертификаты + ошибки (terminal-service → gateway)
 
 ### Поток асинхронной команды
 1. Gateway проверяет запрос, извлекает identity
 2. Gateway отправляет команду в `asop.{domain}.commands`
 3. Gateway возвращает `202 Accepted` + `X-Event-Id`
 4. Backend-сервис потребляет команду, обрабатывает, публикует событие в `asop.{domain}.events`
-5. Consumer обновляет статус события (в будущем: персистентность)
+5. Consumer обновляет статус события (`EventService.complete/fail`)
+6. Клиент получает `200 OK` с `resultData` (cert saga) при следующем polling `GET /api/v1/events/{eventId}`
+
+Для cert-sign saga поток расширен: gateway → crypto-service → terminal-service → gateway через 3 топика и проброс `X-Event-Id` через Kafka headers для корреляции.
 
 ### Заголовки
 - `X-Keycloak-Id`: keycloakId аутентифицированного пользователя (трассировка)
@@ -277,9 +317,13 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Эндпоинты crypto-service
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/register` | Выпуск сертификата терминала |
+| POST | `/api/v1/terminals/register` | Выпуск сертификата терминала (sync fallback, обычно cert-sign идёт через Kafka) |
 | POST | `/api/v1/smart-cards/issue` | Выпуск сертификата смарт-карты |
 | GET | `/api/v1/terminals/root-ca(/{format})` | Root CA в PEM/DER |
+| POST | `/api/v1/certificates/server` | Выпуск серверного сертификата |
+| GET | `/api/v1/certificates/ca-chain` | CA chain bundle (Root + Intermediate) |
+
+**Kafka consumer**: `@KafkaListener("asop.terminal.cert.commands")` в `CertCommandConsumer.kt` выпускает сертификат через `TerminalCertService.issueTerminalCertificate()` и публикует `CertIssued` в `asop.terminal.cert.issued` с пробросом `X-Event-Id` header. CA chain включается в `CertIssued.caChain`.
 
 ### Роли смарт-карт
 `PASSENGER_ANONYMOUS`, `PASSENGER_BENEFIT`, `DRIVER`, `CONTROLLER`, `DISPATCHER`, `CARRIER_ADMIN`, `REGION_ADMIN`, `SUPER_ADMIN`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_TERMINAL`, `SERVICE`
@@ -298,7 +342,10 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 - `ASOP_USERS`, `ASOP_USER_ROLES`, `ASOP_USER_CARRIERS` — пользователи
 - `ASOP_CARRIERS`, `ASOP_CONTRACTS`, `ASOP_VEHICLES` — перевозчики
 - `ASOP_CARDS`, `ASOP_CARD_MIFARES`, `ASOP_CARD_TARIFFS`, `ASOP_CARD_BANKS` — карты
-- `ASOP_TERMINALS`, `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — терминалы
+- `ASOP_TERMINALS` (с `UNIQUE` constraint на `TERMINAL_SERIAL`), `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — терминалы
+- `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (v002):
+  - `IS_CURRENT` boolean, `CA_CHAIN` PEM
+  - **UNIQUE partial index** `uq_tc_current_per_terminal ON (TERMINAL_ID) WHERE IS_CURRENT = true` — не более одного активного
 - `ASOP_SESSIONS`, `ASOP_TRANSACTIONS`, `ASOP_CARD_DEBTS` — транзакции
 - `ASOP_AUDIT_TASKS`, `ASOP_AUDIT_BRIGADES`, `ASOP_AUDIT_INSPECTIONS` — КРС
 
@@ -367,4 +414,7 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 | **In-memory event store (TTL 30 мин)** | MVP-простота; события эфемерны (только отслеживание до подтверждения сервисом) |
 | **mTLS для терминалов** | Аутентификация устройств офлайн; независимость от Keycloak |
 | **Chain 1 + Chain 2 в SecurityConfig** | Чистое разделение mTLS (терминалы) и JWT (веб) потоков |
+| **Cert signing choreographed saga** (4 hops через Kafka) | Хореография через топики `asop.terminal.cert.{commands,issued,events}` с пробросом `X-Event-Id` через headers — нет single point of failure, каждая стадия независимо ретраится |
+| **UNIQUE partial index** на `IS_CURRENT=true` | DB-уровневая защита от race condition при параллельной ротации сертификатов (`uq_tc_current_per_terminal`) |
+| **Open HTTPS endpoint для cert-sign** (без JWT/mTLS) | Chicken-and-egg: первая регистрация терминала невозможна при строгой аутентификации; mTLS появляется после выпуска первого сертификата |
 | **Liquibase в отдельной директории** | Централизованное управление миграциями; не встроено в JAR сервисов |

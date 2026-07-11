@@ -45,3 +45,5 @@ asop:
   kafka:
     topics:
       terminal-commands: asop.terminal.commands
+      terminal-cert-issued: asop.terminal.cert.issued
+      terminal-cert-events: asop.terminal.cert.events

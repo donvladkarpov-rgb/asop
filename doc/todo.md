@@ -7,6 +7,12 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 Всё реализовано: crypto-service — единый CA, сертификаты выпускаются автоматически
 через `certs-init` и `provision.sh`. Root CA + Intermediate CA в PKCS#12.
 
+- [x] **Cert signing saga (4 hops)** — реализована через Kafka:
+      `Gateway → asop.terminal.cert.commands → crypto-service → asop.terminal.cert.issued → terminal-service → asop.terminal.cert.events → Gateway EventService`
+- [x] **`ASOP_TERMINAL_CERTS` таблица** — добавлена в v002 миграцию с UNIQUE partial index `uq_tc_current_per_terminal`
+- [x] **`UNIQUE` constraint на `ASOP_TERMINALS.TERMINAL_SERIAL`** — защита от дублей терминалов
+- [x] **Android rewrite** — `CertificateService.kt` теперь идёт через Gateway + polling `GET /api/v1/events/{eventId}`
+
 Детали по компрометации ключей — см. `infrastructure/docker/todo.md`.
 
 ## 2. Frontend: Admin UI
@@ -50,7 +56,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 
 - [ ] **Добавить JwtDecoderConfig или permitAll в сервисы:**
   - [ ] carrier-service
-  - [ ] terminal-service
+  - [x] terminal-service (SecurityConfig использует JWT ресурс-сервер, клиенты mTLS идут через Gateway)
   - [ ] session-service
   - [ ] card-service
   - [ ] debt-service

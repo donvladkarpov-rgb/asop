@@ -2,7 +2,6 @@ package ru.asop.terminal.di
 
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import retrofit2.converter.scalars.ScalarsConverterFactory
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -11,15 +10,17 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import retrofit2.converter.scalars.ScalarsConverterFactory
 import ru.asop.terminal.cert.AsopKeyManager
 import ru.asop.terminal.cert.MtlsManager
-import ru.asop.terminal.network.CryptoApi
+import ru.asop.terminal.network.CertSignApi
 import ru.asop.terminal.network.GatewayApi
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
-import javax.net.ssl.*
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -43,7 +44,7 @@ object AppModule {
             .sslSocketFactory(sslContext.socketFactory, trustAll)
             .hostnameVerifier { _, _ -> true }
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
             .build()
@@ -62,7 +63,7 @@ object AppModule {
             .sslSocketFactory(sslContext.socketFactory, trustAll)
             .hostnameVerifier { _, _ -> true }
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.HEADERS })
             .build()
@@ -85,17 +86,17 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideCryptoApi(
-        @PlainClient client: OkHttpClient,
+    fun provideCertSignApi(
+        @PlainClient plainClient: OkHttpClient,
         moshi: Moshi
-    ): CryptoApi {
+    ): CertSignApi {
         return Retrofit.Builder()
-            .baseUrl("https://10.0.2.2:8081/")
-            .client(client)
+            .baseUrl("https://10.0.2.2:8080/")
+            .client(plainClient)
             .addConverterFactory(ScalarsConverterFactory.create())
             .addConverterFactory(MoshiConverterFactory.create(moshi))
             .build()
-            .create(CryptoApi::class.java)
+            .create(CertSignApi::class.java)
     }
 
     private fun trustAllTrustManager(): X509TrustManager = object : X509TrustManager {

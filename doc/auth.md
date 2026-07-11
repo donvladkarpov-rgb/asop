@@ -53,12 +53,16 @@
 - **Хранение приватного ключа терминала**:
     - Android: `AndroidKeyStore` с флагом `setIsStrongBoxBacked(true)` (аппаратный SE, если доступен)
     - Linux/Embedded: TPM 2.0 или внешний YubiKey
-- **Процесс регистрации терминала**:
+- **Процесс регистрации терминала** (choreographed saga через Kafka — см. раздел 5.5):
     1. При первом включении терминал генерирует пару ECC P-256 в Keystore
-    2. Формирует CSR (`POST /api/v1/terminals/register`)
-    3. Gateway подписывает CSR через Intermediate CA
-    4. Терминал получает X.509 сертификат, сохраняет в Keystore
-    5. Серийный номер сертификата фиксируется в `ASOP_TERMINALS`
+    2. POST `POST /api/v1/terminals/cert-sign` (open HTTPS, без JWT/mTLS) на Gateway
+    3. Gateway отправляет команду в `asop.terminal.cert.commands`
+    4. crypto-service подписывает CSR через Intermediate CA, публикует `CertIssued` в `asop.terminal.cert.issued`
+    5. terminal-service сохраняет сертификат в `ASOP_TERMINAL_CERTS` (`IS_CURRENT=true`), регистрирует терминал в `ASOP_TERMINALS` если нужно
+    6. terminal-service публикует `CertStored` в `asop.terminal.cert.events`
+    7. Gateway-consumer обновляет EventService (PENDING → COMPLETED + resultData)
+    8. Android получает PEM-цепочку через polling `GET /api/v1/events/{eventId}`, сохраняет в Keystore
+    9. Серийный номер сертификата фиксируется в `ASOP_TERMINALS.TERMINAL_SERIAL` (UNIQUE)
 - **Синхронизация (online)**: терминал запрашивает у Gateway:
     - Обновлённый CRL
     - Изменения в льготах (`ASOP_USER_BENEFITS`)
@@ -240,6 +244,53 @@ class TerminalPrincipalExtractor : X509PrincipalExtractor {
 4. Gateway сохраняет EventStatus.PENDING
 5. Gateway возвращает `202 Accepted` + `X-Event-Id`
 6. Клиент поллит `GET /api/v1/events/{eventId}`
+
+### 5.5. Выпуск X.509 сертификата терминала (choreographed saga, 4 hops)
+
+Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg: mTLS требует сертификата, а первый сертификат ещё нужно выпустить). Дальше mTLS становится доступным.
+
+**Android → Gateway → Kafka → crypto-service → Kafka → terminal-service → Kafka → Gateway → polling**
+
+| Шаг | Действие | Топик / endpoint | Результат |
+|-----|---------|-------------------|-----------|
+| 1 | Android генерирует ECC P-256 ключевую пару в AndroidKeyStore (StrongBox если доступен), отправляет публичный ключ | `POST /api/v1/terminals/cert-sign` (open HTTPS, без auth) | 202 Accepted + `X-Event-Id` |
+| 2 | Gateway пушит `CertSignRequested` в Kafka с `X-Event-Id` header (генерирует `eventId` = UUID v7, сохраняет EventStatus.PENDING) | `asop.terminal.cert.commands` | Команда в очереди |
+| 3 | crypto-service `@KafkaListener` подписывает через Intermediate CA, достаёт CA chain (intermediate + root PEM bundle), публикует `CertIssued` с теми же `X-Event-Id` | `asop.terminal.cert.issued` | Подписанный X.509 |
+| 4 | terminal-service `@KafkaListener` вызывает `ensureTerminal` (findByTerminalSerial → insert если новый). В `TransactionalOperator.transactional` блоке: `markAllAsNotCurrent(terminalId)` + `R2dbcEntityTemplate.insert(TerminalCertEntity(IS_CURRENT=true))`. UNIQUE partial index защищает от race condition. Публикует `CertStored` (или `CertSignFailed` при ошибке) | `asop.terminal.cert.events` | Сертификат в БД |
+| 5 | Gateway `@KafkaListener` находит EventService по `X-Event-Id`, вызывает `complete(eventId, resultData=CertStoredResult JSON)` или `fail(eventId, reason)` | — | EventService COMPLETED/FAILED |
+| 6 | Android polling `GET /api/v1/events/{eventId}` → 200 + `resultData` (JSON с `certificateBase64`, `caChain`, `terminalNumber`, `terminalId`) | — | PEM сертификат + цепочка |
+| 7 | Android сохраняет цепочку через `MtlsManager.storeCertificateChain()`. Теперь доступен mTLS | — | Терминал работает |
+
+**Гарантии консистентности:**
+- **XA через UNIQUE partial index** `uq_tc_current_per_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true` — DB-уровневая защита от race condition
+- **`TransactionalOperator.transactional(mono)`** оборачивает mark+insert в одну R2DBC-транзакцию (Spring `@Transactional` не работает в WebFlux)
+- **`X-Event-Id` через Kafka headers** — корреляция request-response в асинхронной saga без сохранения state в продюсере
+
+**`CertSignRequest` DTO** (от Android):
+```json
+{
+  "terminalSerial": "E2E-001",
+  "terminalNumber": "12345",
+  "terminalModel": "PaxTest",
+  "carrierId": "00000000-...",  // optional, null допустим
+  "terminalId": "00000000-...",   // optional, null если новый
+  "publicKeyBase64": "MFkwEw..."
+}
+```
+
+**`resultData` (для Android)**:
+```json
+{
+  "certId": "...",
+  "terminalId": "...",
+  "terminalNumber": "12345",
+  "certSerial": "abc123...",
+  "certificateBase64": "MII...",
+  "validFrom": "2026-07-11T10:00:00Z",
+  "validUntil": "2027-07-11T10:00:00Z",
+  "caChain": "-----BEGIN CERTIFICATE-----\n..."
+}
+```
 
 ---
 

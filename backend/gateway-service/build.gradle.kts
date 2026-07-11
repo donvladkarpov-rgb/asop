@@ -12,6 +12,7 @@ dependencies {
     implementation(project(":backend:shared:asop-common"))
     implementation(project(":backend:shared:asop-kafka-contracts"))
     implementation(project(":backend:shared:api:gateway-api"))
+    implementation(project(":backend:shared:api:terminal-api"))
 
     // Spring WebFlux (reactive REST)
     implementation(libs.spring.boot.starter.webflux)

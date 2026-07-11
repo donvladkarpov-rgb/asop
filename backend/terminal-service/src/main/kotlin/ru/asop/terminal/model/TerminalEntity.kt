@@ -10,9 +10,9 @@ data class TerminalEntity(
     @Id
     val terminalId: UUID,
     val carrierId: UUID?,
-    val terminalNumber: String?,
+    val terminalNumber: String? = null,
     val terminalSerial: String,
-    val terminalModel: String?,
+    val terminalModel: String? = null,
     val status: String = "WAREHOUSE",
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()

@@ -1527,5 +1527,40 @@ INSERT INTO ASOP_ROLES (ROLE_ID, ROLE_NAME) VALUES
 ON CONFLICT (ROLE_ID) DO NOTHING;
 
 -- ============================================================
+-- v002: Сертификаты терминалов + UNIQUE на TERMINAL_SERIAL
+-- ============================================================
+ALTER TABLE ASOP_TERMINALS
+    ADD CONSTRAINT uq_terminals_serial UNIQUE (TERMINAL_SERIAL);
+CREATE INDEX IF NOT EXISTS idx_terminals_serial ON ASOP_TERMINALS (TERMINAL_SERIAL);
+
+CREATE TABLE ASOP_TERMINAL_CERTS
+(
+    CERT_ID            UUID         NOT NULL,
+    TERMINAL_ID        UUID         NOT NULL,
+    CERT_SERIAL        VARCHAR(50)  NOT NULL,
+    ISSUED_AT          TIMESTAMP    NOT NULL,
+    EXPIRES_AT         TIMESTAMP    NOT NULL,
+    REVOKED_AT         TIMESTAMP,
+    REVOCATION_REASON  VARCHAR(255),
+    IS_CURRENT         BOOLEAN      NOT NULL DEFAULT true,
+    CERT_DATA          TEXT         NOT NULL,
+    CA_CHAIN           TEXT,
+    CREATED_AT         TIMESTAMP    NOT NULL DEFAULT now(),
+    CONSTRAINT pk_terminal_certs PRIMARY KEY (CERT_ID),
+    CONSTRAINT fk_tc_terminal FOREIGN KEY (TERMINAL_ID)
+        REFERENCES ASOP_TERMINALS (TERMINAL_ID)
+        DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT uq_tc_cert_serial UNIQUE (CERT_SERIAL),
+    CONSTRAINT chk_tc_dates CHECK (EXPIRES_AT > ISSUED_AT),
+    CONSTRAINT chk_tc_not_both CHECK (
+        NOT (IS_CURRENT = true AND REVOKED_AT IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_tc_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID);
+CREATE UNIQUE INDEX uq_tc_current_per_terminal
+    ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true;
+
+-- ============================================================
 -- ГОТОВО! Все UUID — v7 (Time-Ordered), генерируются на уровне приложения.
 -- ============================================================

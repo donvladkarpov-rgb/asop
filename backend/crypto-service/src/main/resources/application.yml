@@ -29,6 +29,10 @@ spring:
 
 # Настройки Root CA
 asop:
+  kafka:
+    topics:
+      terminal-cert-commands: asop.terminal.cert.commands
+      terminal-cert-issued: asop.terminal.cert.issued
   crypto:
     root-ca:
       keystore-path: ${ROOT_CA_KEYSTORE_PATH:./data/root-ca.p12}

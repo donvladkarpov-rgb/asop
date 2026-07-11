@@ -12,6 +12,9 @@ object KafkaTopic {
     // Terminal
     const val TERMINAL_COMMANDS = "asop.terminal.commands"
     const val TERMINAL_EVENTS = "asop.terminal.events"
+    const val TERMINAL_CERT_COMMANDS = "asop.terminal.cert.commands"
+    const val TERMINAL_CERT_ISSUED = "asop.terminal.cert.issued"
+    const val TERMINAL_CERT_EVENTS = "asop.terminal.cert.events"
 
     // User
     const val USER_COMMANDS = "asop.user.commands"

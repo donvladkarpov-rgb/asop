@@ -29,7 +29,9 @@ class SecurityConfig {
             ))
             .csrf { it.disable() }
             .authorizeExchange { exchanges ->
-                exchanges.anyExchange().authenticated()
+                exchanges
+                    .pathMatchers(HttpMethod.POST, "/api/v1/terminals/cert-sign").permitAll()
+                    .anyExchange().authenticated()
             }
             .x509 { x509 ->
                 x509.principalExtractor(TerminalPrincipalExtractor())

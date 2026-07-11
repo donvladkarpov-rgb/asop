@@ -138,7 +138,7 @@ backend/shared/api/{name}-api/
 #### 1. Async writes (POST/PUT/DELETE с явным контроллером)
 - Команда уходит в Kafka, gateway возвращает `202 Accepted` + `X-Event-Id`
 - `keycloakId` передаётся в Kafka headers (`X-Keycloak-Id`)
-- Пример: `CarrierController` / `CarrierCommandService`
+- Пример: `CarrierController` / `CarrierCommandService`, `CertCommandController` для cert-sign saga
 
 #### 2. Sync proxy (GET + остальные запросы)
 - `ProxyController` пересылает запросы в backend-сервисы через `WebClient`
@@ -148,8 +148,39 @@ backend/shared/api/{name}-api/
 
 #### 3. Event tracking
 - После отправки команды в Kafka `EventService` сохраняет статус `PENDING` (in-memory, TTL 30 мин)
-- Фронт поллит `GET /api/v1/events/{eventId}` до `COMPLETED`/`FAILED`
-- Пока сервисы не публикуют события в `.events` topics — статус навсегда PENDING
+- Фронт поллит `GET /api/v1/events/{eventId}`:
+  - `202 Accepted` пока PENDING
+  - `200 OK` с `resultData` когда COMPLETED (cert saga — JSON с PEM)
+  - `422 Unprocessable Entity` с `errorMessage` когда FAILED
+  - `404 Not Found` если eventId неизвестен
+- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус навсегда PENDING.
+
+#### 4. Cert signing saga (choreographed, 4 hops)
+Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg):
+
+```
+Android → POST /api/v1/terminals/cert-sign (HTTPS plain)
+       → 202 + X-Event-Id
+       ↓
+Gateway → Kafka asop.terminal.cert.commands (X-Event-Id header)
+       ↓
+crypto-service @KafkaListener → выпускает X.509 через Intermediate CA
+                            → Kafka asop.terminal.cert.issued (X-Event-Id пробрасывается)
+       ↓
+terminal-service @KafkaListener → ensureTerminal:
+                                    findByTerminalSerial → insert если новый
+                                  → TransactionalOperator.transactional:
+                                    markAllAsNotCurrent(terminalId)
+                                    R2dbcEntityTemplate.insert(TerminalCertEntity IS_CURRENT=true)
+                                  → Kafka asop.terminal.cert.events (CertStored | CertSignFailed)
+       ↓
+Gateway CertEventConsumer → EventService.complete(eventId, resultData=CertStoredResult JSON)
+                          или fail(eventId, reason)
+       ↓
+Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManager.storeCertificateChain()
+```
+
+**XA-гарантии через UNIQUE partial index:** `CREATE UNIQUE INDEX uq_tc_current_per_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true` — ловит гонку при параллельной ротации сертификатов. `TransactionalOperator` обеспечивает атомарность mark+insert в terminal-service.
 
 ### Gateway files
 
@@ -162,9 +193,12 @@ backend/shared/api/{name}-api/
 | `controller/ProxyController.kt` | Catch-all sync proxy |
 | `controller/EventController.kt` | GET /api/v1/events/{eventId} |
 | `controller/CarrierController.kt` | POST /api/v1/carriers (async) |
-| `service/EventService.kt` | In-memory event store |
+| `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (open HTTPS, async через Kafka) |
+| `service/EventService.kt` | In-memory event store с методами complete/fail |
 | `service/CarrierCommandService.kt` | Kafka producer с X-Keycloak-Id header |
-| `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) |
+| `service/CertCommandService.kt` | CertSignRequested producer в asop.terminal.cert.commands |
+| `kafka/CertEventConsumer.kt` | Listener asop.terminal.cert.events → EventService.complete/fail |
+| `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) + `resultData: String?` |
 
 ---
 
@@ -348,9 +382,15 @@ Root CA (self-signed, ECC P-256, 10 лет)
 - `ASOP_CARD_BANKS` — банковские карты
 
 **Терминалы:**
-- `ASOP_TERMINALS` — терминалы
+- `ASOP_TERMINALS` — терминалы (с `UNIQUE` constraint на `TERMINAL_SERIAL`)
 - `ASOP_DISTRIBUTOR_TERMINALS` — терминалы дистрибьюторов
 - `ASOP_TIDS` — пул TID
+- `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (создана в v002)
+  - `CERT_ID`, `TERMINAL_ID`, `CERT_SERIAL`, `ISSUED_AT`, `EXPIRES_AT`
+  - `REVOKED_AT`, `REVOCATION_REASON`, `IS_CURRENT`, `CERT_DATA` (PEM), `CA_CHAIN`, `CREATED_AT`
+  - **UNIQUE partial index** `uq_tc_current_per_terminal ON (TERMINAL_ID) WHERE IS_CURRENT = true` — не более одного активного сертификата
+  - `uq_tc_cert_serial` UNIQUE на `CERT_SERIAL`
+  - CHECK: `expires_at > issued_at`, не более одного `IS_CURRENT=true AND REVOKED_AT IS NOT NULL`
 
 **Транзакции:**
 - `ASOP_SESSIONS` — сессии (иерархические)
@@ -406,10 +446,20 @@ Liquibase запускается **отдельным Docker-контейнер�
 - API-клиент: `BASE=/api/v1`, Bearer token из oidc-client-ts
 - `useCommand` hook: паттерн 202 + polling для write-команд
 
+### Android (frontend/android-terminal)
+- Kotlin + Jetpack Compose + Hilt + Retrofit/OkHttp + Moshi
+- mTLS-auth через X.509 сертификат, выпущенный crypto-service через 4-хопную choreographed saga
+- Корневой сертификат (Root CA) и Intermediate CA встроены в truststore
+- `CertificateService` — генерация ключевой пары в AndroidKeyStore (опционально StrongBox), отправка CSR через Gateway, polling результата, сохранение PEM-цепочки через `MtlsManager.storeCertificateChain()`
+- `CertSignApi` — использует plain (без mTLS) HTTPS-клиент для endpoint'а `/api/v1/terminals/cert-sign` (chicken-and-egg при первой регистрации)
+- `GatewayApi` — использует mTLS-клиент для остальных защищённых endpoint'ов
+
 ### Страницы
 `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`
 
 Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
+
+Экран Android-приложения: **"Подписать новый сертификат"** — генерация ключевой пары, отправка публичного ключа через Gateway, polling `GET /api/v1/events/{eventId}`, сохранение сертификата и CA-цепочки в AndroidKeyStore.
 
 ---
 
@@ -535,7 +585,7 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 3. **`X509PrincipalExtractor` из `web.server.authentication`** — неправильный пакет, правильный: `preauth.x509`
 4. **`extractPrincipal` возвращает `Mono<Any>`** — интерфейс синхронный, возвращает `Any`
 5. **`BOOT_DEPENDENCIES`** — не существует как публичная константа, использовать `platform(libs.spring.boot.dependencies)`
-6. **Мало памяти для Gradle** — OOM при 20+ модулях, нужно `-Xmx4g`
+6. **Мало памяти для Gradle** — OOM при 20+ модулях, нужно `-Xmx4g`. Также используется `--no-parallel --max-workers=1` при локальной сборке под Windows (OOM при параллельной компиляции Kotlin daemon'ов).
 7. **Паттерн `.*/` в .gitignore** — игнорирует `.git`, использовать явные правила
 8. **Keycloak bare-minimum realm** — без `resetPasswordAllowed` и `directGrantFlow` ломает Direct Access Grant
 9. **Keycloak `POST /users` без credentials** — раздельный resetPassword выдаёт "Account is not fully set up"
@@ -545,26 +595,32 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 13. **`$$` dollar quotes в Liquibase sqlFile** — ломают парсинг. Использовать `$body$`.
 14. **`splitStatements: true` (default) для sqlFile** — разбивает CREATE FUNCTION на части. Использовать `splitStatements: false`.
 15. **`ReactiveCrudRepository.save()` с не-null UUID** — делает UPDATE вместо INSERT. Использовать `R2dbcEntityTemplate.insert()`.
-16. **`X500Name(cert.subjectX500Principal.name)` в crypto-service** — Java переупорядочивает DN в RFC2253, ломает PKIX на byte-level сравнении
-17. **`provision.sh` без dnsNames при DNS_NAMES == SERVICE_NAME** — сертификаты без SAN, Java 17+ отклоняет hostname verification
-18. **Gateway service URL scheme `http://`** — все сервисы слушают только HTTPS, `http://` вызывал PrematureCloseException
+16. **`@Transactional` в WebFlux не работает** — Spring AOP-прокси не может обернуть реактивную цепочку. Использовать `TransactionalOperator.transactional(mono)` для реактивных транзакций.
+17. **`X500Name(cert.subjectX500Principal.name)` в crypto-service** — Java переупорядочивает DN в RFC2253, ломает PKIX на byte-level сравнении
+18. **`provision.sh` без dnsNames при DNS_NAMES == SERVICE_NAME** — сертификаты без SAN, Java 17+ отклоняет hostname verification
+19. **Gateway service URL scheme `http://`** — все сервисы слушают только HTTPS, `http://` вызывал PrematureCloseException
+20. **Дублирование имён импортов в Kotlin** — при импорте `io.netty.handler.ssl.SslProvider` и `reactor.netty.tcp.SslProvider` в один файл — конфликт имён, не скомпилируется
 
 ### ✅ Что работает
 1. **Python для миграций** — надёжнее PowerShell, точное сравнение строк
 2. **API-модули в `backend/shared/api/`** — правильное место для контрактов
 3. **`platform(libs.spring.boot.dependencies)`** — правильный способ импорта BOM
 4. **Разделение на Chain 1 (mTLS) и Chain 2 (JWT)** — чистая архитектура
-5. **Root CA генерится автоматически** при первом старте crypto-service
-6. **UUID v7** — time-ordered, лучше для индексации чем v4
-7. **Pass-through identity** — backend сервисы не валидируют JWT, доверяют gateway
-8. **Кастомный JWT decoder** — решает проблему issuer URL в Docker
-9. **Inline credentials в Keycloak** — единственный рабочий способ для 25.x
-10. **Liquibase отдельным контейнером** — решает проблему R2DBC ↔ JDBC в сервисах
-11. **Единый v001-init.sql** — проще поддерживать, чем множество changelog'ов
-12. **Gateway sync proxy для CRUD-справочников** — не требует Kafka для простых операций
-13. **Keycloak proxy через gateway** — единый origin, без CORS, issuer адаптируется под `X-Forwarded-*` заголовки
-14. **`X500Name.getInstance(ASN1Sequence.getInstance(encoded))`** — фикс DN байтового сравнения при PKIX chain validation
-15. **`start.sh` с wave-based запуском** — последовательный запуск зависимостей через healthcheck
+5. **Cert signing choreographed saga** (gateway → crypto-service → terminal-service → gateway через Kafka) — Asynchronous Request-Reply с polling pattern
+6. **UNIQUE partial index на `IS_CURRENT=true`** — ловит race condition при параллельной ротации сертификатов
+7. **`TransactionalOperator`** для атомарности `markAllAsNotCurrent` + `R2dbcEntityTemplate.insert()` в cert saga
+8. **Root CA генерится автоматически** при первом старте crypto-service
+9. **UUID v7** — time-ordered, лучше для индексации чем v4
+10. **Pass-through identity** — backend сервисы не валидируют JWT, доверяют gateway
+11. **Кастомный JWT decoder** — решает проблему issuer URL в Docker
+12. **Inline credentials в Keycloak** — единственный рабочий способ для 25.x
+13. **Liquibase отдельным контейнером** — решает проблему R2DBC ↔ JDBC в сервисах
+14. **Единый v001-init.sql + миграции v002+** — проще поддерживать, чем множество changelog'ов
+15. **Gateway sync proxy для CRUD-справочников** — не требует Kafka для простых операций
+16. **Keycloak proxy через gateway** — единый origin, без CORS, issuer адаптируется под `X-Forwarded-*` заголовки
+17. **`X500Name.getInstance(ASN1Sequence.getInstance(encoded))`** — фикс DN байтового сравнения при PKIX chain validation
+18. **`X-Event-Id` через Kafka headers** — корреляция request-response в асинхронной saga без сохранения state в продюсере
+19. **`start.sh` с wave-based запуском** — последовательный запуск зависимостей через healthcheck
 
 ### 📋 Чеклист для новых модулей
 - [ ] Создать API-модуль в `backend/shared/api/{name}-api/`

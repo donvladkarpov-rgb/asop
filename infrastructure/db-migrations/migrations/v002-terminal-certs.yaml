@@ -1,0 +1,10 @@
+databaseChangeLog:
+  - changeSet:
+      id: v002-terminal-certs
+      author: asop
+      changes:
+        - sqlFile:
+            path: v002-terminal-certs.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: true

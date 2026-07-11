@@ -10,11 +10,16 @@ dependencies {
     // Internal
     implementation(project(":backend:shared:asop-common"))
     implementation(project(":backend:shared:api:crypto-api"))
+    implementation(project(":backend:shared:asop-kafka-contracts"))
 
     // Spring Boot
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.spring.boot.starter.security)
     implementation(libs.spring.boot.starter.actuator)
+
+    // Kafka
+    implementation(libs.spring.kafka)
+    implementation(libs.reactor.kafka)
 
     // Bouncy Castle для криптографии
     implementation(libs.bouncy.castle)

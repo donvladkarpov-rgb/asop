@@ -28,18 +28,3 @@ data class TerminalResponse(
     @Json(name = "createdAt") val createdAt: String,
     @Json(name = "updatedAt") val updatedAt: String
 )
-
-@JsonClass(generateAdapter = true)
-data class TerminalCertRequest(
-    @Json(name = "terminalSerial") val terminalSerial: String,
-    @Json(name = "carrierId") val carrierId: String,
-    @Json(name = "publicKeyBase64") val publicKeyBase64: String
-)
-
-@JsonClass(generateAdapter = true)
-data class TerminalCertResponse(
-    @Json(name = "certificateBase64") val certificateBase64: String,
-    @Json(name = "serialNumber") val serialNumber: String,
-    @Json(name = "validFrom") val validFrom: String,
-    @Json(name = "validUntil") val validUntil: String
-)

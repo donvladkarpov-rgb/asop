@@ -29,7 +29,40 @@ Gateway обрабатывает запросы двумя способами:
 
 2. **Sync proxy (GET + остальные запросы)** — `ProxyController` пересылает запросы в backend-сервисы через `WebClient`. Маппинг ресурсов (`users`, `carriers`, `cards`, etc.) → base URL сервиса определён в `ServiceRegistry`. Для local dev `ASOP_ENV=local` (default → `localhost`), для Docker `ASOP_ENV=docker` (→ Docker hostnames).
 
-3. **Event tracking** — после отправки команды в Kafka `EventService` сохраняет статус `PENDING`. Фронт поллит `GET /api/v1/events/{eventId}` до COMPLETED/FAILED. Пока сервисы не публикуют события в `.events` topics — статус навсегда PENDING. `EventController` отдаёт статус.
+3. **Event tracking** — после отправки команды в Kafka `EventService` сохраняет статус `PENDING` (in-memory `ConcurrentHashMap<UUID, EventStatus>`, TTL 30 мин). Фронт поллит `GET /api/v1/events/{eventId}`:
+   - `202 Accepted` пока PENDING
+   - `200 OK` с `resultData` когда COMPLETED (cert saga — JSON с PEM)
+   - `422 Unprocessable Entity` с `errorMessage` когда FAILED
+   - `404 Not Found` если eventId неизвестен
+
+   Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус навсегда PENDING.
+
+### Cert signing saga (choreographed, 4 hops)
+
+Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg). Поток:
+
+```
+Android → POST /api/v1/terminals/cert-sign (HTTPS plain)
+       → 202 + X-Event-Id
+       ↓
+Gateway → Kafka asop.terminal.cert.commands (X-Event-Id header)
+       ↓
+crypto-service @KafkaListener → выпускает X.509 через Intermediate CA
+                            → Kafka asop.terminal.cert.issued (X-Event-Id пробрасывается)
+       ↓
+terminal-service @KafkaListener → ensureTerminal (findByTerminalSerial → insert если новый)
+                              → TransactionalOperator.transactional:
+                                markAllAsNotCurrent(terminalId)
+                                R2dbcEntityTemplate.insert(TerminalCertEntity IS_CURRENT=true)
+                              → Kafka asop.terminal.cert.events (CertStored | CertSignFailed)
+       ↓
+Gateway CertEventConsumer → EventService.complete(eventId, resultData=CertStoredResult JSON)
+                          или fail(eventId, reason)
+       ↓
+Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManager.storeCertificateChain()
+```
+
+Подробности — `doc/context.md` раздел 9.
 
 ### Gateway files
 
@@ -37,8 +70,11 @@ Gateway обрабатывает запросы двумя способами:
 - `config/WebClientConfig.kt` — `WebClient` bean для proxy (SSL truststore из `/tmp/certs/truststore.p12`, hostname verification отключён)
 - `controller/ProxyController.kt` — catch-all `/api/v1/{resource}/**` для GET + необработанных запросов
 - `controller/EventController.kt` — `GET /api/v1/events/{eventId}`
+- `controller/CertCommandController.kt` — `POST /api/v1/terminals/cert-sign` (open HTTPS, async)
+- `service/CertCommandService.kt` — producer `CertSignRequested` в `asop.terminal.cert.commands`
+- `kafka/CertEventConsumer.kt` — consumer `asop.terminal.cert.events` → `EventService.complete/fail`
 - `service/EventService.kt` — in-memory `ConcurrentHashMap<UUID, EventStatus>` с TTL-очисткой
-- `model/EventStatus.kt` — `EventState` (PENDING, COMPLETED, FAILED) + `EventStatus`
+- `model/EventStatus.kt` — `EventState` (PENDING, COMPLETED, FAILED) + `EventStatus` (с `resultData: String?`)
 
 ### JWT issuer
 
@@ -82,7 +118,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 
 ### Gateway dual auth
 
-- **Chain 1** (`@Order(1)`): mTLS for `/api/v1/terminals/**`, `/api/v1/sync/**`. Principal = `CN` from X.509 cert.
+- **Chain 1** (`@Order(1)`): mTLS for `/api/v1/terminals/**`, `/api/v1/sync/**`. Principal = `CN` from X.509 cert. Исключение: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала).
 - **Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else. JWKS cached locally via кастомный `ReactiveJwtDecoder` (см. `JwtDecoderConfig`).
 - `X509PrincipalExtractor` is from `org.springframework.security.web.authentication.preauth.x509`, not `web.server.authentication`. It's a synchronous interface (returns `Any`, not `Mono<Any>`).
 
@@ -98,7 +134,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 
 ### Kafka topic naming
 
-Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-common`. For example: `asop.carrier.commands`, `asop.session.events`.
+Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-common`. For example: `asop.carrier.commands`, `asop.session.events`, `asop.terminal.cert.commands` (gateway→crypto), `asop.terminal.cert.issued` (crypto→terminal), `asop.terminal.cert.events` (terminal→gateway).
 
 ## Key conventions
 
@@ -112,7 +148,11 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **idempotent FK**: `ALTER TABLE ... ADD CONSTRAINT IF NOT EXISTS ... DEFERRABLE INITIALLY DEFERRED`.
 - **Liquibase quirks**: `$$` → `$body$` (dollar quoting), `splitStatements: false` для sqlFile (JDBC сам разбивает), `relativeToChangelogFile: true` во всех include.
 - **Save bug**: `ReactiveCrudRepository.save()` с не-null UUID делает UPDATE. Использовать `R2dbcEntityTemplate.insert()`.
+- **TransactionalOperator** для реактивных транзакций (Spring `@Transactional` НЕ работает в WebFlux). `transactionalOperator.transactional(mono)` оборачивает цепочку в R2DBC-транзакцию. Использовать когда несколько R2DBC-операций должны быть атомарны (например, `markAllAsNotCurrent` + `insert` в cert saga).
+- **Partial UNIQUE index** для "не более одного активного сертификата на терминал": `CREATE UNIQUE INDEX uq_tc_current_per_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true`. Защищает от race condition при параллельной ротации сертификатов.
 - **InnValidator** lives in `asop-common`, used in gateway for carrier creation
+- **CertSignRequest** DTO для endpoint'а: `{ terminalSerial, terminalNumber?, terminalModel?, carrierId?, terminalId?, publicKeyBase64 }`. Обязательные: `terminalSerial`, `publicKeyBase64`. Все остальные — optional, при первом запуске терминал регистрируется автоматически в `ensureTerminal` с `carrierId=null` если не передан.
+- **Crypto DN bug**: `X500Name(cert.subjectX500Principal.name)` в `RootCaService.signCertificate()` переупорядочивает DN компоненты (через RFC2253), что ломает PKIX chain validation на byte-level сравнении. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(cert.subjectX500Principal.encoded))`.
 - **Crypto DN bug**: `X500Name(cert.subjectX500Principal.name)` в `RootCaService.signCertificate()` переупорядочивает DN компоненты (через RFC2253), что ломает PKIX chain validation на byte-level сравнении. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(cert.subjectX500Principal.encoded))`.
 - **SAN missing bug**: `provision.sh` не передавал `dnsNames` в JSON если `$DNS_NAMES == $SERVICE_NAME`, из-за чего сертификаты выпускались без SAN. Java 17+ требует SAN для hostname verification. Фикс: всегда передавать `dnsNames` в JSON.
 - **Hostname verification**: В WebClient gateway отключена (`SslProvider.DefaultConfigurationType.NONE`) из-за сертификатов без SAN. Для production нужно исправить — выпускать корректные сертификаты с SAN.
@@ -124,12 +164,20 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 |-------|------|----------|-----|
 | GET/POST/PUT/DELETE | `/api/v1/{resource}/**` | Proxy в backend-сервисы (кроме явных обработчиков) | sync |
 | POST | `/api/v1/carriers` | Создание перевозчика (Kafka) | async |
-| GET | `/api/v1/events/{eventId}` | Статус async-команды | sync |
+| POST | `/api/v1/terminals/cert-sign` | Подписать X.509 сертификат терминала (open HTTPS, kafka, 4-hop saga) | async |
+| GET | `/api/v1/events/{eventId}` | Статус async-команды (PENDING 202 / COMPLETED 200 / FAILED 422) | sync |
 
 ### User-service (порт 8082, только через gateway)
 | Метод | Путь | Описание |
 |-------|------|----------|
 | POST | `/api/v1/users/password/change` | Смена пароля (pass-through identity) |
+
+### Terminal-service (порт 8084, mTLS через gateway)
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/v1/terminals/register` | Регистрация терминала в БД |
+| GET | `/api/v1/terminals/{id}` | Получить терминал |
+| PUT | `/api/v1/terminals/{id}/status` | Изменить статус терминала |
 
 ## Auth workflow (pass-through identity)
 
@@ -223,6 +271,7 @@ Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse
 - `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` not available in Spring 6.1 — use `"application/x-pem-file"`
 - Endpoints: `POST /api/v1/terminals/register`, `POST /api/v1/smart-cards/issue`, `GET /api/v1/terminals/root-ca(/{format})`, `POST /api/v1/certificates/server`, `GET /api/v1/certificates/ca-chain`
 - `ServerCertRequest.dnsNames` — список DNS-имён для SAN (Subject Alternative Name) в серверном сертификате
+- **Kafka consumer**: `@KafkaListener("asop.terminal.cert.commands")` в `CertCommandConsumer.kt` — выпускает X.509 через `TerminalCertService.issueTerminalCertificate()` и публикует `CertIssued` в `asop.terminal.cert.issued` с пробросом `X-Event-Id` header. CA chain (intermediate + root PEM bundle) включается в `CertIssued.caChain` для последующего сохранения рядом с сертификатом на стороне terminal-service.
 
 ## Full TLS setup
 
