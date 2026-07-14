@@ -147,6 +147,9 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **asop_schema.sql** — справочная копия v001-init.sql, не монтируется в init скрипты.
 - **idempotent FK**: `ALTER TABLE ... ADD CONSTRAINT IF NOT EXISTS ... DEFERRABLE INITIALLY DEFERRED`.
 - **Liquibase quirks**: `$$` → `$body$` (dollar quoting), `splitStatements: false` для sqlFile (JDBC сам разбивает), `relativeToChangelogFile: true` во всех include.
+- **v002-terminal-certs влит в v001**: DDL для ASOP_TERMINAL_CERTS перенесён из v002 в v001-init.sql.
+  При обновлении с версии, где v002 был отдельным changeset, Liquibase упадёт с checksum mismatch.
+  Решение — docker compose down -v (полное пересоздание БД).
 - **Save bug**: `ReactiveCrudRepository.save()` с не-null UUID делает UPDATE. Использовать `R2dbcEntityTemplate.insert()`.
 - **TransactionalOperator** для реактивных транзакций (Spring `@Transactional` НЕ работает в WebFlux). `transactionalOperator.transactional(mono)` оборачивает цепочку в R2DBC-транзакцию. Использовать когда несколько R2DBC-операций должны быть атомарны (например, `markAllAsNotCurrent` + `insert` в cert saga).
 - **Partial UNIQUE index** для "не более одного активного сертификата на терминал": `CREATE UNIQUE INDEX uq_tc_current_per_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true`. Защищает от race condition при параллельной ротации сертификатов.
