@@ -1,5 +1,6 @@
-#!/bin/sh
+#!/bin/bash
 set -e
+set -o pipefail
 
 CRYPTO_URL="${CRYPTO_URL:-https://crypto-service:8081}"
 CERT_DIR="${CERT_DIR:-/tmp/certs}"
@@ -11,8 +12,34 @@ DNS_NAMES="${DNS_NAMES:-$SERVICE_NAME}"
 mkdir -p "$CERT_DIR"
 
 info() { echo "[provision] $*"; }
+warn() { echo "[provision][WARN] $*" >&2; }
+
+# ---- JVM runner with retry and SIGTERM forwarding ----
+# На финальной попытке exec — JVM становится PID 1, получает SIGTERM напрямую.
+# На промежуточных — фоновый процесс + trap для корректной пересылки SIGTERM.
+MAX_RESTARTS=5
+run_jvm() {
+  local attempt="$1"
+  shift
+  if [ "$attempt" -eq "$MAX_RESTARTS" ]; then
+    info "Starting JVM ($SERVICE_NAME), final attempt $attempt/$MAX_RESTARTS: $*"
+    exec "$@"
+  fi
+  info "Starting JVM ($SERVICE_NAME), attempt $attempt/$MAX_RESTARTS: $*"
+  set +e
+  "$@" &
+  local child=$!
+  trap 'kill -TERM "$child" 2>/dev/null' TERM
+  wait "$child"
+  local exit_code=$?
+  set -e
+  trap - TERM
+  return $exit_code
+}
 
 # Special case: crypto-service generates self-signed cert (can't call its own API yet)
+# Retry не нужен — crypto-service сам генерирует сертификаты и не зависит от Kafka.
+# Если JVM падает, Docker перезапускает контейнер (весь скрипт заново).
 if [ "$SERVICE_NAME" = "crypto-service" ]; then
   KEYSTORE_PATH="${KEYSTORE_PATH:-file:/data/server.p12}"
   KEYSTORE_FILE=$(echo "$KEYSTORE_PATH" | sed 's/^file://')
@@ -56,6 +83,9 @@ while [ $i -lt 60 ]; do
   sleep 2
 done
 
+# Certs exist from a previous run — skip provisioning.
+# После restart certs уже есть, JVM стартует через exec (получает SIGTERM как PID 1).
+# Если Kafka недоступна и JVM падает, Docker перезапускает контейнер (весь скрипт заново).
 if [ -f "$CERT_DIR/truststore.p12" ] && [ -f "$CERT_DIR/$SERVICE_NAME.p12" ]; then
   info "Certs already exist, skipping provisioning"
   exec "$@"
@@ -120,4 +150,28 @@ rm -f "$CERT_DIR/$SERVICE_NAME-key.pem" "$CERT_DIR/$SERVICE_NAME-pub.b64" \
       "$CERT_DIR/ca-chain.pem" "$CERT_DIR/root-ca.pem" "$CERT_DIR/intermediate-ca.pem"
 
 info "Provisioning complete: $CERT_DIR/$SERVICE_NAME.p12"
-exec "$@"
+
+# ---- Run JVM with restart-on-failure (cold-start race-condition resilience) ----
+# Сервисы с @KafkaListener могут упасть, если Kafka ещё не поднялась при cold start.
+# В режиме docker-compose up зависимости обычно обеспечивают порядок старта, но
+# в dev с wave-based ручным запуском первый процесс часто проигрывает гонку.
+# Перезапускаем до MAX_RESTARTS раз с нарастающей задержкой.
+# run_jvm() использует exec на финальной попытке (JVM → PID 1, получает SIGTERM напрямую)
+# и background + trap на промежуточных (SIGTERM пересылается дочернему JVM).
+ATTEMPT=0
+while [ "$ATTEMPT" -lt "$MAX_RESTARTS" ]; do
+  ATTEMPT=$((ATTEMPT + 1))
+  set +e
+  run_jvm "$ATTEMPT" "$@"
+  EXIT_CODE=$?
+  set -e
+  if [ "$EXIT_CODE" -eq 0 ]; then
+    info "JVM exited cleanly"
+    exit 0
+  fi
+  DELAY=$((ATTEMPT * 5))
+  warn "$SERVICE_NAME exited with code $EXIT_CODE, restarting in ${DELAY}s..."
+  sleep "$DELAY"
+done
+warn "ERROR: $SERVICE_NAME failed $MAX_RESTARTS times"
+exit 1
