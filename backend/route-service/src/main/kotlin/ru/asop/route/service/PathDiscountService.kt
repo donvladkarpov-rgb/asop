@@ -17,7 +17,7 @@ class PathDiscountService(private val repo: GenericRouteRepository) {
         repo.list(tableInfo).collectList()
 
     fun getById(id: String): Mono<Map<String, Any?>> =
-        repo.getById(tableInfo, UUID.fromString(id))
+        repo.getById(tableInfo, parseId(id))
 
     fun create(data: Map<String, String?>): Mono<Map<String, Any?>> {
         val entity = PathDiscountEntity.fromRequest(data)
@@ -25,10 +25,17 @@ class PathDiscountService(private val repo: GenericRouteRepository) {
     }
 
     fun update(id: String, data: Map<String, String?>): Mono<Map<String, Any?>> {
+        val uuid = parseId(id)
         val entity = PathDiscountEntity.fromRequest(data + ("id" to id))
-        return repo.update(tableInfo, UUID.fromString(id), entity.toDbMap().filterKeys { it.lowercase() != tableInfo.pkColumn.lowercase() })
+        return repo.update(tableInfo, uuid, entity.toDbMap().filterKeys { it.lowercase() != tableInfo.pkColumn.lowercase() })
     }
 
     fun delete(id: String): Mono<Long> =
-        repo.delete(tableInfo, UUID.fromString(id))
+        repo.delete(tableInfo, parseId(id))
+
+    private fun parseId(id: String): UUID =
+        try { UUID.fromString(id) }
+        catch (e: IllegalArgumentException) {
+            throw IllegalArgumentException("Invalid UUID: '$id'")
+        }
 }
