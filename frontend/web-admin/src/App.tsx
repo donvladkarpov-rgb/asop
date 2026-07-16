@@ -18,6 +18,16 @@ import { TransactionResultsPage } from './pages/TransactionResults';
 import { ServicesPage } from './pages/Services';
 import { BenefitsPage } from './pages/Benefits';
 import { BenefitStepsPage } from './pages/BenefitSteps';
+import { FareZonesPage } from './pages/routes/FareZonesPage';
+import { TransportStopsPage } from './pages/routes/TransportStopsPage';
+import { RoutesPage } from './pages/routes/RoutesPage';
+import { PathsPage } from './pages/routes/PathsPage';
+import { PathTransportStopsPage } from './pages/routes/PathTransportStopsPage';
+import { SchedulePage } from './pages/routes/SchedulePage';
+import { PathServicesPage } from './pages/routes/PathServicesPage';
+import { PathDiscountsPage } from './pages/routes/PathDiscountsPage';
+import { PathBenefitsPage } from './pages/routes/PathBenefitsPage';
+import { VehiclesPage } from './pages/routes/VehiclesPage';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
@@ -75,6 +85,16 @@ function AppRoutes() {
         <Route path="services" element={<ServicesPage />} />
         <Route path="benefits" element={<BenefitsPage />} />
         <Route path="benefit-steps" element={<BenefitStepsPage />} />
+        <Route path="fare-zones" element={<FareZonesPage />} />
+        <Route path="transport-stops" element={<TransportStopsPage />} />
+        <Route path="routes" element={<RoutesPage />} />
+        <Route path="paths" element={<PathsPage />} />
+        <Route path="path-transport-stops" element={<PathTransportStopsPage />} />
+        <Route path="schedule" element={<SchedulePage />} />
+        <Route path="path-services" element={<PathServicesPage />} />
+        <Route path="path-discounts" element={<PathDiscountsPage />} />
+        <Route path="path-benefits" element={<PathBenefitsPage />} />
+        <Route path="vehicles" element={<VehiclesPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

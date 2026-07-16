@@ -25,7 +25,8 @@ include(
     ":backend:shared:api:debt-api",
     ":backend:shared:api:fiscal-api",
     ":backend:shared:api:audit-api",
-    ":backend:shared:api:reference-api"
+    ":backend:shared:api:reference-api",
+    ":backend:shared:api:route-api"
 )
 
 // ============ Backend services ============
@@ -40,5 +41,6 @@ include(
     ":backend:session-service",
     ":backend:audit-service",
     ":backend:crypto-service",
-    ":backend:admin-service"
+    ":backend:admin-service",
+    ":backend:route-service"
 )

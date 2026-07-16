@@ -31,6 +31,19 @@ const refItems = [
   { to: '/benefit-steps', label: 'Шаги льгот', icon: '📐' }
 ];
 
+const routeItems = [
+  { to: '/fare-zones', label: 'Тарифные зоны', icon: '🗺️' },
+  { to: '/transport-stops', label: 'Остановки', icon: '🚏' },
+  { to: '/routes', label: 'Маршруты', icon: '🚌' },
+  { to: '/paths', label: 'Пути', icon: '➡️' },
+  { to: '/path-transport-stops', label: 'Остановки на пути', icon: '📍' },
+  { to: '/schedule', label: 'Расписание', icon: '🕐' },
+  { to: '/path-services', label: 'Услуги на пути', icon: '⚙️' },
+  { to: '/path-discounts', label: 'Скидки на пути', icon: '💸' },
+  { to: '/path-benefits', label: 'Льготы на пути', icon: '🎫' },
+  { to: '/vehicles', label: 'ТС', icon: '🚐' },
+];
+
 const bottomItems = [
   { to: '/password', label: 'Сменить пароль', icon: '🔑' },
 ];
@@ -90,6 +103,22 @@ export function Sidebar() {
       <CollapsibleSection label="Справочники">
         <nav className="sidebar-nav">
           {refItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
+      <CollapsibleSection label="Маршруты и Пути" defaultOpen={true}>
+        <nav className="sidebar-nav">
+          {routeItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

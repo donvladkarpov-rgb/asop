@@ -14,6 +14,7 @@ data class TerminalEntity(
     val terminalSerial: String,
     val terminalModel: String? = null,
     val status: String = "WAREHOUSE",
+    val timezone: String? = null,
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()
 )

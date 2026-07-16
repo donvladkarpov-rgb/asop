@@ -94,6 +94,13 @@ export interface Benefit {
   isActive: boolean;
 }
 
+export interface Carrier {
+  id: string;
+  carrierName: string;
+  inn: string;
+  regionId: string;
+}
+
 export interface BenefitStep {
   id: string;
   benefitId: string;

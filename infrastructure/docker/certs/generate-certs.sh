@@ -112,6 +112,7 @@ SERVICES=(
   "audit-service:audit-service"
   "fiscal-service:fiscal-service"
   "admin-service:admin-service"
+  "route-service:route-service"
   "crypto-service:crypto-service"
   "kafka:kafka"
   "keycloak:keycloak,localhost"

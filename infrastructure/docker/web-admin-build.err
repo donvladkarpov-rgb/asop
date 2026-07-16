@@ -1,0 +1,19 @@
+ Image docker-web-admin Building 
+Dockerfile:4
+
+--------------------
+
+   2 |     WORKDIR /app
+
+   3 |     COPY package.json package-lock.json ./
+
+   4 | >>> RUN npm ci --legacy-peer-deps
+
+   5 |     COPY . .
+
+   6 |     RUN npm run build
+
+--------------------
+
+failed to solve: process "/bin/sh -c npm ci --legacy-peer-deps" did not complete successfully: exit code: 1
+

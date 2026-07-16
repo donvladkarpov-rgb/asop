@@ -8,8 +8,13 @@ export function SessionTypesPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ['session-types'], queryFn: getSessionTypes });
   const [edit, setEdit] = useState<Partial<SessionType> | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const createMut = useMutation({ mutationFn: createSessionType, onSuccess: () => { qc.invalidateQueries({ queryKey: ['session-types'] }); setShowForm(false); } });
+  const createMut = useMutation({
+    mutationFn: createSessionType,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['session-types'] }); setShowForm(false); setFormError(null); },
+    onError: (e) => setFormError(JSON.stringify((e as { response?: { data?: unknown } })?.response?.data ?? (e as Error).message)),
+  });
   const updateMut = useMutation({ mutationFn: ({ id, data }: { id: string; data: Partial<SessionType> }) => updateSessionType(id, data), onSuccess: () => { qc.invalidateQueries({ queryKey: ['session-types'] }); setEdit(null); } });
   const deleteMut = useMutation({ mutationFn: deleteSessionType, onSuccess: () => qc.invalidateQueries({ queryKey: ['session-types'] }) });
 
@@ -24,11 +29,14 @@ export function SessionTypesPage() {
       </div>
 
       {(showForm || edit) && (
+        <>
         <SessionTypeForm
           initial={edit}
           onSave={(d) => edit?.id ? updateMut.mutate({ id: edit.id!, data: d }) : createMut.mutate(d)}
-          onCancel={() => { setShowForm(false); setEdit(null); }}
+          onCancel={() => { setShowForm(false); setEdit(null); setFormError(null); }}
         />
+        {formError && <div style={{ color: 'red', marginTop: 8 }}>{formError}</div>}
+        </>
       )}
 
       <table className="data-table">

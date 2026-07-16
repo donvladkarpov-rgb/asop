@@ -2,6 +2,7 @@ package ru.asop.carrier.controller
 
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.RestController
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.carrier.controller.CarrierApi
 import ru.asop.api.carrier.dto.request.CarrierCreateRequest
@@ -15,6 +16,8 @@ import java.util.UUID
 class CarrierController(
     private val carrierService: CarrierService
 ) : CarrierApi {
+
+    override fun listCarriers(): Flux<CarrierResponse> = carrierService.findAll()
 
     override fun createCarrier(
         request: CarrierCreateRequest,

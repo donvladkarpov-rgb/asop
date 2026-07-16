@@ -10,8 +10,13 @@ export function BenefitsPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ['benefits', filterRegion], queryFn: () => getBenefits(filterRegion || undefined) });
   const [edit, setEdit] = useState<Partial<Benefit> | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const createMut = useMutation({ mutationFn: createBenefit, onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefits'] }); setShowForm(false); } });
+  const createMut = useMutation({
+    mutationFn: createBenefit,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefits'] }); setShowForm(false); setFormError(null); },
+    onError: (e) => setFormError(JSON.stringify((e as { response?: { data?: unknown } })?.response?.data ?? (e as Error).message)),
+  });
   const updateMut = useMutation({ mutationFn: ({ id, data }: { id: string; data: Partial<Benefit> }) => updateBenefit(id, data), onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefits'] }); setEdit(null); } });
   const deleteMut = useMutation({ mutationFn: deleteBenefit, onSuccess: () => qc.invalidateQueries({ queryKey: ['benefits'] }) });
 
@@ -32,12 +37,15 @@ export function BenefitsPage() {
       </div>
 
       {(showForm || edit) && (
-        <BenefitForm
-          regions={regions || []}
-          initial={edit}
-          onSave={(d) => edit?.id ? updateMut.mutate({ id: edit.id!, data: d }) : createMut.mutate(d)}
-          onCancel={() => { setShowForm(false); setEdit(null); }}
-        />
+        <>
+          <BenefitForm
+            regions={regions || []}
+            initial={edit}
+            onSave={(d) => edit?.id ? updateMut.mutate({ id: edit.id!, data: d }) : createMut.mutate(d)}
+            onCancel={() => { setShowForm(false); setEdit(null); setFormError(null); }}
+          />
+          {formError && <div style={{ color: 'red', marginTop: 8 }}>{formError}</div>}
+        </>
       )}
 
       <table className="data-table">

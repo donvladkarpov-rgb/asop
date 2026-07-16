@@ -18,7 +18,7 @@ fi
 # Проверка что собирали JAR'ы
 check_jars() {
   local missing=0
-  for svc in gateway-service crypto-service user-service terminal-service session-service card-service carrier-service debt-service audit-service fiscal-service admin-service; do
+  for svc in gateway-service crypto-service user-service terminal-service session-service card-service carrier-service debt-service audit-service fiscal-service admin-service route-service; do
     jar_path="$SCRIPT_DIR/../../backend/$svc/build/libs/$svc-*.jar"
     if ! ls $jar_path >/dev/null 2>&1; then
       warn "JAR не найден: $svc (нужен ./gradlew bootJar)"
@@ -66,7 +66,7 @@ info "Ожидание 30 сек..."
 sleep 30
 
 info "=== Wave 7: Приложения (группа B) ==="
-$COMPOSE up -d --no-deps carrier-service terminal-service card-service
+$COMPOSE up -d --no-deps carrier-service terminal-service card-service route-service
 info "Ожидание 30 сек..."
 sleep 30
 

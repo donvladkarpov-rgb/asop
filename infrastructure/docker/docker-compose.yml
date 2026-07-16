@@ -1,5 +1,11 @@
 x-jvm-opts: &jvm-opts
-  JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/tmp/certs/truststore.p12 -Djavax.net.ssl.trustStorePassword=changeit -Djavax.net.ssl.trustStoreType=PKCS12"
+  JAVA_TOOL_OPTIONS: >-
+    -Djavax.net.ssl.trustStore=/tmp/certs/truststore.p12
+    -Djavax.net.ssl.trustStorePassword=changeit
+    -Djavax.net.ssl.trustStoreType=PKCS12
+    -XX:+UseContainerSupport
+    -XX:MaxRAMPercentage=75.0
+    -Dfile.encoding=UTF-8
 
 services:
   # === Infrastructure ===
@@ -142,7 +148,7 @@ services:
   # === Application Services ===
 
   crypto-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/crypto-service
       dockerfile: Dockerfile
@@ -177,7 +183,7 @@ services:
       - asop-net
 
   gateway-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/gateway-service
       dockerfile: Dockerfile
@@ -516,7 +522,7 @@ services:
       - asop-net
 
   admin-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/admin-service
       dockerfile: Dockerfile
@@ -530,6 +536,37 @@ services:
       KEY_ALIAS: admin-service
       DNS_NAMES: admin-service
       KEYSTORE_PATH: file:/tmp/certs/admin-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
+    depends_on:
+      crypto-service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - asop-net
+
+  route-service:
+    mem_limit: 128m
+    build:
+      context: ../../backend/route-service
+      dockerfile: Dockerfile
+    ports:
+      - "8092:8092"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
+    environment:
+      <<: *jvm-opts
+      SERVICE_NAME: route-service
+      KEY_ALIAS: route-service
+      DNS_NAMES: route-service
+      KEYSTORE_PATH: file:/tmp/certs/route-service.p12
       TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
       DB_HOST: postgres
       DB_PORT: 5432

@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Region, Territory, Organizer, OrganizerTerritory, Role, CardType, TariffType, SessionType, EventType, TransactionType, TransactionResult, Service, Benefit, BenefitStep } from '../types/reference';
+import type { Region, Territory, Organizer, OrganizerTerritory, Role, CardType, TariffType, SessionType, EventType, TransactionType, TransactionResult, Service, Benefit, Carrier, BenefitStep } from '../types/reference';
 
 export const getRegions = () =>
   apiClient.get<Region[]>('/regions').then((r) => r.data);
@@ -137,6 +137,12 @@ export const updateBenefit = (id: string, data: Partial<Benefit>) =>
   apiClient.put<Benefit>(`/benefits/${id}`, data).then((r) => r.data);
 export const deleteBenefit = (id: string) =>
   apiClient.delete(`/benefits/${id}`);
+
+// Carriers
+export const getCarriers = () =>
+  apiClient.get<Carrier[]>('/carriers').then((r) => r.data);
+
+// Vehicles — moved to api/routes.ts (per-table CRUD for route-service)
 
 // Benefit Steps
 export const getBenefitSteps = (benefitId?: string) =>

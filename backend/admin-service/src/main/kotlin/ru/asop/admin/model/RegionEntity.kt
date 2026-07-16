@@ -17,5 +17,6 @@ data class RegionEntity(
     val oktmoCode: String? = null,
     val oktmoBudgetCode: String? = null,
     val fiasId: String? = null,
-    val registryRecordId: String? = null
+    val registryRecordId: String? = null,
+    val timezone: String = "UTC"
 )

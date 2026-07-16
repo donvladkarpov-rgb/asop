@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.carrier.dto.request.CarrierCreateRequest
 import ru.asop.api.carrier.dto.request.CarrierUpdateRequest
@@ -17,6 +18,9 @@ import java.util.UUID
 
 @RequestMapping("/api/v1/carriers")
 interface CarrierApi {
+
+    @GetMapping
+    fun listCarriers(): Flux<CarrierResponse>
 
     @PostMapping
     fun createCarrier(

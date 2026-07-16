@@ -1,0 +1,5 @@
+ Image docker-web-admin Building 
+ Image docker-crypto-service Building 
+ Image docker-gateway-service Building 
+ Image docker-certs-init Building 
+ Image docker-web-admin Built 

@@ -1,6 +1,7 @@
 package ru.asop.carrier.service
 
 import org.springframework.stereotype.Service
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.carrier.dto.request.CarrierCreateRequest
 import ru.asop.api.carrier.dto.request.CarrierUpdateRequest
@@ -41,6 +42,9 @@ class CarrierService(
                 carrierRepository.save(updated).map { it.toResponse() }
             }
     }
+
+    fun findAll(): Flux<CarrierResponse> =
+        carrierRepository.findAll().map { it.toResponse() }
 
     fun getById(id: UUID): Mono<CarrierResponse> {
         return carrierRepository.findById(id).map { it.toResponse() }

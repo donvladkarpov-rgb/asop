@@ -12,7 +12,7 @@ import ru.asop.api.reference.dto.request.BenefitCreateRequest
 import ru.asop.api.reference.dto.request.BenefitUpdateRequest
 import ru.asop.api.reference.dto.response.BenefitResponse
 import ru.asop.common.util.UuidUtils
-import java.time.LocalDateTime
+import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -21,8 +21,13 @@ class BenefitController(
     private val template: R2dbcEntityTemplate
 ) : BenefitApi {
 
-    override fun listBenefits(): Mono<ResponseEntity<List<BenefitResponse>>> {
-        return repository.findAll()
+    override fun listBenefits(regionId: UUID?): Mono<ResponseEntity<List<BenefitResponse>>> {
+        val benefits = if (regionId != null) {
+            repository.findByRegionId(regionId)
+        } else {
+            repository.findAll()
+        }
+        return benefits
             .map { it.toResponse() }
             .collectList()
             .map { ResponseEntity.ok(it) }
@@ -35,7 +40,7 @@ class BenefitController(
     }
 
     override fun createBenefit(request: BenefitCreateRequest): Mono<ResponseEntity<BenefitResponse>> {
-        val now = LocalDateTime.now()
+        val now = Instant.now()
         val entity = BenefitEntity(
             benefitId = UuidUtils.newId(),
             benefitCode = request.benefitCode,
@@ -59,7 +64,7 @@ class BenefitController(
                     regionId = request.regionId ?: existing.regionId,
                     description = request.description ?: existing.description,
                     isActive = request.isActive ?: existing.isActive,
-                    updatedAt = LocalDateTime.now()
+                    updatedAt = Instant.now()
                 )
                 repository.save(updated).map { ResponseEntity.ok(it.toResponse()) }
             }

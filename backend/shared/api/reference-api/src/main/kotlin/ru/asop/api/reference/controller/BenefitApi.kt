@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import reactor.core.publisher.Mono
 import ru.asop.api.reference.dto.request.BenefitCreateRequest
 import ru.asop.api.reference.dto.request.BenefitUpdateRequest
@@ -19,7 +20,7 @@ import java.util.UUID
 interface BenefitApi {
 
     @GetMapping
-    fun listBenefits(): Mono<ResponseEntity<List<BenefitResponse>>>
+    fun listBenefits(@RequestParam(required = false) regionId: UUID? = null): Mono<ResponseEntity<List<BenefitResponse>>>
 
     @GetMapping("/{id}")
     fun getBenefit(@PathVariable id: UUID): Mono<ResponseEntity<BenefitResponse>>
