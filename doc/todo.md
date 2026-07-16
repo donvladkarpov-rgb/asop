@@ -9,9 +9,10 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 
 - [x] **Cert signing saga (4 hops)** — реализована через Kafka:
       `Gateway → asop.terminal.cert.commands → crypto-service → asop.terminal.cert.issued → terminal-service → asop.terminal.cert.events → Gateway EventService`
-- [x] **`ASOP_TERMINAL_CERTS` таблица** — добавлена в v002 миграцию с UNIQUE partial index `uq_tc_current_per_terminal`
+- [x] **`ASOP_TERMINAL_CERTS` таблица** — DDL влит в v001-init.sql (ранее v002), UNIQUE partial index `uq_tc_current_per_terminal`
 - [x] **`UNIQUE` constraint на `ASOP_TERMINALS.TERMINAL_SERIAL`** — защита от дублей терминалов
 - [x] **Android rewrite** — `CertificateService.kt` теперь идёт через Gateway + polling `GET /api/v1/events/{eventId}`
+- [x] **CertCommandConsumer error handlers** — `.subscribe(onNext, onError)` с логированием ошибок публикации в Kafka
 
 Детали по компрометации ключей — см. `infrastructure/docker/todo.md`.
 
@@ -102,6 +103,12 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **Dockerfile bug** ✅
 - [x] **Gateway SSL всегда включён** ✅ (SSL_ENABLED больше не используется)
 - [x] **cert-managed crypto-service** ✅ (через provision.sh entrypoint)
+- [x] **route-service добавлен** ✅ (порт 8092, 10 контроллеров, GenericRouteRepository)
+- [x] **vehicles перенесены в route-service** ✅ (из carrier-service)
+- [x] **provision.sh SIGTERM fix** ✅ (trap handler для graceful shutdown)
+- [x] **start.ps1** ✅ (PowerShell wave-based запуск для Windows)
+- [x] **3 бага route-service/crypto-service** ✅ (created_at, subscribe error handler, UUID validation + ExceptionHandler)
+- [x] **Keystore fallback paths** ✅ (унифицированы во всех application.yml)
 - [ ] **Ключи/сертификаты: план на production**
   - Сейчас в dev: `docker compose down -v` → fresh CA + certs каждый раз
   - В production: ключи будут в HSM / Kubernetes Secrets, не в volumes

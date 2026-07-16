@@ -87,14 +87,14 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 
 Применён в gateway-service и user-service. Для других сервисов нужно добавить при запуске.
 
-### Module structure (22 modules in `settings.gradle.kts`)
+### Module structure (27 modules in `settings.gradle.kts`)
 
 ```
 :backend:shared:asop-common          # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, util
 :backend:shared:asop-dto             # пусто (DTO перенесены в API-модули)
 :backend:shared:asop-kafka-contracts # Kafka event classes
-:backend:shared:api:{domain}-api     # Controller interfaces + DTO (11 модулей)
-:backend:{domain}-service            # Spring Boot apps (11 сервисов)
+:backend:shared:api:{domain}-api     # Controller interfaces + DTO (12 модулей)
+:backend:{domain}-service            # Spring Boot apps (12 сервисов)
 ```
 
 Service → API dependency: `implementation(project(":backend:shared:api:{domain}-api"))`.
@@ -110,11 +110,12 @@ API → asop-common dependency via `api(platform(...))` pattern.
 | `terminal-service` | 8084 | Terminal management |
 | `session-service` | 8085 | Sessions/shifts (tree hierarchy) |
 | `card-service` | 8086 | Cards (MIFARE, bank) |
-| `carrier-service` | 8087 | Carriers, contracts, vehicles (R2DBC) |
+| `carrier-service` | 8087 | Carriers, contracts (R2DBC) |
 | `debt-service` | 8088 | Card debts |
 | `audit-service` | 8089 | Inspections (КРС) |
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
 | `admin-service` | 8091 | Справочники (Regions, Territories, Organizers) |
+| `route-service` | 8092 | Routes, fare zones, transport stops, vehicles, paths, schedule (R2DBC) |
 
 ### Gateway dual auth
 
@@ -129,7 +130,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
-- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Regions, Territories, Organizers
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule
 - Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
 ### Kafka topic naming
@@ -156,9 +157,15 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **InnValidator** lives in `asop-common`, used in gateway for carrier creation
 - **CertSignRequest** DTO для endpoint'а: `{ terminalSerial, terminalNumber?, terminalModel?, carrierId?, terminalId?, publicKeyBase64 }`. Обязательные: `terminalSerial`, `publicKeyBase64`. Все остальные — optional, при первом запуске терминал регистрируется автоматически в `ensureTerminal` с `carrierId=null` если не передан.
 - **Crypto DN bug**: `X500Name(cert.subjectX500Principal.name)` в `RootCaService.signCertificate()` переупорядочивает DN компоненты (через RFC2253), что ломает PKIX chain validation на byte-level сравнении. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(cert.subjectX500Principal.encoded))`.
-- **Crypto DN bug**: `X500Name(cert.subjectX500Principal.name)` в `RootCaService.signCertificate()` переупорядочивает DN компоненты (через RFC2253), что ломает PKIX chain validation на byte-level сравнении. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(cert.subjectX500Principal.encoded))`.
 - **SAN missing bug**: `provision.sh` не передавал `dnsNames` в JSON если `$DNS_NAMES == $SERVICE_NAME`, из-за чего сертификаты выпускались без SAN. Java 17+ требует SAN для hostname verification. Фикс: всегда передавать `dnsNames` в JSON.
 - **Hostname verification**: В WebClient gateway отключена (`SslProvider.DefaultConfigurationType.NONE`) из-за сертификатов без SAN. Для production нужно исправить — выпускать корректные сертификаты с SAN.
+- **route-service ExceptionHandler**: `@RestControllerAdvice` в `route-service/config/ExceptionHandler.kt` мапит `IllegalArgumentException` → 400 (невалидный UUID в path variable) и `IllegalStateException` → 400 (missing required fields в `fromRequest`). Все 10 service используют `parseId()` хелпер для безопасного UUID parsing.
+- **provision.sh SIGTERM**: bash как PID 1 контейнера не пересылает SIGTERM дочернему процессу. Фикс: `run_jvm()` функция с `trap 'kill -TERM $child' TERM` + `wait $child` на промежуточных попытках, `exec "$@"` на финальной.
+- **Keystore fallback paths**: Все `application.yml` используют `/tmp/certs/{service-name}.p12` как fallback для `KEYSTORE_PATH` (не `/certs/service.p12`). crypto-service — edge case (`./data/server.p12`).
+- **admin-service mem_limit**: 256m (128m недостаточно — OOM-killer на 14 R2DBC repositories).
+- **web-admin Dockerfile**: `npm ci --legacy-peer-deps` (конфликт typescript 6.x vs openapi-typescript 7.x peer dep).
+- **start.ps1**: PowerShell-скрипт для wave-based запуска Docker из Windows (Git Bash не видит Docker Desktop — unix socket). `--build` обязателен после пересборки JARs.
+- **CertCommandConsumer subscribe**: `.subscribe(onNext, onError)` с error handler — без него ошибка публикации в Kafka проглатывалась, терминал зависал в PENDING навсегда.
 
 ## Endpoints (реализовано)
 
@@ -181,6 +188,20 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 | POST | `/api/v1/terminals/register` | Регистрация терминала в БД |
 | GET | `/api/v1/terminals/{id}` | Получить терминал |
 | PUT | `/api/v1/terminals/{id}/status` | Изменить статус терминала |
+
+### Route-service (порт 8092, через gateway)
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET/POST/PUT/DELETE | `/api/v1/fare-zones/**` | Тарифные зоны (с GeoJSON полигонами) |
+| GET/POST/PUT/DELETE | `/api/v1/transport-stops/**` | Остановки транспорта |
+| GET/POST/PUT/DELETE | `/api/v1/routes/**` | Маршруты |
+| GET/POST/PUT/DELETE | `/api/v1/paths/**` | Маршруты следования |
+| GET/POST/PUT/DELETE | `/api/v1/vehicles/**` | Транспортные средства |
+| GET/POST/PUT/DELETE | `/api/v1/schedule/**` | Расписание |
+| GET/POST/PUT/DELETE | `/api/v1/path-transport-stops/**` | Остановки на маршруте |
+| GET/POST/PUT/DELETE | `/api/v1/path-services/**` | Услуги на маршруте |
+| GET/POST/PUT/DELETE | `/api/v1/path-discounts/**` | Скидки на маршруте |
+| GET/POST/PUT/DELETE | `/api/v1/path-benefits/**` | Льготы на маршруте |
 
 ## Auth workflow (pass-through identity)
 
@@ -265,6 +286,10 @@ Each service has its own `Dockerfile` in `backend/{service}/Dockerfile` (eclipse
 ### Тестовые данные
 
 Пока скриптов нет. Будут заполняться специальными скриптами после успешного запуска всех сервисов. Следить за `infrastructure/docker/todo.md`.
+
+### Windows запуск
+
+Git Bash не видит Docker Desktop (unix socket `/var/run/docker.sock` не существует на Windows). Для запуска из PowerShell используйте `infrastructure/docker/start.ps1` — wave-based скрипт, аналог `start.sh`. `--build` обязателен после пересборки JARs (стартовые волны 6-9 включают `--build` для application-сервисов).
 
 ## Crypto (crypto-service)
 

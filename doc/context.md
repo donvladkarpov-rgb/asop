@@ -1,7 +1,7 @@
 # Контекст проекта ASOP — Полный гайд
 
 **Дата создания:** 08 июля 2026
-**Версия:** 0.2.0-SNAPSHOT
+**Версия:** 0.3.0-SNAPSHOT
 **Статус:** MVP в разработке
 
 ---
@@ -56,7 +56,8 @@ backend/
 ├── debt-service/              # Долги по картам
 ├── fiscal-service/            # Фискализация (ОФД)
 ├── audit-service/             # КРС (контролёры)
-└── admin-service/             # Справочники (Regions, Territories, Organizers)
+├── admin-service/             # Справочники (Regions, Territories, Organizers)
+└── route-service/             # Маршруты, тарифные зоны, остановки, ТС (R2DBC)
 ```
 
 ---
@@ -82,7 +83,7 @@ backend/shared/api/{name}-api/
 
 **Service → API dependency:** `implementation(project(":backend:shared:api:{domain}-api"))`
 
-### Все модули (25)
+### Все модули (27)
 ```
 :backend:shared:asop-common
 :backend:shared:asop-dto
@@ -97,7 +98,8 @@ backend/shared/api/{name}-api/
 :backend:shared:api:debt-api
 :backend:shared:api:fiscal-api
 :backend:shared:api:audit-api
-:backend:shared:api:reference-api
+:backend:shared:api:admin-api
+:backend:shared:api:route-api
 :backend:gateway-service
 :backend:carrier-service
 :backend:crypto-service
@@ -109,6 +111,7 @@ backend/shared/api/{name}-api/
 :backend:fiscal-service
 :backend:audit-service
 :backend:admin-service
+:backend:route-service
 ```
 
 ### Сервисы и порты
@@ -121,11 +124,12 @@ backend/shared/api/{name}-api/
 | `terminal-service` | 8084 | Terminal management |
 | `session-service` | 8085 | Sessions/shifts (tree hierarchy) |
 | `card-service` | 8086 | Cards (MIFARE, bank) |
-| `carrier-service` | 8087 | Carriers, contracts, vehicles (R2DBC) |
+| `carrier-service` | 8087 | Carriers, contracts (R2DBC) |
 | `debt-service` | 8088 | Card debts |
 | `audit-service` | 8089 | Inspections (КРС) |
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
 | `admin-service` | 8091 | Справочники (Regions, Territories, Organizers) |
+| `route-service` | 8092 | Routes, fare zones, transport stops, vehicles, paths, schedule (R2DBC) |
 
 ---
 
@@ -373,7 +377,14 @@ Root CA (self-signed, ECC P-256, 10 лет)
 **Перевозчики:**
 - `ASOP_CARRIERS` — перевозчики
 - `ASOP_CONTRACTS` — договоры
-- `ASOP_VEHICLES` — транспортные средства
+
+**Маршруты (route-service):**
+- `ASOP_ROUTES` — справочник маршрутов
+- `ASOP_FARE_ZONES` — тарифные зоны (с `ZONE_POLYGON GEOGRAPHY(POLYGON, 4326)`)
+- `ASOP_TRANSPORT_STOPS` — остановки (с `ZONE_POLYGON GEOGRAPHY(POLYGON, 4326)`)
+- `ASOP_PATHS` — маршруты следования
+- `ASOP_VEHICLES` — транспортные средства (перенесены из carrier-service)
+- `ASOP_SCHEDULE`, `ASOP_PATH_TRANSPORT_STOPS`, `ASOP_PATH_SERVICES`, `ASOP_PATH_DISCOUNTS`, `ASOP_PATH_BENEFITS`
 
 **Карты:**
 - `ASOP_CARDS` — все карты
@@ -385,8 +396,8 @@ Root CA (self-signed, ECC P-256, 10 лет)
 - `ASOP_TERMINALS` — терминалы (с `UNIQUE` constraint на `TERMINAL_SERIAL`)
 - `ASOP_DISTRIBUTOR_TERMINALS` — терминалы дистрибьюторов
 - `ASOP_TIDS` — пул TID
-- `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (создана в v002)
-  - `CERT_ID`, `TERMINAL_ID`, `CERT_SERIAL`, `ISSUED_AT`, `EXPIRES_AT`
+- `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (DDL влит в v001-init.sql, ранее v002)
+  - `CERT_ID`, `TERMINAL_ID`, `CERT_SERIAL`, `ISSUED_AT` (TIMESTAMPTZ), `EXPIRES_AT` (TIMESTAMPTZ)
   - `REVOKED_AT`, `REVOCATION_REASON`, `IS_CURRENT`, `CERT_DATA` (PEM), `CA_CHAIN`, `CREATED_AT`
   - **UNIQUE partial index** `uq_tc_current_per_terminal ON (TERMINAL_ID) WHERE IS_CURRENT = true` — не более одного активного сертификата
   - `uq_tc_cert_serial` UNIQUE на `CERT_SERIAL`
@@ -417,9 +428,10 @@ Root CA (self-signed, ECC P-256, 10 лет)
 Liquibase запускается **отдельным Docker-контейнером** (`liquibase:4.27`) после `postgres:healthy` и завершается после наката миграций.
 
 **Структура:**
-- `db.changelog-master.yaml` → `migrations/v001-init.yaml` → `v001-init.sql` (единый SQL)
-- Все 67 таблиц, функции (gen_uuid_v7, set_timestamps, update_timestamps), seed roles
+- `db.changelog-master.yaml` → `migrations/v001-init.yaml` → `v001-init.sql` (единый SQL, включая ASOP_TERMINAL_CERTS — ранее в v002)
+- Все 67+ таблиц, функции (gen_uuid_v7, set_timestamps, update_timestamps), seed roles
 - Все FK idempotent: `ADD CONSTRAINT IF NOT EXISTS ... DEFERRABLE INITIALLY DEFERRED`
+- **v002-terminal-certs влит в v001**: при обновлении с версии, где v002 был отдельным changeset — Liquibase checksum mismatch. Решение: `docker compose down -v`.
 
 **Liquibase quirks:**
 - `$$` dollar quotes не работают — использовать `$body$`
@@ -455,7 +467,7 @@ Liquibase запускается **отдельным Docker-контейнер�
 - `GatewayApi` — использует mTLS-клиент для остальных защищённых endpoint'ов
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
 
 Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
 
@@ -560,20 +572,34 @@ desktop.ini
 
 ## 13. Docker deploy
 
+**Договорённость:** Docker стартует с нуля каждый раз. Все volumes удаляются между запусками.
+
 ```bash
 # 1. Build JARs
 ./gradlew bootJar --no-daemon
 
-# 2. Build & start all containers
+# 2. Полный перезапуск с очисткой всех данных
+docker compose -f infrastructure/docker/docker-compose.yml down -v
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 
-# 3. Specific service
+# 3. Пересобрать и запустить конкретный сервис
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-service
+
+# 4. Wave-based запуск (Windows PowerShell)
+.\infrastructure\docker\start.ps1
 ```
 
 Каждый сервис имеет свой `Dockerfile` (`eclipse-temurin:21-jre`).
 Liquibase запускается отдельным контейнером (image: `liquibase:4.27`), который монтирует `infrastructure/db-migrations/` в `/db-migrations/`, выполняет миграции и завершается.
-Docker-compose включает 16 контейнеров + liquibase (exited 0).
+Docker-compose включает 19 контейнеров (11 application services + route-service + web-admin + postgres + kafka + keycloak + zookeeper + liquibase + certs-init).
+
+**Важно:**
+- `down -v` удаляет `crypto_data`, `certs_data`, `postgres_data` — всё пересоздаётся с нуля
+- `--build` обязателен после пересборки JARs — иначе Docker запустит старые образы
+- `admin-service` имеет `mem_limit: 256m` (128m недостаточно — OOM-killer на 14 R2DBC repositories)
+- `web-admin` Dockerfile использует `npm ci --legacy-peer-deps` (конфликт typescript 6.x vs openapi-typescript 7.x)
+- `provision.sh` корректно пересылает SIGTERM в JVM (trap handler) для graceful shutdown
+- `start.ps1` — PowerShell-аналог `start.sh` для запуска из Windows (Git Bash не видит Docker Desktop)
 
 ---
 
@@ -621,6 +647,13 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 17. **`X500Name.getInstance(ASN1Sequence.getInstance(encoded))`** — фикс DN байтового сравнения при PKIX chain validation
 18. **`X-Event-Id` через Kafka headers** — корреляция request-response в асинхронной saga без сохранения state в продюсере
 19. **`start.sh` с wave-based запуском** — последовательный запуск зависимостей через healthcheck
+20. **`start.ps1` для Windows** — Git Bash не видит Docker Desktop (unix socket); PowerShell-скрипт для wave-based запуска
+21. **`provision.sh` SIGTERM forwarding** — bash как PID 1 не пересылает SIGTERM дочернему процессу; нужен `trap 'kill -TERM $child' TERM` + `wait $child`
+22. **route-service ExceptionHandler** — `@RestControllerAdvice` для `IllegalArgumentException` → 400 (невалидный UUID в path variable) и `IllegalStateException` → 400 (missing required fields в fromRequest)
+23. **TransportStopEntity `created_at` bug** — `toDbMap()` использовал `Instant.now()` вместо поля `createdAt`, теряя timestamp на UPDATE
+24. **CertCommandConsumer `.subscribe()` без error handler** — ошибка публикации в Kafka проглатывалась, терминал зависал в PENDING навсегда; фикс — `.subscribe(onNext, onError)` с логированием
+25. **Keystore fallback paths** — все `application.yml` должны использовать `/tmp/certs/{service-name}.p12` (не `/certs/service.p12`) для local dev
+26. **admin-service OOM** — 128m недостаточно для Spring Boot с 14 R2DBC repositories; нужно 256m
 
 ### 📋 Чеклист для новых модулей
 - [ ] Создать API-модуль в `backend/shared/api/{name}-api/`
@@ -649,4 +682,4 @@ Docker-compose включает 16 контейнеров + liquibase (exited 0)
 ---
 
 **Конец документа.**
-*Версия: 0.2.1 — обновлено 10 июля 2026*
+*Версия: 0.3.0 — обновлено 16 июля 2026*

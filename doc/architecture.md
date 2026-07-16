@@ -1,7 +1,7 @@
 # Архитектура платформы ASOP
 
-**Версия:** 1.0
-**Дата:** 2026-07-09
+**Версия:** 1.1
+**Дата:** 2026-07-16
 **Статус:** MVP в разработке
 
 ---
@@ -53,8 +53,8 @@
 :backend:shared:asop-common           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, утилиты
 :backend:shared:asop-dto              # Пусто — DTO перенесены в API-модули
 :backend:shared:asop-kafka-contracts  # Классы Kafka-событий
-:backend:shared:api:{domain}-api      # 10 модулей: интерфейсы контроллеров + DTO (без реализации)
-:backend:{domain}-service             # 10 Spring Boot приложений с реализацией
+:backend:shared:api:{domain}-api      # 12 модулей: интерфейсы контроллеров + DTO (без реализации)
+:backend:{domain}-service             # 12 Spring Boot приложений с реализацией
 ```
 
 ### Граф зависимостей
@@ -87,11 +87,12 @@ backend/shared/api/{name}-api/
 | terminal-service | 8084 | Управление терминалами |
 | session-service | 8085 | Сессии/смены (иерархия) |
 | card-service | 8086 | Карты (MIFARE, банковские) |
-| carrier-service | 8087 | Перевозчики, договоры, ТС (R2DBC) |
+| carrier-service | 8087 | Перевозчики, договоры (R2DBC) |
 | debt-service | 8088 | Долги по картам |
 | audit-service | 8089 | КРС (проверки) |
 | fiscal-service | 8090 | Фискализация (ОФД) |
 | admin-service | 8091 | Справочники (Regions, Territories, Organizers) |
+| route-service | 8092 | Маршруты, тарифные зоны, остановки, ТС, расписание (R2DBC) |
 
 ---
 
@@ -371,7 +372,7 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 - `useCommand` hook: паттерн 202 + polling для write-команд
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
 
 ---
 
@@ -380,13 +381,18 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 ### Docker
 ```bash
 ./gradlew bootJar
+docker compose -f infrastructure/docker/docker-compose.yml down -v
 docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 ```
+
+`--build` обязателен после пересборки JARs. `down -v` удаляет volumes (fresh-start конвенция).
 
 Каждый сервис имеет `Dockerfile` (eclipse-temurin:21-jre). Liquibase миграции монтируются из `infrastructure/db-migrations/` в `/db-migrations/` внутри контейнера.
 
 ### Docker Compose
-Все 11 сервисов + PostgreSQL + Kafka + Keycloak + Zookeeper + Liquibase + web-admin на общей сети `asop-net`.
+Все 12 сервисов + route-service + PostgreSQL + Kafka + Keycloak + Zookeeper + Liquibase + web-admin на общей сети `asop-net`.
+
+**Запуск из Windows:** `.\infrastructure\docker\start.ps1` (PowerShell wave-based скрипт). Git Bash не видит Docker Desktop.
 
 ### Ключевые переменные окружения
 | Переменная | Назначение |
