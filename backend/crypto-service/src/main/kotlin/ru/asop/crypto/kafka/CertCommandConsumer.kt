@@ -92,7 +92,15 @@ class CertCommandConsumer(
                 validFrom = validFrom,
                 validUntil = validUntil,
                 caChain = caChain
-            ).subscribe()
+            ).subscribe(
+                { /* success: log already below */ },
+                { err ->
+                    log.error(
+                        "Failed to publish CertIssued event: eventId={}, terminalSerial={}, error={}",
+                        eventId, event.terminalSerial, err.message, err
+                    )
+                }
+            )
 
             log.info(
                 "CertIssued published: eventId={}, terminalSerial={}, certSerial={}, validUntil={}",
@@ -108,7 +116,15 @@ class CertCommandConsumer(
                 terminalSerial = event.terminalSerial,
                 terminalId = event.terminalId,
                 reason = e.message ?: e::class.simpleName ?: "Unknown error"
-            ).subscribe()
+            ).subscribe(
+                { /* success: nothing */ },
+                { err ->
+                    log.error(
+                        "Failed to publish CertSignFailed event: eventId={}, terminalSerial={}, error={}",
+                        eventId, event.terminalSerial, err.message, err
+                    )
+                }
+            )
         }
     }
 
