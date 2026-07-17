@@ -16,7 +16,30 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 
 Детали по компрометации ключей — см. `infrastructure/docker/todo.md`.
 
-## 2. Frontend: Admin UI
+## 2. Android Terminal (Offline Buffering) ✅
+
+- [x] **Room DB**: `AppDatabase` с 3 сущностями (`PendingEventEntity`, `SessionEntity`, `TransactionEntity`) + 3 DAO
+- [x] **SyncPreferences**: DataStore для terminalId, sessionId, lastSyncTime
+- [x] **SyncApi**: 10 Retrofit endpoint'ов под `/api/v1/sync/**` (mTLS)
+- [x] **GatewayApi**: terminal CRUD + `GET /api/v1/events/{eventId}`
+- [x] **SyncWorker**: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
+- [x] **EventPollWorker**: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
+- [x] **GpsTrackingService**: foreground service, FusedLocationProviderClient, 30s interval, batch threshold 10
+- [x] **NetworkMonitor**: ConnectivityManager.NetworkCallback → one-shot sync on reconnect
+- [x] **Hilt-Work**: AsopTerminalApp implements Configuration.Provider
+- [x] **SyncViewModel + MainScreen**: sync status card, pending badge, GPS toggle, manual sync button
+- [x] **Все DTO выровнены с backend API контрактами** (AcceptedResponse, SessionOpenRequest, TransactionCompleteRequest, CardRegisterRequest, CardBlockRequest, DebtCreateRequest, FiscalReceiptRequest, AuditTaskCreateRequest, GpsPositionReport)
+
+## 3. Integration Wiring ✅
+
+- [x] **CommandEventConsumer** в gateway-service — слушает все 7 domain event topics, извлекает X-Event-Id, вызывает EventService.complete/fail
+- [x] **application.yml** gateway — consumer config + все 7 event topic properties
+- [x] **EventPollWorker** — обработка 404 (→ FAILED), MAX_POLL_RETRIES=20
+- [x] **GpsTrackingService** — триггерит one-shot sync при batch threshold
+- [x] **WorkScheduler** — schedulePeriodicSync вызывается из AsopTerminalApp.onCreate
+- [x] **doc/smoke-tests.md** — 7 end-to-end сценариев с HTTP-трассировкой
+
+## 4. Frontend: Admin UI
 
 - [ ] **Страницы**:
   - [ ] `CarriersPage` — список перевозчиков
@@ -33,7 +56,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - [x] Форма смены пароля в профиле
   - [x] `POST /api/v1/users/password/change`
 
-## 3. Keycloak 25 Совместимость
+## 5. Keycloak 25 Совместимость
 
 - [ ] **Prod: отключить Direct Access Grant**, оставить только OIDC Auth Code + PKCE
   - Сейчас в MVP используется Direct Access Grant для разработки
@@ -45,7 +68,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - realm с полными настройками
   - ✅ Исправлено
 
-## 4. Shared UserResolver
+## 6. Shared UserResolver
 
 - [ ] **Создать shared UserResolver в `asop-common`**
   - Интерфейс: `fun resolveUserId(keycloakId: String): Mono<UUID>`
@@ -53,7 +76,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - Кеширование результата (Caffeine)
   - Используется всеми сервисами для resolve keycloakId → userId
 
-## 5. JWT decoder для всех сервисов
+## 7. JWT decoder для всех сервисов
 
 - [ ] **Добавить JwtDecoderConfig или permitAll в сервисы:**
   - [ ] carrier-service
@@ -66,7 +89,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 
   Каждый сервис должен иметь либо `JwtDecoderConfig.kt` (как в gateway), либо `SecurityConfig` с `permitAll` (как в user-service).
 
-## 6. Liquibase / Миграции
+## 8. Liquibase / Миграции
 
 - [x] **user-service**:
   - Решено: Liquibase запускается отдельным контейнером, сервисы не содержат DataSource.
@@ -81,14 +104,14 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - [ ] audit-service
   - [ ] fiscal-service
 
-## 7. PKI / Сертификаты
+## 9. PKI / Сертификаты
 
 - [x] **DN encoding bug** — `X500Name(name)` в crypto-service переупорядочивает компоненты DN, PKIX chain validation падает. Фикс: `X500Name.getInstance(ASN1Sequence.getInstance(encoded))`.
 - [x] **SAN in certs** — provision.sh всегда передаёт `dnsNames` в JSON при запросе сертификата.
 - [ ] **Production SSL**: отключить `defaultConfiguration(NONE)` в gateway WebClient и включить hostname verification.
 - [ ] **Production: выпускать сертификаты с SAN из provision.sh** — сейчас gateway работает с отключенной проверкой.
 
-## 8. i18n / Многоязычность
+## 10. i18n / Многоязычность
 
 - [ ] **Добавить i18n (react-intl или i18next)**
   - [ ] Создать файлы переводов: ru.json, en.json
@@ -98,7 +121,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - [ ] Язык по умолчанию: русский
   - [ ] Сохранять выбор языка в localStorage
 
-## 8. Прочее
+## 11. Прочее
 
 - [x] **Dockerfile bug** ✅
 - [x] **Gateway SSL всегда включён** ✅ (SSL_ENABLED больше не используется)

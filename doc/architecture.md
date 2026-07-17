@@ -158,10 +158,25 @@ XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TE
 | `config/WebClientConfig.kt` | WebClient bean для proxy |
 | `controller/ProxyController.kt` | Sync proxy (catch-all) |
 | `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (async через Kafka) |
+| `controller/SessionCommandController.kt` | POST /sync/sessions/open, PUT /sync/sessions/{id}/close (mTLS async) |
+| `controller/TransactionCommandController.kt` | POST /sync/transactions (mTLS async) |
+| `controller/CardCommandController.kt` | POST /sync/cards/register, POST /sync/cards/{id}/block (mTLS async) |
+| `controller/DebtCommandController.kt` | POST /sync/debts, PUT /sync/debts/{id}/recover (mTLS async) |
+| `controller/FiscalCommandController.kt` | POST /sync/fiscal/receipts (mTLS async) |
+| `controller/AuditCommandController.kt` | POST /sync/audit/tasks (mTLS async) |
+| `controller/GpsCommandController.kt` | POST /sync/gps/positions (mTLS async) |
 | `controller/EventController.kt` | Эндпоинт статуса события |
 | `service/EventService.kt` | In-memory event store с методами complete/fail |
 | `service/CertCommandService.kt` | Producer CertSignRequested в `asop.terminal.cert.commands` |
+| `service/SessionCommandService.kt` | Производитель SessionOpenedEvent/SessionClosedEvent |
+| `service/TransactionCommandService.kt` | Производитель TransactionCompletedEvent |
+| `service/CardCommandService.kt` | Производитель CardRegisteredEvent/CardBlockedEvent |
+| `service/DebtCommandService.kt` | Производитель DebtCreatedEvent/DebtRecoveredEvent |
+| `service/FiscalCommandService.kt` | Производитель FiscalReceiptRequestedEvent |
+| `service/AuditCommandService.kt` | Производитель AuditTaskCreatedEvent |
+| `service/GpsCommandService.kt` | Производитель GpsPositionReported |
 | `kafka/CertEventConsumer.kt` | Listener `asop.terminal.cert.events` → EventService.complete/fail |
+| `kafka/CommandEventConsumer.kt` | Listener всех 7 domain event topics → EventService.complete/fail |
 | `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) + `resultData: String?` |
 
 ---
@@ -277,9 +292,26 @@ Gateway проверяет JWT, извлекает `sub` (keycloakId), пере�
 Шаблон: `asop.{domain}.{commands|events}`
 
 Определён в `KafkaTopic` в `asop-common`:
+
+**Command topics (gateway → сервисы):**
 - `asop.carrier.commands` — команды записи перевозчиков
-- `asop.session.events` — доменные события сессий
+- `asop.session.commands` — open/close session
+- `asop.transaction.commands` — complete transaction
+- `asop.card.commands` — register/block card
+- `asop.debt.commands` — create/recover debt
+- `asop.fiscal.commands` — request fiscal receipt
+- `asop.audit.commands` — create audit task
+- `asop.gps.commands` — report GPS position
 - `asop.terminal.cert.commands` — команды выпуска X.509 (gateway → crypto-service)
+
+**Event topics (сервисы → gateway):**
+- `asop.session.events` — доменные события сессий
+- `asop.transaction.events` — события транзакций
+- `asop.card.events` — события карт
+- `asop.debt.events` — события долгов
+- `asop.fiscal.events` — события фискализации
+- `asop.audit.events` — события КРС
+- `asop.gps.events` — события GPS
 - `asop.terminal.cert.issued` — выпущенные сертификаты (crypto-service → terminal-service)
 - `asop.terminal.cert.events` — сохранённые сертификаты + ошибки (terminal-service → gateway)
 
@@ -288,13 +320,14 @@ Gateway проверяет JWT, извлекает `sub` (keycloakId), пере�
 2. Gateway отправляет команду в `asop.{domain}.commands`
 3. Gateway возвращает `202 Accepted` + `X-Event-Id`
 4. Backend-сервис потребляет команду, обрабатывает, публикует событие в `asop.{domain}.events`
-5. Consumer обновляет статус события (`EventService.complete/fail`)
-6. Клиент получает `200 OK` с `resultData` (cert saga) при следующем polling `GET /api/v1/events/{eventId}`
+5. **CommandEventConsumer** (gateway) слушает все 7 domain event topics, извлекает `X-Event-Id` из Kafka headers, вызывает `EventService.complete/fail`
+6. Клиент получает `200 OK` с `resultData` при polling `GET /api/v1/events/{eventId}`
 
-Для cert-sign saga поток расширен: gateway → crypto-service → terminal-service → gateway через 3 топика и проброс `X-Event-Id` через Kafka headers для корреляции.
+Для cert-sign saga поток расширен: gateway → crypto-service → terminal-service → gateway через 3 топика (`commands`, `issued`, `events`) и проброс `X-Event-Id` через Kafka headers для корреляции.
 
 ### Заголовки
 - `X-Keycloak-Id`: keycloakId аутентифицированного пользователя (трассировка)
+- `X-Event-Id`: идентификатор события для корреляции команд (используется `CommandEventConsumer` для вызова `EventService.complete/fail`)
 
 ---
 
@@ -359,20 +392,42 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 
 ## 10. Фронтенд
 
-### Стек
-- Vite + React 18 + TypeScript
-- React Router (клиентская маршрутизация)
-- TanStack Query (серверное состояние)
-- oidc-client-ts (OIDC Auth Code + PKCE)
-- Axios (HTTP-клиент)
-
-### Архитектура
+### Web Admin (`frontend/web-admin/`)
+- Vite + React 18 + TypeScript + react-router + TanStack Query + oidc-client-ts
 - Vite dev mode проксирует `/api` → `http://localhost:8080` (gateway)
 - API-клиент: `BASE=/api/v1`, Bearer token из oidc-client-ts
 - `useCommand` hook: паттерн 202 + polling для write-команд
+- Страницы: `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+- Язык UI: русский (для английского нужен i18n)
 
-### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+### Android Terminal (`frontend/android-terminal/`)
+- Kotlin + Jetpack Compose + Hilt + Room + WorkManager
+- mTLS auth через X.509 сертификат crypto-service
+
+**Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
+
+**Компоненты:**
+- `AppDatabase` (Room): 3 сущности — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` + 3 DAOs
+- `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
+- `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
+- `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}`
+- `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
+- `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
+- `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
+- `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
+- `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store
+- `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
+- `WorkScheduler`: schedulePeriodicSync вызывается из `AsopTerminalApp.onCreate`
+
+**Sync flow:**
+```
+Offline:  UI → Room (PendingEvent PENDING)
+          GPS → Room (PendingEvent PENDING)
+Online:   NetworkCallback → SyncWorker → POST /sync/** → 202 + eventId → SENDING
+          EventPollWorker → GET /events/{eventId} → 200 COMPLETED / 422 FAILED
+```
+
+**Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
 
 ---
 

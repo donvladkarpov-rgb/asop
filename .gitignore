@@ -97,3 +97,4 @@ build/
 *.tmp
 *.bak
 *.cache
+prompt-*.md

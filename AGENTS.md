@@ -73,8 +73,27 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - `controller/CertCommandController.kt` — `POST /api/v1/terminals/cert-sign` (open HTTPS, async)
 - `service/CertCommandService.kt` — producer `CertSignRequested` в `asop.terminal.cert.commands`
 - `kafka/CertEventConsumer.kt` — consumer `asop.terminal.cert.events` → `EventService.complete/fail`
+- `kafka/CommandEventConsumer.kt` — consumer всех 7 domain event topics → `EventService.complete/fail`
 - `service/EventService.kt` — in-memory `ConcurrentHashMap<UUID, EventStatus>` с TTL-очисткой
 - `model/EventStatus.kt` — `EventState` (PENDING, COMPLETED, FAILED) + `EventStatus` (с `resultData: String?`)
+
+**Terminal async command controllers** (все под mTLS `/api/v1/sync/**`):
+- `controller/SessionCommandController.kt` — open/close session → Kafka
+- `controller/TransactionCommandController.kt` — complete transaction → Kafka
+- `controller/CardCommandController.kt` — register/block card → Kafka
+- `controller/DebtCommandController.kt` — create/recover debt → Kafka
+- `controller/FiscalCommandController.kt` — request fiscal receipt → Kafka
+- `controller/AuditCommandController.kt` — create audit task → Kafka
+- `controller/GpsCommandController.kt` — report GPS position → Kafka
+
+**Terminal command services** (gateway → Kafka producers):
+- `service/SessionCommandService.kt` — SessionOpenedEvent/SessionClosedEvent → `asop.session.commands`
+- `service/TransactionCommandService.kt` — TransactionCompletedEvent → `asop.transaction.commands`
+- `service/CardCommandService.kt` — CardRegisteredEvent/CardBlockedEvent → `asop.card.commands`
+- `service/DebtCommandService.kt` — DebtCreatedEvent/DebtRecoveredEvent → `asop.debt.commands`
+- `service/FiscalCommandService.kt` — FiscalReceiptRequestedEvent → `asop.fiscal.commands`
+- `service/AuditCommandService.kt` — AuditTaskCreatedEvent → `asop.audit.commands`
+- `service/GpsCommandService.kt` — GpsPositionReported → `asop.gps.commands`
 
 ### JWT issuer
 
@@ -126,7 +145,31 @@ API → asop-common dependency via `api(platform(...))` pattern.
 ### Frontend
 
 - **`frontend/web-admin/`**: Vite + React + TypeScript + react-router + TanStack Query + oidc-client-ts
-- **`frontend/android-terminal/`**: Android (Kotlin + Jetpack Compose) — приложение для терминала. mTLS auth через X.509 сертификат crypto-service.
+- **`frontend/android-terminal/`**: Android (Kotlin + Jetpack Compose + Hilt + Room + WorkManager) — приложение для терминала. mTLS auth через X.509 сертификат crypto-service.
+
+  **Офлайн-буферизация:** Все write-команды (session open/close, transaction, card register/block, debt create/recover, fiscal receipt, audit task, GPS position) сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
+
+  **Компоненты:**
+  - `AppDatabase` (Room): 3 сущности — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` + 3 DAOs
+  - `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
+  - `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
+  - `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}`
+  - `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
+  - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
+  - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
+  - `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
+  - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store
+  - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
+
+  **Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
+
+  **Sync flow:**
+  ```
+  Offline:  UI → Room (PendingEvent PENDING)
+            GPS → Room (PendingEvent PENDING)
+  Online:   NetworkCallback → SyncWorker → POST /sync/** → 202 + eventId → SENDING
+            EventPollWorker → GET /events/{eventId} → 200 COMPLETED / 422 FAILED
+  ```
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
@@ -176,6 +219,18 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 | POST | `/api/v1/carriers` | Создание перевозчика (Kafka) | async |
 | POST | `/api/v1/terminals/cert-sign` | Подписать X.509 сертификат терминала (open HTTPS, kafka, 4-hop saga) | async |
 | GET | `/api/v1/events/{eventId}` | Статус async-команды (PENDING 202 / COMPLETED 200 / FAILED 422) | sync |
+| POST | `/api/v1/sync/sessions/open` | Открыть сессию (mTLS terminal) | async |
+| PUT | `/api/v1/sync/sessions/{id}/close` | Закрыть сессию (mTLS terminal) | async |
+| POST | `/api/v1/sync/transactions` | Завершить транзакцию (mTLS terminal) | async |
+| POST | `/api/v1/sync/cards/register` | Зарегистрировать карту (mTLS terminal) | async |
+| POST | `/api/v1/sync/cards/{id}/block` | Блокировать карту (mTLS terminal) | async |
+| POST | `/api/v1/sync/debts` | Создать долг (mTLS terminal) | async |
+| PUT | `/api/v1/sync/debts/{id}/recover` | Погасить долг (mTLS terminal) | async |
+| POST | `/api/v1/sync/fiscal/receipts` | Запросить фискальный чек (mTLS terminal) | async |
+| POST | `/api/v1/sync/audit/tasks` | Создать задание КРС (mTLS terminal) | async |
+| POST | `/api/v1/sync/gps/positions` | Отправить GPS-координату (mTLS terminal) | async |
+
+**Terminal async flow:** все async endpoint'ы доступны только через mTLS (chain Order 1, `/api/v1/sync/**`). Gateway возвращает 202 + X-Event-Id. Android терминал поллит `GET /api/v1/events/{eventId}` до COMPLETED/FAILED.
 
 ### User-service (порт 8082, только через gateway)
 | Метод | Путь | Описание |

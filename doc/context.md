@@ -459,12 +459,16 @@ Liquibase запускается **отдельным Docker-контейнер�
 - `useCommand` hook: паттерн 202 + polling для write-команд
 
 ### Android (frontend/android-terminal)
-- Kotlin + Jetpack Compose + Hilt + Retrofit/OkHttp + Moshi
+- Kotlin + Jetpack Compose + Hilt + Room + WorkManager + Retrofit/OkHttp + Moshi
 - mTLS-auth через X.509 сертификат, выпущенный crypto-service через 4-хопную choreographed saga
 - Корневой сертификат (Root CA) и Intermediate CA встроены в truststore
 - `CertificateService` — генерация ключевой пары в AndroidKeyStore (опционально StrongBox), отправка CSR через Gateway, polling результата, сохранение PEM-цепочки через `MtlsManager.storeCertificateChain()`
 - `CertSignApi` — использует plain (без mTLS) HTTPS-клиент для endpoint'а `/api/v1/terminals/cert-sign` (chicken-and-egg при первой регистрации)
 - `GatewayApi` — использует mTLS-клиент для остальных защищённых endpoint'ов
+
+**Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
+
+См. подробнее в `doc/smoke-tests.md` (7 сценариев интеграционного тестирования).
 
 ### Страницы
 `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
@@ -654,6 +658,10 @@ Docker-compose включает 19 контейнеров (11 application servic
 24. **CertCommandConsumer `.subscribe()` без error handler** — ошибка публикации в Kafka проглатывалась, терминал зависал в PENDING навсегда; фикс — `.subscribe(onNext, onError)` с логированием
 25. **Keystore fallback paths** — все `application.yml` должны использовать `/tmp/certs/{service-name}.p12` (не `/certs/service.p12`) для local dev
 26. **admin-service OOM** — 128m недостаточно для Spring Boot с 14 R2DBC repositories; нужно 256m
+27. **Async terminal writes vs sync admin writes** — осознанный CQRS-lite split. Admin operations (route-service CRUD, admin справочники, carrier, card, audit, fiscal, debt) — sync через ProxyController (online, low latency, HTTP cache). Terminal operations (sessions, transactions, GPS, cards register/block, debts, fiscal, audit tasks) — async через Kafka (offline-capable, eventual consistency, 202 + polling).
+28. **CommandResult generic pattern** — единый контракт для подтверждения async команд. Backend consumer после DB write публикует `CommandResult(eventId, "COMPLETED" | "FAILED", resultData, errorMessage)` в `{domain}.events`. Gateway `CommandEventConsumer` обновляет `EventService`. Android `EventPollWorker` получает результат через polling `GET /api/v1/events/{eventId}`.
+29. **Android offline buffering** — Room DB (PendingEventEntity) + WorkManager (SyncWorker 15 min, EventPollWorker 5 min) + GpsTrackingService foreground service. Offline → enqueue в Room. Online → flush через SyncWorker → 202 + eventId → polling COMPLETED/FAILED.
+30. **EventService in-memory (TTL 30 min)** — MVP архитектура. Для production нужен persistent store (Redis/Postgres) — при рестарте gateway теряются все PENDING статусы, Android polling получает 404 → FAILED.
 
 ### 📋 Чеклист для новых модулей
 - [ ] Создать API-модуль в `backend/shared/api/{name}-api/`
