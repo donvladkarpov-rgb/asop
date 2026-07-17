@@ -41,7 +41,7 @@ data class DebtCreatedEvent(
  */
 data class DebtRecoveredEvent(
     val debtId: UUID,
-    val cardId: UUID,
+    val cardId: UUID?,
     val recoveryTransactionId: UUID,
     val recoveredAt: Instant,
 

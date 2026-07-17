@@ -37,8 +37,9 @@ data class SessionOpenedEvent(
  */
 data class SessionClosedEvent(
     val sessionId: UUID,
-    val status: String,
-    val closedByUserId: UUID?,
+    val status: String = "CLOSED",
+    val closedByUserId: UUID? = null,
+    val reason: String? = null,
     val closedAt: Instant,
 
     override val aggregateType: String = "Session",

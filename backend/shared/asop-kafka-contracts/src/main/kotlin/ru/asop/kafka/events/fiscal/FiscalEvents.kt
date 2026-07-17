@@ -10,8 +10,10 @@ import java.util.UUID
 data class FiscalReceiptRequestedEvent(
     val receiptId: UUID,
     val transactionId: UUID,
-    val carrierId: UUID,
-    val carrierFiscalizerId: UUID,
+    val carrierId: UUID?,
+    val carrierFiscalizerId: UUID?,
+    val amount: java.math.BigDecimal,
+    val description: String? = null,
     val requestedAt: Instant,
 
     override val aggregateType: String = "FiscalReceipt",

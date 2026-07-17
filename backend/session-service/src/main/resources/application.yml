@@ -40,8 +40,16 @@ spring:
       group-id: session-service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
 
 asop:
   kafka:
     topics:
       session-commands: asop.session.commands
+      session-events: asop.session.events
+      gps-commands: asop.gps.commands
+      gps-events: asop.gps.events

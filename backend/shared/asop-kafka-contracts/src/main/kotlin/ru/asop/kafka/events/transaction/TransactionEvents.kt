@@ -7,6 +7,8 @@ import java.util.UUID
 
 /**
  * Событие завершения транзакции.
+ * Публикуется терминалом через gateway (async) → Kafka asop.transaction.commands.
+ * transaction-service обрабатывает и сохраняет в ASOP_TRANSACTIONS + ASOP_TRANSACTION_CARDS.
  */
 data class TransactionCompletedEvent(
     val transactionId: UUID,
@@ -14,7 +16,9 @@ data class TransactionCompletedEvent(
     val transactionTypeId: UUID,
     val transactionResultId: UUID,
     val amount: BigDecimal,
-    val currency: String,
+    val currency: String = "RUB",
+    val cardId: UUID?,
+    val metadata: String? = null,
     val completedAt: Instant,
 
     override val aggregateType: String = "Transaction",

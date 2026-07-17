@@ -1,24 +1,35 @@
 package ru.asop.session.kafka
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.apache.kafka.clients.producer.ProducerRecord
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
+import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
+import org.springframework.messaging.handler.annotation.Header
 import org.springframework.stereotype.Component
-import ru.asop.session.model.SessionEntity
-import ru.asop.session.repository.SessionRepository
+import ru.asop.common.kafka.KafkaTopic
+import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.session.SessionOpenedEvent
 import ru.asop.kafka.events.session.SessionClosedEvent
+import ru.asop.session.model.SessionEntity
+import ru.asop.session.repository.SessionRepository
+import java.util.UUID
 
 @Component
 class SessionCommandConsumer(
     private val sessionRepository: SessionRepository,
-    private val objectMapper: ObjectMapper
+    private val objectMapper: ObjectMapper,
+    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     @KafkaListener(topics = ["\${asop.kafka.topics.session-commands}"])
-    fun handleCommand(json: String) {
+    fun handleCommand(
+        json: String,
+        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
+    ) {
         log.debug("Received session command: {}", json)
+        val eventId = parseEventId(eventIdHeader)
 
         try {
             val node = objectMapper.readTree(json)
@@ -27,20 +38,21 @@ class SessionCommandConsumer(
             when (eventType) {
                 "SessionOpened" -> {
                     val event = objectMapper.treeToValue(node, SessionOpenedEvent::class.java)
-                    handleSessionOpened(event)
+                    handleSessionOpened(event, eventId)
                 }
                 "SessionClosed" -> {
                     val event = objectMapper.treeToValue(node, SessionClosedEvent::class.java)
-                    handleSessionClosed(event)
+                    handleSessionClosed(event, eventId)
                 }
                 else -> log.warn("Unknown session event type: {}", eventType)
             }
         } catch (e: Exception) {
             log.error("Failed to deserialize session command: {}", e.message, e)
+            publishFailed(eventId, e.message ?: "Deserialization error")
         }
     }
 
-    private fun handleSessionOpened(event: SessionOpenedEvent) {
+    private fun handleSessionOpened(event: SessionOpenedEvent, eventId: UUID) {
         log.info("Processing SessionOpenedEvent: sessionId={}", event.sessionId)
 
         val entity = SessionEntity(
@@ -56,12 +68,18 @@ class SessionCommandConsumer(
             updatedAt = event.occurredAt
         )
         sessionRepository.save(entity)
-            .doOnSuccess { log.info("Session saved: {}", it.sessionId) }
-            .doOnError { e -> log.error("Failed to save session: {}", e.message, e) }
+            .doOnSuccess {
+                log.info("Session saved: {}", it.sessionId)
+                publishComplete(eventId, mapOf("sessionId" to it.sessionId.toString(), "status" to "IN_PROGRESS"))
+            }
+            .doOnError { e ->
+                log.error("Failed to save session: {}", e.message, e)
+                publishFailed(eventId, e.message ?: "Save error")
+            }
             .subscribe()
     }
 
-    private fun handleSessionClosed(event: SessionClosedEvent) {
+    private fun handleSessionClosed(event: SessionClosedEvent, eventId: UUID) {
         log.info("Processing SessionClosedEvent: sessionId={}", event.sessionId)
 
         sessionRepository.findById(event.sessionId)
@@ -73,8 +91,38 @@ class SessionCommandConsumer(
                 )
                 sessionRepository.save(updated)
             }
-            .doOnSuccess { log.info("Session closed: {}", event.sessionId) }
-            .doOnError { e -> log.error("Failed to close session: {}", e.message, e) }
+            .doOnSuccess {
+                log.info("Session closed: {}", event.sessionId)
+                publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "CLOSED"))
+            }
+            .doOnError { e ->
+                log.error("Failed to close session: {}", e.message, e)
+                publishFailed(eventId, e.message ?: "Close error")
+            }
             .subscribe()
+    }
+
+    private fun publishComplete(eventId: UUID, data: Map<String, String>) {
+        val json = objectMapper.writeValueAsString(data)
+        val result = CommandResult(eventId = eventId, status = "COMPLETED", resultData = json)
+        val record = ProducerRecord(KafkaTopic.SESSION_EVENTS, eventId.toString(), result as Any)
+        record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+        kafkaTemplate.send(record).subscribe()
+    }
+
+    private fun publishFailed(eventId: UUID, errorMessage: String) {
+        val result = CommandResult(eventId = eventId, status = "FAILED", errorMessage = errorMessage)
+        val record = ProducerRecord(KafkaTopic.SESSION_EVENTS, eventId.toString(), result as Any)
+        record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+        kafkaTemplate.send(record).subscribe()
+    }
+
+    private fun parseEventId(header: ByteArray?): UUID {
+        if (header == null) return UUID.randomUUID()
+        return try {
+            UUID.fromString(String(header))
+        } catch (e: IllegalArgumentException) {
+            UUID.randomUUID()
+        }
     }
 }

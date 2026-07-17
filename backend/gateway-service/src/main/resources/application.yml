@@ -43,6 +43,14 @@ spring:
       trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
     properties:
       security.protocol: SSL
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      group-id: gateway-command-events
+      auto-offset-reset: earliest
+      properties:
+        isolation.level: read_committed
+
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
@@ -57,7 +65,13 @@ asop:
   kafka:
     topics:
       terminal-cert-events: asop.terminal.cert.events
-    # ������� �������� ���⢥ত���� �� Kafka
+      session-events: asop.session.events
+      transaction-events: asop.transaction.events
+      card-events: asop.card.events
+      debt-events: asop.debt.events
+      fiscal-events: asop.fiscal.events
+      audit-events: asop.audit.events
+      gps-events: asop.gps.events
     send-timeout-ms: 5000
 
 # Logging

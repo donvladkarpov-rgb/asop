@@ -44,3 +44,6 @@ include(
     ":backend:admin-service",
     ":backend:route-service"
 )
+
+// ============ Android terminal app ============
+includeBuild("frontend/android-terminal")

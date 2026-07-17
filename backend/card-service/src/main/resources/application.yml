@@ -40,8 +40,16 @@ spring:
       group-id: card-service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
 
 asop:
   kafka:
     topics:
       card-commands: asop.card.commands
+      card-events: asop.card.events
+      transaction-commands: asop.transaction.commands
+      transaction-events: asop.transaction.events

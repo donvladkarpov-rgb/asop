@@ -40,8 +40,14 @@ spring:
       group-id: audit-service
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
 
 asop:
   kafka:
     topics:
       audit-commands: asop.audit.commands
+      audit-events: asop.audit.events
