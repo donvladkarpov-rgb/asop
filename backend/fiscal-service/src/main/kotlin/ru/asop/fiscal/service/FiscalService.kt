@@ -20,7 +20,6 @@ class FiscalService(
         val entity = FiscalReceiptEntity(
             receiptId = UuidUtils.newId(),
             transactionId = request.transactionId,
-            amount = request.amount,
             status = "PENDING",
             createdAt = now,
             updatedAt = now
@@ -36,9 +35,7 @@ class FiscalService(
 private fun FiscalReceiptEntity.toResponse() = FiscalReceiptResponse(
     id = receiptId,
     transactionId = transactionId,
-    amount = amount,
     status = status,
-    fiscalNumber = fiscalNumber,
     createdAt = createdAt,
     updatedAt = updatedAt
 )

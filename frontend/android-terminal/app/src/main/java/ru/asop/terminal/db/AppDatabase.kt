@@ -15,7 +15,7 @@ import ru.asop.terminal.db.entity.TransactionEntity
         SessionEntity::class,
         TransactionEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

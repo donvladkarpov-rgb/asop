@@ -15,8 +15,14 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.squareup.moshi.Moshi
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import ru.asop.terminal.MainActivity
 import ru.asop.terminal.db.dao.PendingEventDao
+import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.network.SyncApi
@@ -32,6 +38,7 @@ class GpsTrackingService : android.app.Service() {
     @Inject lateinit var fusedLocationClient: FusedLocationProviderClient
     @Inject lateinit var syncApi: SyncApi
     @Inject lateinit var pendingEventDao: PendingEventDao
+    @Inject lateinit var sessionDao: SessionDao
     @Inject lateinit var syncPreferences: SyncPreferences
     @Inject lateinit var workScheduler: WorkScheduler
     @Inject lateinit var moshi: Moshi
@@ -56,21 +63,29 @@ class GpsTrackingService : android.app.Service() {
     }
 
     private var pointCount = 0
+    private val serviceScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
+    )
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val location = result.lastLocation ?: return
-            // Terminal fills vehicleId/pathId/sessionId from current state
-            val report = GpsPositionReport(
-                vehicleId = "",     // filled by caller
-                pathId = "",
-                sessionId = null,
-                latitude = location.latitude,
-                longitude = location.longitude,
-                speedKmh = if (location.hasSpeed()) location.speed * 3.6 else null,
-                recordedAt = Instant.now().toString()
-            )
-            enqueueGpsReport(report)
+            serviceScope.launch {
+                val session = sessionDao.getSessionForGps()
+                val sessionId = session?.id
+                val vehicleId = session?.vehicleId ?: ""
+                val pathId = session?.pathId ?: ""
+                val report = GpsPositionReport(
+                    vehicleId = vehicleId,
+                    pathId = pathId,
+                    sessionId = sessionId,
+                    latitude = location.latitude,
+                    longitude = location.longitude,
+                    speedKmh = if (location.hasSpeed()) location.speed * 3.6 else null,
+                    recordedAt = java.time.Instant.now().toString()
+                )
+                enqueueGpsReport(report)
+            }
         }
     }
 
@@ -92,6 +107,7 @@ class GpsTrackingService : android.app.Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        serviceScope.cancel()
         stopLocationUpdates()
         super.onDestroy()
     }
@@ -123,12 +139,12 @@ class GpsTrackingService : android.app.Service() {
             payload = payload,
             eventType = EventTypes.GPS_POSITION
         )
-        kotlinx.coroutines.runBlocking {
+        serviceScope.launch {
             try {
                 val response = syncApi.reportGpsPosition(report)
                 if (response.isSuccessful) {
                     Log.d(TAG, "GPS position sent online")
-                    return@runBlocking
+                    return@launch
                 }
             } catch (_: Exception) { }
             pendingEventDao.insert(event)

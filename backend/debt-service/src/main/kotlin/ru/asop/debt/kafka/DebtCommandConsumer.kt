@@ -6,9 +6,10 @@ import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
+import reactor.core.publisher.Mono
 import ru.asop.common.kafka.KafkaTopic
-import ru.asop.debt.model.DebtEntity
 import ru.asop.debt.repository.DebtRepository
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.debt.DebtCreatedEvent
@@ -19,6 +20,7 @@ import java.util.UUID
 @Component
 class DebtCommandConsumer(
     private val debtRepository: DebtRepository,
+    private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
@@ -30,7 +32,7 @@ class DebtCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received debt command: {}", json)
-        val eventId = parseEventId(eventIdHeader)
+        val eventId = parseEventId(eventIdHeader, json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -56,23 +58,35 @@ class DebtCommandConsumer(
     private fun handleDebtCreated(event: DebtCreatedEvent, eventId: UUID) {
         log.info("Processing DebtCreatedEvent: debtId={}", event.debtId)
 
-        val entity = DebtEntity(
-            debtId = event.debtId,
-            cardId = event.cardId,
-            carrierId = event.carrierId,
-            debtAmount = event.debtAmount,
-            debtStatus = "OPEN",
-            debtOpenedAt = event.debtOpenedAt,
-            debtDueDate = event.debtDueDate,
-            terminalId = event.terminalId,
-            sessionId = event.sessionId,
-            createdAt = event.occurredAt,
-            updatedAt = event.occurredAt
-        )
-        debtRepository.save(entity)
+        val sql = """INSERT INTO ASOP_CARD_DEBTS 
+            (DEBT_ID, CARD_ID, SESSION_ID, TERMINAL_ID, CARRIER_ID, DEBT_AMOUNT, CURRENCY, 
+             DEBT_STATUS, DEBT_OPENED_AT, DEBT_DUE_DATE, CREATED_AT, UPDATED_AT) 
+            VALUES (:debtId, :cardId, :sessionId, :terminalId, :carrierId, :debtAmount, 'RUB', 
+                    'OPEN', :debtOpenedAt, :debtDueDate, :createdAt, :updatedAt)"""
+
+        val now = Instant.now()
+        val sessionId = event.sessionId
+        val terminalId = event.terminalId
+
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+            .bind("debtId", event.debtId)
+            .bind("cardId", event.cardId)
+            .bind("carrierId", event.carrierId)
+            .bind("debtAmount", event.debtAmount)
+            .bind("debtOpenedAt", event.debtOpenedAt)
+            .bind("debtDueDate", event.debtDueDate)
+            .bind("createdAt", now)
+            .bind("updatedAt", now)
+
+        spec = if (sessionId != null) spec.bind("sessionId", sessionId)
+        else spec.bindNull("sessionId", UUID::class.java)
+        spec = if (terminalId != null) spec.bind("terminalId", terminalId)
+        else spec.bindNull("terminalId", UUID::class.java)
+
+        spec.fetch().rowsUpdated()
             .doOnSuccess {
-                log.info("Debt saved: {}", it.debtId)
-                publishComplete(eventId, mapOf("debtId" to it.debtId.toString(), "status" to "OPEN"))
+                log.info("Debt saved: {}", event.debtId)
+                publishComplete(eventId, mapOf("debtId" to event.debtId.toString(), "status" to "OPEN"))
             }
             .doOnError { e ->
                 log.error("Failed to save debt: {}", e.message, e)
@@ -85,12 +99,16 @@ class DebtCommandConsumer(
         log.info("Processing DebtRecoveredEvent: debtId={}", event.debtId)
 
         debtRepository.findById(event.debtId)
+            .switchIfEmpty(Mono.error(IllegalStateException("Debt not found: ${event.debtId}")))
             .flatMap { existing ->
-                val updated = existing.copy(
-                    debtStatus = "RECOVERED",
-                    updatedAt = Instant.now()
-                )
-                debtRepository.save(updated)
+                val sql = """UPDATE ASOP_CARD_DEBTS 
+                    SET DEBT_STATUS = 'RECOVERED', RECOVERED_AT = :recoveredAt, UPDATED_AT = :updatedAt 
+                    WHERE DEBT_ID = :debtId"""
+                db.sql(sql)
+                    .bind("recoveredAt", Instant.now())
+                    .bind("updatedAt", Instant.now())
+                    .bind("debtId", event.debtId)
+                    .fetch().rowsUpdated()
             }
             .doOnSuccess {
                 log.info("Debt recovered: {}", event.debtId)
@@ -118,12 +136,15 @@ class DebtCommandConsumer(
         kafkaTemplate.send(record).subscribe()
     }
 
-    private fun parseEventId(header: ByteArray?): UUID {
-        if (header == null) return UUID.randomUUID()
-        return try {
-            UUID.fromString(String(header))
-        } catch (e: IllegalArgumentException) {
-            UUID.randomUUID()
+    private fun parseEventId(header: ByteArray?, json: String): UUID {
+        if (header != null) {
+            try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
+        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+        if (fromPayload != null) {
+            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        }
+        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        return UUID.randomUUID()
     }
 }

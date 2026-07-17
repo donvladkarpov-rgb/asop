@@ -8,15 +8,12 @@ import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
 import org.springframework.stereotype.Component
 import ru.asop.common.kafka.KafkaTopic
-import ru.asop.fiscal.model.FiscalReceiptEntity
-import ru.asop.fiscal.repository.FiscalReceiptRepository
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.fiscal.FiscalReceiptRequestedEvent
 import java.util.UUID
 
 @Component
 class FiscalCommandConsumer(
-    private val fiscalReceiptRepository: FiscalReceiptRepository,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
@@ -28,7 +25,7 @@ class FiscalCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received fiscal command: {}", json)
-        val eventId = parseEventId(eventIdHeader)
+        val eventId = parseEventId(eventIdHeader, json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -49,25 +46,12 @@ class FiscalCommandConsumer(
 
     private fun handleFiscalReceiptRequested(event: FiscalReceiptRequestedEvent, eventId: UUID) {
         log.info("Processing FiscalReceiptRequestedEvent: receiptId={}", event.receiptId)
-
-        val entity = FiscalReceiptEntity(
-            receiptId = event.receiptId,
-            transactionId = event.transactionId,
-            amount = event.amount,
-            status = "PENDING",
-            createdAt = event.occurredAt,
-            updatedAt = event.occurredAt
+        publishFailed(
+            eventId,
+            "Fiscal receipt creation not implemented: ASOP_FISCAL_RECEIPTS requires CARRIER_ID and " +
+                "CARRIER_FISCALIZER_ID (NOT NULL). Need carrier resolution from transaction → carrier → fiscalizer. " +
+                "Receipt ID: ${event.receiptId}, Transaction ID: ${event.transactionId}"
         )
-        fiscalReceiptRepository.save(entity)
-            .doOnSuccess {
-                log.info("Fiscal receipt saved: {}", it.receiptId)
-                publishComplete(eventId, mapOf("receiptId" to it.receiptId.toString(), "status" to "PENDING"))
-            }
-            .doOnError { e ->
-                log.error("Failed to save fiscal receipt: {}", e.message, e)
-                publishFailed(eventId, e.message ?: "Save error")
-            }
-            .subscribe()
     }
 
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {
@@ -85,12 +69,15 @@ class FiscalCommandConsumer(
         kafkaTemplate.send(record).subscribe()
     }
 
-    private fun parseEventId(header: ByteArray?): UUID {
-        if (header == null) return UUID.randomUUID()
-        return try {
-            UUID.fromString(String(header))
-        } catch (e: IllegalArgumentException) {
-            UUID.randomUUID()
+    private fun parseEventId(header: ByteArray?, json: String): UUID {
+        if (header != null) {
+            try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
+        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+        if (fromPayload != null) {
+            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        }
+        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        return UUID.randomUUID()
     }
 }

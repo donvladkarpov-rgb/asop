@@ -6,8 +6,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
-import ru.asop.card.model.CardEntity
 import ru.asop.card.repository.CardRepository
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.kafka.events.CommandResult
@@ -19,6 +19,7 @@ import java.util.UUID
 @Component
 class CardCommandConsumer(
     private val cardRepository: CardRepository,
+    private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
@@ -30,7 +31,7 @@ class CardCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received card command: {}", json)
-        val eventId = parseEventId(eventIdHeader)
+        val eventId = parseEventId(eventIdHeader, json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -56,19 +57,26 @@ class CardCommandConsumer(
     private fun handleCardRegistered(event: CardRegisteredEvent, eventId: UUID) {
         log.info("Processing CardRegisteredEvent: cardId={}", event.cardId)
 
-        val entity = CardEntity(
-            cardId = event.cardId,
-            cardTypeId = event.cardTypeId,
-            userId = event.ownerUserId,
-            isPrimary = event.isPrimary,
-            registeredAt = event.registeredAt,
-            createdAt = event.occurredAt,
-            updatedAt = event.occurredAt
-        )
-        cardRepository.save(entity)
+        val sql = """INSERT INTO ASOP_CARDS 
+            (CARD_ID, CARD_TYPE_ID, USER_ID, IS_PRIMARY, REGISTERED_AT, CREATED_AT, UPDATED_AT) 
+            VALUES (:cardId, :cardTypeId, :userId, :isPrimary, :registeredAt, :createdAt, :updatedAt)"""
+
+        val now = Instant.now()
+        val ownerUserId = event.ownerUserId
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+            .bind("cardId", event.cardId)
+            .bind("cardTypeId", event.cardTypeId)
+            .bind("isPrimary", event.isPrimary)
+            .bind("registeredAt", event.registeredAt)
+            .bind("createdAt", now)
+            .bind("updatedAt", now)
+        spec = if (ownerUserId != null) spec.bind("userId", ownerUserId)
+        else spec.bindNull("userId", UUID::class.java)
+
+        spec.fetch().rowsUpdated()
             .doOnSuccess {
-                log.info("Card saved: {}", it.cardId)
-                publishComplete(eventId, mapOf("cardId" to it.cardId.toString()))
+                log.info("Card saved: {}", event.cardId)
+                publishComplete(eventId, mapOf("cardId" to event.cardId.toString()))
             }
             .doOnError { e ->
                 log.error("Failed to save card: {}", e.message, e)
@@ -79,20 +87,8 @@ class CardCommandConsumer(
 
     private fun handleCardBlocked(event: CardBlockedEvent, eventId: UUID) {
         log.info("Processing CardBlockedEvent: cardId={}, blockType={}", event.cardId, event.blockType)
-
-        cardRepository.findById(event.cardId)
-            .flatMap { existing ->
-                cardRepository.save(existing)
-            }
-            .doOnSuccess {
-                log.info("Card blocked: {}", event.cardId)
-                publishComplete(eventId, mapOf("cardId" to event.cardId.toString(), "status" to "BLOCKED"))
-            }
-            .doOnError { e ->
-                log.error("Failed to block card: {}", e.message, e)
-                publishFailed(eventId, e.message ?: "Block error")
-            }
-            .subscribe()
+        publishFailed(eventId, "Card block not implemented: ASOP_CARDS has no STATUS/IS_BLOCKED column. " +
+            "Implement ASOP_CARD_BLOCKS table or add STATUS column to ASOP_CARDS.")
     }
 
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {
@@ -110,12 +106,15 @@ class CardCommandConsumer(
         kafkaTemplate.send(record).subscribe()
     }
 
-    private fun parseEventId(header: ByteArray?): UUID {
-        if (header == null) return UUID.randomUUID()
-        return try {
-            UUID.fromString(String(header))
-        } catch (e: IllegalArgumentException) {
-            UUID.randomUUID()
+    private fun parseEventId(header: ByteArray?, json: String): UUID {
+        if (header != null) {
+            try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
+        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+        if (fromPayload != null) {
+            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        }
+        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        return UUID.randomUUID()
     }
 }

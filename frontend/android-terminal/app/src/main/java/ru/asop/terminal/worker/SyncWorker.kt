@@ -45,8 +45,8 @@ class SyncWorker @AssistedInject constructor(
                 pendingEventDao.markSending(event.id, gatewayEventId)
                 Log.d(TAG, "Sent ${event.eventType} -> eventId=$gatewayEventId")
             } catch (e: Exception) {
-                pendingEventDao.markFailed(event.id, e.message ?: "Unknown error")
-                Log.e(TAG, "Error sending ${event.eventType}", e)
+                pendingEventDao.incrementPollRetry(event.id)
+                Log.w(TAG, "Transient error sending ${event.eventType}: ${e.message}, will retry")
                 return Result.retry()
             }
         }

@@ -51,6 +51,24 @@ class EventPollWorker @AssistedInject constructor(
                     continue
                 }
 
+                if (response.code() == 422) {
+                    val errorBody = response.errorBody()?.string()
+                    val errorMessage = if (errorBody != null) {
+                        try {
+                            val moshi = com.squareup.moshi.Moshi.Builder().build()
+                            val adapter = moshi.adapter(ru.asop.terminal.network.models.EventStatusResponse::class.java)
+                            adapter.fromJson(errorBody)?.errorMessage ?: "Event failed (no error message)"
+                        } catch (_: Exception) {
+                            "Event failed (422): $errorBody"
+                        }
+                    } else {
+                        "Event failed (422, empty body)"
+                    }
+                    pendingEventDao.markFailed(event.id, errorMessage)
+                    Log.w(TAG, "Event $eventId failed: $errorMessage")
+                    continue
+                }
+
                 if (!response.isSuccessful) {
                     pendingEventDao.incrementPollRetry(event.id)
                     Log.w(TAG, "Poll failed for $eventId: HTTP ${response.code()}")

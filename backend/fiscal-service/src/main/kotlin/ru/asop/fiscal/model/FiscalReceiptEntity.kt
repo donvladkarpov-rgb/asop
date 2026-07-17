@@ -11,9 +11,14 @@ data class FiscalReceiptEntity(
     @Id
     val receiptId: UUID,
     val transactionId: UUID,
-    val amount: BigDecimal,
+    val carrierId: UUID? = null,
+    val carrierFiscalizerId: UUID? = null,
+    val receiptNumber: String? = null,
+    val fiscalSign: String? = null,
     val status: String = "PENDING",
-    val fiscalNumber: String? = null,
+    val attemptCount: Int = 0,
+    val maxAttempts: Int = 10,
+    val lastErrorMessage: String? = null,
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()
 )

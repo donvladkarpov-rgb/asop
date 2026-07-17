@@ -17,6 +17,9 @@ interface SessionDao {
     suspend fun getCurrentOpenSession(): SessionEntity?
 
     @Query("SELECT * FROM sessions WHERE status = 'OPEN' LIMIT 1")
+    suspend fun getSessionForGps(): SessionEntity?
+
+    @Query("SELECT * FROM sessions WHERE status = 'OPEN' LIMIT 1")
     fun observeCurrentOpenSession(): Flow<SessionEntity?>
 
     @Query("SELECT * FROM sessions ORDER BY opened_at DESC")

@@ -7,9 +7,8 @@ import java.util.UUID
 data class FiscalReceiptResponse(
     val id: UUID,
     val transactionId: UUID,
-    val amount: BigDecimal,
     val status: String,
-    val fiscalNumber: String?,
+    val fiscalNumber: String? = null,
     val createdAt: Instant,
     val updatedAt: Instant
 )

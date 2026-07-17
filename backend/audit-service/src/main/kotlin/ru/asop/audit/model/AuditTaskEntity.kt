@@ -10,6 +10,12 @@ data class AuditTaskEntity(
     @Id
     val taskId: UUID,
     val taskNumber: String,
+    val issuerType: String = "CARRIER",
+    val organizerId: UUID? = null,
+    val carrierId: UUID? = null,
+    val assignedAuditServiceId: UUID? = null,
+    val taskStartDate: Instant = Instant.now(),
+    val taskEndDate: Instant? = null,
     val status: String = "DRAFT",
     val description: String? = null,
     val createdAt: Instant = Instant.now(),

@@ -26,9 +26,7 @@ class SessionService(
             pathId = request.pathId,
             vehicleId = request.vehicleId,
             status = "IN_PROGRESS",
-            startedAt = now,
-            createdAt = now,
-            updatedAt = now
+            startedAt = now
         )
         return sessionRepository.save(entity).map { it.toResponse() }
     }
@@ -40,7 +38,7 @@ class SessionService(
                 val updated = existing.copy(
                     status = "CLOSED",
                     closedAt = now,
-                    updatedAt = now
+                    closedAtLocal = now
                 )
                 sessionRepository.save(updated).map { it.toResponse() }
             }
@@ -61,6 +59,6 @@ private fun SessionEntity.toResponse() = SessionResponse(
     status = status,
     startedAt = startedAt,
     closedAt = closedAt,
-    createdAt = createdAt,
-    updatedAt = updatedAt
+    createdAt = startedAt,
+    updatedAt = startedAt
 )

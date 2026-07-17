@@ -6,17 +6,17 @@ import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
-import ru.asop.audit.model.AuditTaskEntity
-import ru.asop.audit.repository.AuditTaskRepository
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.audit.AuditTaskCreatedEvent
+import java.time.Instant
 import java.util.UUID
 
 @Component
 class AuditCommandConsumer(
-    private val auditTaskRepository: AuditTaskRepository,
+    private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
@@ -28,7 +28,7 @@ class AuditCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received audit command: {}", json)
-        val eventId = parseEventId(eventIdHeader)
+        val eventId = parseEventId(eventIdHeader, json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -50,18 +50,43 @@ class AuditCommandConsumer(
     private fun handleAuditTaskCreated(event: AuditTaskCreatedEvent, eventId: UUID) {
         log.info("Processing AuditTaskCreatedEvent: taskId={}", event.taskId)
 
-        val entity = AuditTaskEntity(
-            taskId = event.taskId ?: UUID.randomUUID(),
-            taskNumber = event.taskNumber,
-            status = "DRAFT",
-            description = event.description,
-            createdAt = event.occurredAt,
-            updatedAt = event.occurredAt
-        )
-        auditTaskRepository.save(entity)
+        val taskId = event.taskId ?: UUID.randomUUID()
+        val issuerType = if (event.organizerId != null) "ORGANIZER" else "CARRIER"
+        val now = Instant.now()
+
+        val sql = """INSERT INTO ASOP_AUDIT_TASKS 
+            (TASK_ID, TASK_NUMBER, ISSUER_TYPE, ORGANIZER_ID, CARRIER_ID, 
+             ASSIGNED_AUDIT_SERVICE_ID, TASK_START_DATE, STATUS, DESCRIPTION, CREATED_AT, UPDATED_AT) 
+            VALUES (:taskId, :taskNumber, :issuerType, :organizerId, :carrierId, 
+                    (SELECT AUDIT_SERVICE_ID FROM ASOP_AUDIT_SERVICES 
+                     WHERE (:issuerType = 'CARRIER' AND CARRIER_ID = :carrierId) 
+                        OR (:issuerType = 'ORGANIZER' AND ORGANIZER_ID = :organizerId) 
+                     LIMIT 1), 
+                    :taskStartDate, 'DRAFT', :description, :createdAt, :updatedAt)"""
+
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+            .bind("taskId", taskId)
+            .bind("taskNumber", event.taskNumber)
+            .bind("issuerType", issuerType)
+            .bind("taskStartDate", now)
+            .bind("createdAt", now)
+            .bind("updatedAt", now)
+
+        val description = event.description
+        spec = if (description != null) spec.bind("description", description)
+        else spec.bindNull("description", String::class.java)
+
+        val organizerId = event.organizerId
+        val carrierId = event.carrierId
+        spec = if (organizerId != null) spec.bind("organizerId", organizerId)
+        else spec.bindNull("organizerId", UUID::class.java)
+        spec = if (carrierId != null) spec.bind("carrierId", carrierId)
+        else spec.bindNull("carrierId", UUID::class.java)
+
+        spec.fetch().rowsUpdated()
             .doOnSuccess {
-                log.info("Audit task saved: {}", it.taskId)
-                publishComplete(eventId, mapOf("taskId" to it.taskId.toString(), "status" to "DRAFT"))
+                log.info("Audit task saved: {}", taskId)
+                publishComplete(eventId, mapOf("taskId" to taskId.toString(), "status" to "DRAFT"))
             }
             .doOnError { e ->
                 log.error("Failed to save audit task: {}", e.message, e)
@@ -85,12 +110,15 @@ class AuditCommandConsumer(
         kafkaTemplate.send(record).subscribe()
     }
 
-    private fun parseEventId(header: ByteArray?): UUID {
-        if (header == null) return UUID.randomUUID()
-        return try {
-            UUID.fromString(String(header))
-        } catch (e: IllegalArgumentException) {
-            UUID.randomUUID()
+    private fun parseEventId(header: ByteArray?, json: String): UUID {
+        if (header != null) {
+            try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
+        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+        if (fromPayload != null) {
+            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        }
+        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        return UUID.randomUUID()
     }
 }

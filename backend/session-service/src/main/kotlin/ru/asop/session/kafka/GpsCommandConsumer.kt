@@ -6,17 +6,16 @@ import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.gps.GpsPositionReported
-import ru.asop.session.model.GpsTrackingEntity
-import ru.asop.session.repository.GpsTrackingRepository
 import java.util.UUID
 
 @Component
 class GpsCommandConsumer(
-    private val gpsTrackingRepository: GpsTrackingRepository,
+    private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
@@ -28,7 +27,7 @@ class GpsCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received GPS command: {}", json)
-        val eventId = parseEventId(eventIdHeader)
+        val eventId = parseEventId(eventIdHeader, json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -50,19 +49,34 @@ class GpsCommandConsumer(
     private fun handleGpsPositionReported(event: GpsPositionReported, eventId: UUID) {
         log.debug("Processing GpsPositionReported: positionId={}", event.positionId)
 
-        val entity = GpsTrackingEntity(
-            positionId = event.positionId ?: UUID.randomUUID(),
-            vehicleId = event.vehicleId,
-            pathId = event.pathId,
-            sessionId = event.sessionId,
-            gpsCoord = "POINT(${event.longitude} ${event.latitude})",
-            recordedAt = event.recordedAt,
-            speedKmh = event.speedKmh
-        )
-        gpsTrackingRepository.save(entity)
+        val positionId = event.positionId ?: UUID.randomUUID()
+        val wkt = "POINT(${event.longitude} ${event.latitude})"
+
+        val sql = """INSERT INTO ASOP_GPS_TRACKING 
+            (POSITION_ID, VEHICLE_ID, PATH_ID, SESSION_ID, GPS_COORD, RECORDED_AT, SPEED_KMH, STATUS) 
+            VALUES (:positionId, :vehicleId, :pathId, :sessionId, 
+                    ST_GeogFromText(:wkt), :recordedAt, :speedKmh, :status)"""
+
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+            .bind("positionId", positionId)
+            .bind("vehicleId", event.vehicleId)
+            .bind("pathId", event.pathId)
+            .bind("wkt", wkt)
+            .bind("recordedAt", event.recordedAt)
+            .bind("status", "MOVING")
+
+        val sessionId = event.sessionId
+        val speedKmh = event.speedKmh
+
+        spec = if (sessionId != null) spec.bind("sessionId", sessionId)
+        else spec.bindNull("sessionId", UUID::class.java)
+        spec = if (speedKmh != null) spec.bind("speedKmh", speedKmh)
+        else spec.bindNull("speedKmh", java.math.BigDecimal::class.java)
+
+        spec.fetch().rowsUpdated()
             .doOnSuccess {
-                log.debug("GPS position saved: {}", it.positionId)
-                publishComplete(eventId, mapOf("positionId" to it.positionId.toString()))
+                log.debug("GPS position saved: {}", positionId)
+                publishComplete(eventId, mapOf("positionId" to positionId.toString()))
             }
             .doOnError { e ->
                 log.error("Failed to save GPS position: {}", e.message, e)
@@ -86,12 +100,15 @@ class GpsCommandConsumer(
         kafkaTemplate.send(record).subscribe()
     }
 
-    private fun parseEventId(header: ByteArray?): UUID {
-        if (header == null) return UUID.randomUUID()
-        return try {
-            UUID.fromString(String(header))
-        } catch (e: IllegalArgumentException) {
-            UUID.randomUUID()
+    private fun parseEventId(header: ByteArray?, json: String): UUID {
+        if (header != null) {
+            try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
+        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+        if (fromPayload != null) {
+            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        }
+        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        return UUID.randomUUID()
     }
 }

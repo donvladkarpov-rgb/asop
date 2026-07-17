@@ -6,11 +6,9 @@ import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
-import ru.asop.card.model.TransactionCardEntity
-import ru.asop.card.model.TransactionEntity
 import ru.asop.card.repository.TransactionCardRepository
-import ru.asop.card.repository.TransactionRepository
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.common.util.UuidUtils
 import ru.asop.kafka.events.CommandResult
@@ -19,7 +17,7 @@ import java.util.UUID
 
 @Component
 class TransactionCommandConsumer(
-    private val transactionRepository: TransactionRepository,
+    private val db: DatabaseClient,
     private val transactionCardRepository: TransactionCardRepository,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
@@ -32,7 +30,7 @@ class TransactionCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received transaction command: {}", json)
-        val eventId = parseEventId(eventIdHeader)
+        val eventId = parseEventId(eventIdHeader, json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -54,30 +52,46 @@ class TransactionCommandConsumer(
     private fun handleTransactionCompleted(event: TransactionCompletedEvent, eventId: UUID) {
         log.info("Processing TransactionCompletedEvent: transactionId={}", event.transactionId)
 
-        val entity = TransactionEntity(
-            transactionId = event.transactionId,
-            startedAt = event.completedAt,
-            completedAt = event.completedAt,
-            sessionId = event.sessionId,
-            transactionTypeId = event.transactionTypeId,
-            transactionResultId = event.transactionResultId,
-            amount = event.amount,
-            currency = event.currency,
-            metadata = event.metadata
-        )
+        val metadata = event.metadata
+        val metadataExpr = if (metadata.isNullOrEmpty()) "NULL" else "CAST(:metadata AS jsonb)"
 
-        transactionRepository.save(entity)
-            .flatMap { saved ->
+        val sql = """INSERT INTO ASOP_TRANSACTIONS 
+            (TRANSACTION_ID, STARTED_AT, COMPLETED_AT, SESSION_ID, TRANSACTION_TYPE_ID, 
+             TRANSACTION_RESULT_ID, AMOUNT, CURRENCY, METADATA) 
+            VALUES (:transactionId, :startedAt, :completedAt, :sessionId, :transactionTypeId, 
+                    :transactionResultId, :amount, :currency, $metadataExpr)"""
+
+        val spec = db.sql(sql)
+            .bind("transactionId", event.transactionId)
+            .bind("startedAt", event.completedAt)
+            .bind("completedAt", event.completedAt)
+            .bind("transactionTypeId", event.transactionTypeId)
+            .bind("transactionResultId", event.transactionResultId)
+            .bind("amount", event.amount)
+            .bind("currency", event.currency)
+
+        val boundSpec = if (metadata.isNullOrEmpty()) spec else spec.bind("metadata", metadata)
+        val sessionId = event.sessionId
+        val sessionSpec = if (sessionId != null) {
+            boundSpec.bind("sessionId", sessionId)
+        } else {
+            boundSpec.bindNull("sessionId", java.util.UUID::class.java)
+        }
+
+        sessionSpec.fetch().rowsUpdated()
+            .flatMap {
                 val cardId = event.cardId
                 if (cardId != null) {
-                    val tce = TransactionCardEntity(
-                        transactionCardId = UuidUtils.newId(),
-                        transactionId = saved.transactionId,
-                        cardId = cardId
-                    )
-                    transactionCardRepository.save(tce)
+                    val tceSql = """INSERT INTO ASOP_TRANSACTION_CARDS 
+                        (TRANSACTION_CARD_ID, TRANSACTION_ID, CARD_ID, CARD_ROLE) 
+                        VALUES (:tcId, :transactionId, :cardId, 'PAYER')"""
+                    db.sql(tceSql)
+                        .bind("tcId", UuidUtils.newId())
+                        .bind("transactionId", event.transactionId)
+                        .bind("cardId", cardId)
+                        .fetch().rowsUpdated()
                 } else {
-                    reactor.core.publisher.Mono.just(saved)
+                    reactor.core.publisher.Mono.just(1L)
                 }
             }
             .doOnSuccess {
@@ -109,12 +123,15 @@ class TransactionCommandConsumer(
         kafkaTemplate.send(record).subscribe()
     }
 
-    private fun parseEventId(header: ByteArray?): UUID {
-        if (header == null) return UUID.randomUUID()
-        return try {
-            UUID.fromString(String(header))
-        } catch (e: IllegalArgumentException) {
-            UUID.randomUUID()
+    private fun parseEventId(header: ByteArray?, json: String): UUID {
+        if (header != null) {
+            try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
+        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+        if (fromPayload != null) {
+            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        }
+        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        return UUID.randomUUID()
     }
 }
