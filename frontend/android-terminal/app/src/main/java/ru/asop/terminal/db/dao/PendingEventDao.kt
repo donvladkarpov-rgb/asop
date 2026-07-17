@@ -23,7 +23,7 @@ interface PendingEventDao {
     suspend fun markSent(id: String, sentAt: Long = System.currentTimeMillis(), status: String = PendingEventEntity.STATUS_SENT)
 
     @Query("UPDATE pending_events SET status = :status, gateway_event_id = :gatewayEventId, sent_at = :sentAt, error_message = NULL WHERE id = :id")
-    suspend fun markSending(id: String, gatewayEventId: String, sentAt: Long = System.currentTimeMillis())
+    suspend fun markSending(id: String, gatewayEventId: String, sentAt: Long = System.currentTimeMillis(), status: String = PendingEventEntity.STATUS_SENDING)
 
     @Query("UPDATE pending_events SET status = :status, error_message = :error, retry_count = retry_count + 1 WHERE id = :id")
     suspend fun markFailed(id: String, error: String, status: String = PendingEventEntity.STATUS_FAILED)

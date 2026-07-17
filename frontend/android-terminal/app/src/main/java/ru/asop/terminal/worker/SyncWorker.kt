@@ -41,13 +41,9 @@ class SyncWorker @AssistedInject constructor(
                 continue
             }
             try {
-                sendEvent(event).onSuccess { gatewayEventId ->
-                    pendingEventDao.markSending(event.id, gatewayEventId)
-                    Log.d(TAG, "Sent ${event.eventType} -> eventId=$gatewayEventId")
-                }.onFailure { error ->
-                    pendingEventDao.markFailed(event.id, error.message ?: "Unknown error")
-                    Log.w(TAG, "Failed ${event.eventType}: ${error.message}")
-                }
+                val gatewayEventId = sendEvent(event)
+                pendingEventDao.markSending(event.id, gatewayEventId)
+                Log.d(TAG, "Sent ${event.eventType} -> eventId=$gatewayEventId")
             } catch (e: Exception) {
                 pendingEventDao.markFailed(event.id, e.message ?: "Unknown error")
                 Log.e(TAG, "Error sending ${event.eventType}", e)
@@ -57,7 +53,7 @@ class SyncWorker @AssistedInject constructor(
         return Result.success()
     }
 
-    private suspend fun sendEvent(event: PendingEventEntity): Result<String> {
+    private suspend fun sendEvent(event: PendingEventEntity): String {
         val payload = event.payload
         val pathId = event.pathParam
         return when (event.eventType) {
@@ -84,7 +80,6 @@ class SyncWorker @AssistedInject constructor(
                 syncApi.createDebt(deserialize(payload)).toEventId()
             }
             EventTypes.DEBT_RECOVER -> {
-                // Backend PUT /debts/{id}/recover takes NO request body
                 syncApi.recoverDebt(pathId ?: "").toEventId()
             }
             EventTypes.FISCAL_RECEIPT -> {
@@ -96,7 +91,7 @@ class SyncWorker @AssistedInject constructor(
             EventTypes.GPS_POSITION -> {
                 syncApi.reportGpsPosition(deserialize(payload)).toEventId()
             }
-            else -> Result.failure(IllegalArgumentException("Unknown event type: ${event.eventType}"))
+            else -> throw IllegalArgumentException("Unknown event type: ${event.eventType}")
         }
     }
 
@@ -105,33 +100,10 @@ class SyncWorker @AssistedInject constructor(
         return adapter.fromJson(json) ?: throw IllegalArgumentException("Failed to deserialize $json")
     }
 
-    private fun Response<AcceptedResponse>.toEventId(): Result<String> {
+    private fun Response<AcceptedResponse>.toEventId(): String {
         if (!isSuccessful) {
-            return Result.failure(Exception("HTTP ${code()}: ${message()}"))
+            throw Exception("HTTP ${code()}: ${message()}")
         }
-        val body = body() ?: return Result.failure(Exception("Empty body"))
-        return Result.success(body.eventId)
-    }
-
-    class Result<T>(val value: T?) {
-        private val error: Throwable?
-
-        private constructor(value: T) : this(value, null)
-        private constructor(error: Throwable) : this(null, error)
-
-        companion object {
-            fun <T> success(value: T): Result<T> = Result(value)
-            fun <T> failure(error: Throwable): Result<T> = Result(error)
-        }
-
-        fun onSuccess(action: (T) -> Unit): Result<T> {
-            if (error == null) action(value!!)
-            return this
-        }
-
-        fun onFailure(action: (Throwable) -> Unit): Result<T> {
-            if (error != null) action(error)
-            return this
-        }
+        return body()?.eventId ?: throw Exception("Empty body")
     }
 }

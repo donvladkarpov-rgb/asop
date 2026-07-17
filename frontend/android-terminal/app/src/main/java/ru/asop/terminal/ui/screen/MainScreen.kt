@@ -6,8 +6,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import ru.asop.terminal.service.GpsTrackingService
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -136,6 +138,7 @@ fun MainScreen(
 @Composable
 private fun GpsTrackingCard() {
     var gpsActive by remember { mutableStateOf(false) }
+    val context = LocalContext.current
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -161,13 +164,9 @@ private fun GpsTrackingCard() {
                 onCheckedChange = { active ->
                     gpsActive = active
                     if (active) {
-                        ru.asop.terminal.service.GpsTrackingService.start(
-                            androidx.compose.ui.platform.LocalContext.current
-                        )
+                        GpsTrackingService.start(context)
                     } else {
-                        ru.asop.terminal.service.GpsTrackingService.stop(
-                            androidx.compose.ui.platform.LocalContext.current
-                        )
+                        GpsTrackingService.stop(context)
                     }
                 }
             )

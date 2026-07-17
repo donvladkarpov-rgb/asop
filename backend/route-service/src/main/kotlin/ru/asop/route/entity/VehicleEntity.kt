@@ -43,7 +43,7 @@ data class VehicleEntity(
     companion object {
         fun fromRequest(data: Map<String, String?>): VehicleEntity = VehicleEntity(
             vehicleId = data["id"]?.let { UUID.fromString(it) } ?: UuidUtils.newId(),
-            carrierId = data["carrierId"]?.let { UUID.fromString(it) },
+            carrierId = data["carrierId"]?.takeIf { it.isNotBlank() }?.let { UUID.fromString(it) },
             vehicleTypeId = UUID.fromString(data["vehicleTypeId"] ?: error("vehicleTypeId is required")),
             vehicleModelId = UUID.fromString(data["vehicleModelId"] ?: error("vehicleModelId is required")),
             vehicleNumber = data["vehicleNumber"] ?: error("vehicleNumber is required"),

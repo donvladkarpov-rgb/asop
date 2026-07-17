@@ -90,8 +90,8 @@ services:
       KAFKA_SSL_TRUSTSTORE_FILENAME: truststore.p12
       KAFKA_SSL_TRUSTSTORE_CREDENTIALS: kafka_truststore_cred
       KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM: ""
-    ports:
-      - "9093:9093"
+    #ports:
+    #  - "9093:9093"
     volumes:
       - certs_data:/etc/kafka/secrets:ro
     depends_on:
@@ -553,7 +553,7 @@ services:
       - asop-net
 
   route-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/route-service
       dockerfile: Dockerfile

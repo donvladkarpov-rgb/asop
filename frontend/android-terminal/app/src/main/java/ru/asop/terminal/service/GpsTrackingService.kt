@@ -43,6 +43,7 @@ class GpsTrackingService : android.app.Service() {
         private const val LOCATION_INTERVAL_MS = 30_000L
         private const val LOCATION_FASTEST_INTERVAL_MS = 15_000L
         private const val GPS_BATCH_SIZE = 10
+        const val ACTION_STOP = "ru.asop.terminal.action.STOP_GPS"
 
         fun start(context: Context) {
             val intent = Intent(context, GpsTrackingService::class.java)
@@ -170,5 +171,4 @@ class GpsTrackingService : android.app.Service() {
             .build()
     }
 
-    private const val ACTION_STOP = "ru.asop.terminal.action.STOP_GPS"
 }

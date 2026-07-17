@@ -42,13 +42,14 @@ class GenericRouteRepository(
             return Mono.error(IllegalArgumentException("Body must contain at least one field"))
         }
         val placeholders = columns.joinToString(", ") { col ->
-            info.columnExprs[col] ?: ":$col"
+            if (all[col] == null) "NULL"
+            else info.columnExprs[col] ?: ":$col"
         }
         val sql = "INSERT INTO ${info.tableName} (${columns.joinToString(", ")}) VALUES ($placeholders)"
         val spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
         var current = spec
         for ((k, v) in all) {
-            current = bindValue(current, k, v)
+            if (v != null) current = bindValue(current, k, v)
         }
         return current.fetch().rowsUpdated().then(getById(info, id))
     }
@@ -58,13 +59,14 @@ class GenericRouteRepository(
             return getById(info, id)
         }
         val setClause = data.keys.joinToString(", ") { col ->
-            info.columnExprs[col]?.let { "$col = $it" } ?: "$col = :$col"
+            if (data[col] == null) "$col = NULL"
+            else info.columnExprs[col]?.let { "$col = $it" } ?: "$col = :$col"
         }
         val sql = "UPDATE ${info.tableName} SET $setClause WHERE ${info.pkColumn} = :id"
         val spec: DatabaseClient.GenericExecuteSpec = db.sql(sql).bind("id", id)
         var current = spec
         for ((k, v) in data) {
-            current = bindValue(current, k, v)
+            if (v != null) current = bindValue(current, k, v)
         }
         return current.fetch().rowsUpdated().then(getById(info, id))
     }

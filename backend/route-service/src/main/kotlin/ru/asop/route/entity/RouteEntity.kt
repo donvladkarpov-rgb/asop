@@ -50,7 +50,7 @@ data class RouteEntity(
             routeNumber = data["routeNumber"] ?: error("routeNumber is required"),
             routeName = data["routeName"] ?: error("routeName is required"),
             routeCategory = data["routeCategory"] ?: error("routeCategory is required"),
-            organizerId = data["organizerId"]?.let { UUID.fromString(it) },
+            organizerId = data["organizerId"]?.takeIf { it.isNotBlank() }?.let { UUID.fromString(it) },
             ministryRegistryNo = data["ministryRegistryNo"],
             regionId = UUID.fromString(data["regionId"] ?: error("regionId is required"))
         )

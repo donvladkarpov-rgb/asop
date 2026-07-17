@@ -53,9 +53,9 @@ data class PathServiceEntity(
             pathServiceId = data["id"]?.let { UUID.fromString(it) } ?: UuidUtils.newId(),
             pathId = UUID.fromString(data["pathId"] ?: error("pathId is required")),
             serviceId = UUID.fromString(data["serviceId"] ?: error("serviceId is required")),
-            carrierId = data["carrierId"]?.let { UUID.fromString(it) },
-            vehicleId = data["vehicleId"]?.let { UUID.fromString(it) },
-            tariffTypeId = data["tariffTypeId"]?.let { UUID.fromString(it) },
+            carrierId = data["carrierId"]?.takeIf { it.isNotBlank() }?.let { UUID.fromString(it) },
+            vehicleId = data["vehicleId"]?.takeIf { it.isNotBlank() }?.let { UUID.fromString(it) },
+            tariffTypeId = data["tariffTypeId"]?.takeIf { it.isNotBlank() }?.let { UUID.fromString(it) },
             price = data["price"]?.toDoubleOrNull() ?: error("price is required"),
             isActive = data["isActive"]?.toBoolean()
         )

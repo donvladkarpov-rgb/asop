@@ -63,6 +63,14 @@ fun ProvisioningScreen(
                     Text("Повторить")
                 }
             }
+            is TerminalViewModel.UiState.Registering -> {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(16.dp))
+                Text("Регистрация терминала...")
+            }
+            is TerminalViewModel.UiState.Registered -> {
+                Text("Терминал зарегистрирован", color = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }

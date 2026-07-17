@@ -64,7 +64,7 @@ data class TransportStopEntity(
     companion object {
         fun fromRequest(data: Map<String, String?>): TransportStopEntity = TransportStopEntity(
             stopId = data["id"]?.let { UUID.fromString(it) } ?: UuidUtils.newId(),
-            fareZoneId = data["fareZoneId"]?.let { UUID.fromString(it) },
+            fareZoneId = data["fareZoneId"]?.takeIf { it.isNotBlank() }?.let { UUID.fromString(it) },
             regionId = UUID.fromString(data["regionId"] ?: error("regionId is required")),
             stopCode = data["stopCode"] ?: error("stopCode is required"),
             stopName = data["stopName"] ?: error("stopName is required"),

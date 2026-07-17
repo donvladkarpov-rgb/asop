@@ -16,14 +16,14 @@ object RouteTableRegistry {
             tableName = "ASOP_FARE_ZONES",
             pkColumn = "ZONE_ID",
             idSnake = "zone_id",
-            columnExprs = mapOf("zone_polygon" to "ST_GeogFromGeoJSON(:zone_polygon)")
+            columnExprs = mapOf("zone_polygon" to "ST_GeomFromGeoJSON(NULLIF(:zone_polygon, ''))::geography")
         ),
         "transport-stops" to ResourceInfo(
             resource = "transport-stops",
             tableName = "ASOP_TRANSPORT_STOPS",
             pkColumn = "STOP_ID",
             idSnake = "stop_id",
-            columnExprs = mapOf("zone_polygon" to "ST_GeogFromGeoJSON(:zone_polygon)")
+            columnExprs = mapOf("zone_polygon" to "ST_GeomFromGeoJSON(NULLIF(:zone_polygon, ''))::geography")
         ),
         "routes" to ResourceInfo(
             resource = "routes",
