@@ -1,10 +1,15 @@
 package ru.asop.terminal.di
 
+import android.content.Context
+import androidx.room.Room
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -13,8 +18,14 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.converter.scalars.ScalarsConverterFactory
 import ru.asop.terminal.cert.AsopKeyManager
 import ru.asop.terminal.cert.MtlsManager
+import ru.asop.terminal.db.AppDatabase
+import ru.asop.terminal.db.SyncPreferences
+import ru.asop.terminal.db.dao.PendingEventDao
+import ru.asop.terminal.db.dao.SessionDao
+import ru.asop.terminal.db.dao.TransactionDao
 import ru.asop.terminal.network.CertSignApi
 import ru.asop.terminal.network.GatewayApi
+import ru.asop.terminal.network.SyncApi
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
@@ -86,6 +97,21 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideSyncApi(
+        @MtlsClient mtlsClient: OkHttpClient,
+        moshi: Moshi
+    ): SyncApi {
+        return Retrofit.Builder()
+            .baseUrl("https://10.0.2.2:8080/")
+            .client(mtlsClient)
+            .addConverterFactory(ScalarsConverterFactory.create())
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(SyncApi::class.java)
+    }
+
+    @Provides
+    @Singleton
     fun provideCertSignApi(
         @PlainClient plainClient: OkHttpClient,
         moshi: Moshi
@@ -98,6 +124,41 @@ object AppModule {
             .build()
             .create(CertSignApi::class.java)
     }
+
+    // --- Room ---
+
+    @Provides
+    @Singleton
+    fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase =
+        Room.databaseBuilder(context, AppDatabase::class.java, "asop_terminal.db")
+            .fallbackToDestructiveMigration()
+            .build()
+
+    @Provides
+    @Singleton
+    fun providePendingEventDao(db: AppDatabase): PendingEventDao = db.pendingEventDao()
+
+    @Provides
+    @Singleton
+    fun provideSessionDao(db: AppDatabase): SessionDao = db.sessionDao()
+
+    @Provides
+    @Singleton
+    fun provideTransactionDao(db: AppDatabase): TransactionDao = db.transactionDao()
+
+    // --- DataStore ---
+
+    @Provides
+    @Singleton
+    fun provideSyncPreferences(@ApplicationContext context: Context): SyncPreferences =
+        SyncPreferences(context)
+
+    // --- Location ---
+
+    @Provides
+    @Singleton
+    fun provideFusedLocationProviderClient(@ApplicationContext context: Context): FusedLocationProviderClient =
+        LocationServices.getFusedLocationProviderClient(context)
 
     private fun trustAllTrustManager(): X509TrustManager = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}

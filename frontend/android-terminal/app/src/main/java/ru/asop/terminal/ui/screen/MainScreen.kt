@@ -1,64 +1,182 @@
 package ru.asop.terminal.ui.screen
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    viewModel: TerminalViewModel = hiltViewModel()
+    terminalViewModel: TerminalViewModel = hiltViewModel(),
+    syncViewModel: SyncViewModel = hiltViewModel()
 ) {
-    val state by viewModel.state.collectAsState()
-    val terminal by viewModel.terminalInfo.collectAsState()
+    val terminalState by terminalViewModel.state.collectAsState()
+    val terminal by terminalViewModel.terminalInfo.collectAsState()
+    val pendingCount by syncViewModel.pendingCount.collectAsState()
+    val currentSession by syncViewModel.currentSession.collectAsState()
+    val lastSyncTime by syncViewModel.lastSyncTime.collectAsState()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Терминал ASOP",
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Spacer(Modifier.height(32.dp))
-
-        terminal?.let { t ->
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    InfoRow("Статус", t.status)
-                    InfoRow("Серийный номер", t.terminalSerial)
-                    t.terminalNumber?.let { InfoRow("Номер", it) }
-                    t.terminalModel?.let { InfoRow("Модель", it) }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("ASOP Терминал") },
+                actions = {
+                    if (pendingCount > 0) {
+                        BadgedBox(badge = {
+                            Badge { Text("$pendingCount") }
+                        }) {
+                            Text("Ожидание")
+                        }
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    Switch(
+                        checked = syncViewModel.syncEnabled.collectAsState().value,
+                        onCheckedChange = { syncViewModel.setSyncEnabled(it) }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Terminal info card
+            item {
+                terminal?.let { t ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            InfoRow("Статус", t.status)
+                            InfoRow("Серийный номер", t.terminalSerial)
+                            t.terminalNumber?.let { InfoRow("Номер", it) }
+                            t.terminalModel?.let { InfoRow("Модель", it) }
+                        }
+                    }
+                } ?: run {
+                    if (terminalState is TerminalViewModel.UiState.Error) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            )
+                        ) {
+                            Text(
+                                text = (terminalState as TerminalViewModel.UiState.Error).message,
+                                modifier = Modifier.padding(16.dp),
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    } else {
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator()
+                                Spacer(Modifier.height(8.dp))
+                                Text("Загрузка данных терминала...")
+                            }
+                        }
+                    }
                 }
             }
-        } ?: run {
-            if (state is TerminalViewModel.UiState.Error) {
-                Text(
-                    text = (state as TerminalViewModel.UiState.Error).message,
-                    color = MaterialTheme.colorScheme.error
-                )
-            } else {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(16.dp))
-                Text("Загрузка данных терминала...")
+
+            // Sync status card
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Синхронизация",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        InfoRow("Ожидают отправки", "$pendingCount")
+                        currentSession?.let { session ->
+                            InfoRow(
+                                "Сессия",
+                                if (session.status == "OPEN") "Открыта" else "Закрыта"
+                            )
+                        }
+                        lastSyncTime?.let { time ->
+                            val sdf = SimpleDateFormat("HH:mm:ss, dd.MM.yyyy", Locale.getDefault())
+                            InfoRow("Последняя синхр.", sdf.format(Date(time)))
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = { syncViewModel.triggerSync() },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Синхронизировать сейчас")
+                        }
+                    }
+                }
+            }
+
+            // GPS tracking toggle
+            item {
+                GpsTrackingCard()
             }
         }
     }
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun GpsTrackingCard() {
+    var gpsActive by remember { mutableStateOf(false) }
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column {
+                Text(
+                    text = "GPS-трекинг",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = if (gpsActive) "Активен" else "Остановлен",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (gpsActive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = gpsActive,
+                onCheckedChange = { active ->
+                    gpsActive = active
+                    if (active) {
+                        ru.asop.terminal.service.GpsTrackingService.start(
+                            androidx.compose.ui.platform.LocalContext.current
+                        )
+                    } else {
+                        ru.asop.terminal.service.GpsTrackingService.stop(
+                            androidx.compose.ui.platform.LocalContext.current
+                        )
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+internal fun InfoRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
