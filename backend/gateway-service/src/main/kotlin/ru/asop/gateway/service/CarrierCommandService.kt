@@ -24,8 +24,9 @@ class CarrierCommandService(
 
     fun createCarrier(request: CarrierCreateRequest, principal: Principal?): Mono<UUID> {
         return Mono.fromCallable {
-            if (!InnValidator.isValid(request.inn)) {
-                throw IllegalArgumentException("Invalid INN: ${request.inn}")
+            val inn = request.inn.trim()
+            if (!InnValidator.isValid(inn)) {
+                throw IllegalArgumentException("Invalid INN: $inn")
             }
 
             val eventId = UuidUtils.newId()
@@ -35,8 +36,8 @@ class CarrierCommandService(
 
             val event = CarrierCreatedEvent(
                 carrierId = carrierId,
-                carrierName = request.carrierName,
-                inn = request.inn,
+                carrierName = request.carrierName.trim(),
+                inn = inn,
                 regionId = request.regionId,
                 createdAt = Instant.now(),
                 correlationId = correlationId,

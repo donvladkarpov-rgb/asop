@@ -39,10 +39,15 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9093}
     ssl:
+      key-store-location: ${KAFKA_KEYSTORE_PATH:file:/tmp/certs/gateway.p12}
+      key-store-password: ${KAFKA_KEYSTORE_PASSWORD:changeit}
       trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/tmp/certs/truststore.p12}
       trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
+      endpoint-identification-algorithm:
     properties:
       security.protocol: SSL
+      # Disable hostname verification for internal Docker networking
+      ssl.endpoint.identification.algorithm: ""
     consumer:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
@@ -72,6 +77,7 @@ asop:
       fiscal-events: asop.fiscal.events
       audit-events: asop.audit.events
       gps-events: asop.gps.events
+      carrier-events: asop.carrier.events
     send-timeout-ms: 5000
 
 # Logging

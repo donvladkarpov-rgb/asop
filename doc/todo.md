@@ -42,10 +42,14 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 ## 4. Frontend: Admin UI
 
 - [ ] **Страницы**:
-  - [ ] `CarriersPage` — список перевозчиков
   - [ ] `SessionsPage` — список смен
   - [ ] `CarrierDetailPage` — просмотр/редактирование перевозчика
   - [ ] `UserDetailPage` — просмотр пользователя
+
+- [x] **Дистрибьюторы карт** (`CardsDistributorsPage`) — полный CRUD + выбиралка договоров ✅
+- [x] **Договоры** (`ContractsPage`) — полный CRUD, форма с валидацией XOR (carrierId | cardsDistributorId), `ATTRIBUTES JSONB` ✅
+- [x] **Перевозчики** (`CarriersPage`) — список + редактирование (создание через async Kafka) ✅
+- [x] **3 пункта в Sidebar** — Перевозчики, Дистрибьюторы карт, Договоры (отдельными пунктами) ✅
 
 - [ ] **CRUD формы**:
   - [ ] Создание пользователя

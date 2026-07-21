@@ -175,7 +175,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
-- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule
 - Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
 ### Kafka topic naming
@@ -212,6 +212,8 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 - **web-admin Dockerfile**: `npm ci --legacy-peer-deps` (конфликт typescript 6.x vs openapi-typescript 7.x peer dep).
 - **start.ps1**: PowerShell-скрипт для wave-based запуска Docker из Windows (Git Bash не видит Docker Desktop — unix socket). `--build` обязателен после пересборки JARs.
 - **CertCommandConsumer subscribe**: `.subscribe(onNext, onError)` с error handler — без него ошибка публикации в Kafka проглатывалась, терминал зависал в PENDING навсегда.
+- **ASOP_CONTRACTS**: колонка `ATTRIBUTES JSONB` (nullable) — для произвольной абстрактной информации по договору. CHECK `chk_contracts_contractor` разрешает оба `carrierId`+`cardsDistributorId` = NULL, но запрещает оба NOT NULL (можно заполнить только одно поле). `ContractUpdateRequest` имеет флаги `clearCarrierId`/`clearCardsDistributorId` (Boolean) чтобы различить "не передано" (не менять) от "обнулить". Валидация BOTH-NOT-NULL дублируется в `ContractService.create/update` (IllegalArgumentException → 400) до удара по DB CHECK.
+- **Carrier-service ExceptionHandler**: `@RestControllerAdvice` ловит `IllegalArgumentException`/`IllegalStateException` (валидация) и `DataIntegrityViolationException` (DB CHECK/FK нарушения) → 400.
 
 ## Endpoints (реализовано)
 
@@ -246,6 +248,17 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 | POST | `/api/v1/terminals/register` | Регистрация терминала в БД |
 | GET | `/api/v1/terminals/{id}` | Получить терминал |
 | PUT | `/api/v1/terminals/{id}/status` | Изменить статус терминала |
+
+### Carrier-service (порт 8087, через gateway sync proxy)
+| Метод | Путь | Описание | Тип |
+|-------|------|----------|-----|
+| GET | `/api/v1/carriers` | Список перевозчиков | sync |
+| POST | `/api/v1/carriers` | Создание перевозчика (Kafka async, `CarrierCommandService`) | async |
+| GET | `/api/v1/carriers/{id}` | Получить перевозчика | sync |
+| PUT | `/api/v1/carriers/{id}` | Редактировать перевозчика | sync |
+| DELETE | `/api/v1/carriers/{id}` | Удалить перевозчика | sync |
+| GET/POST/PUT/DELETE | `/api/v1/cards-distributors[/{id}]` | CRUD дистрибьюторов карт (R2DBC) | sync |
+| GET/POST/PUT/DELETE | `/api/v1/contracts[/{id}]` | CRUD договоров (R2DBC, `ATTRIBUTES JSONB`, оба `carrierId`/`cardsDistributorId` могут быть null) | sync |
 
 ### Route-service (порт 8092, через gateway)
 | Метод | Путь | Описание |

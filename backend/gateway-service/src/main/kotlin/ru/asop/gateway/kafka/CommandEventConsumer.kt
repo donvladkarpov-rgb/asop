@@ -17,6 +17,7 @@ class CommandEventConsumer(
 
     @KafkaListener(
         topics = [
+            "\${asop.kafka.topics.carrier-events}",
             "\${asop.kafka.topics.session-events}",
             "\${asop.kafka.topics.transaction-events}",
             "\${asop.kafka.topics.card-events}",
@@ -39,6 +40,7 @@ class CommandEventConsumer(
             val node = objectMapper.readTree(record.value())
             val eventType = node.get("eventType")?.asText() ?: "Unknown"
             val aggregateId = node.get("aggregateId")?.asText()
+            val errorMessage = node.get("errorMessage")?.asText()
 
             val resultData = buildString {
                 append("{\"eventType\":\"")
@@ -52,9 +54,15 @@ class CommandEventConsumer(
                 append("\"}")
             }
 
-            eventService.complete(eventId, resultData)
-            log.debug("CommandEvent {} -> EventService COMPLETED: eventId={}, topic={}",
-                eventType, eventId, record.topic())
+            if (errorMessage != null) {
+                eventService.fail(eventId, errorMessage)
+                log.warn("CommandEvent {} -> EventService FAILED: eventId={}, topic={}, error={}",
+                    eventType, eventId, record.topic(), errorMessage)
+            } else {
+                eventService.complete(eventId, resultData)
+                log.debug("CommandEvent {} -> EventService COMPLETED: eventId={}, topic={}",
+                    eventType, eventId, record.topic())
+            }
         } catch (e: Exception) {
             log.error("Failed to process command event: eventId={}, topic={}, error={}",
                 eventId, record.topic(), e.message, e)

@@ -40,4 +40,9 @@ class CarrierController(
         return carrierService.getById(id)
             .map { ResponseEntity.ok(it) }
     }
+
+    override fun deleteCarrier(id: UUID): Mono<ResponseEntity<Void>> {
+        return carrierService.delete(id)
+            .thenReturn(ResponseEntity.noContent().build())
+    }
 }

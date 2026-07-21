@@ -11,38 +11,35 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
-import ru.asop.api.carrier.dto.request.ContractCreateRequest
-import ru.asop.api.carrier.dto.request.ContractUpdateRequest
-import ru.asop.api.carrier.dto.response.ContractResponse
-import java.security.Principal
+import ru.asop.api.carrier.dto.request.CardsDistributorCreateRequest
+import ru.asop.api.carrier.dto.request.CardsDistributorUpdateRequest
+import ru.asop.api.carrier.dto.response.CardsDistributorResponse
 import java.util.UUID
 
-@RequestMapping("/api/v1/contracts")
-interface ContractApi {
+@RequestMapping("/api/v1/cards-distributors")
+interface CardsDistributorApi {
 
     @GetMapping
-    fun listContracts(): Flux<ContractResponse>
+    fun listCardsDistributors(): Flux<CardsDistributorResponse>
 
     @GetMapping("/{id}")
-    fun getContract(
+    fun getCardsDistributor(
         @PathVariable id: UUID
-    ): Mono<ResponseEntity<ContractResponse>>
+    ): Mono<ResponseEntity<CardsDistributorResponse>>
 
     @PostMapping
-    fun createContract(
-        @Valid @RequestBody request: ContractCreateRequest,
-        principal: Mono<Principal>
-    ): Mono<ResponseEntity<ContractResponse>>
+    fun createCardsDistributor(
+        @Valid @RequestBody request: CardsDistributorCreateRequest
+    ): Mono<ResponseEntity<CardsDistributorResponse>>
 
     @PutMapping("/{id}")
-    fun updateContract(
+    fun updateCardsDistributor(
         @PathVariable id: UUID,
-        @Valid @RequestBody request: ContractUpdateRequest,
-        principal: Mono<Principal>
-    ): Mono<ResponseEntity<ContractResponse>>
+        @Valid @RequestBody request: CardsDistributorUpdateRequest
+    ): Mono<ResponseEntity<CardsDistributorResponse>>
 
     @DeleteMapping("/{id}")
-    fun deleteContract(
+    fun deleteCardsDistributor(
         @PathVariable id: UUID
     ): Mono<ResponseEntity<Void>>
 }

@@ -7,7 +7,7 @@ import java.util.UUID
 
 data class ContractResponse(
     val id: UUID,
-    val contractorType: String,
+    val contractorType: String?,
     val carrierId: UUID?,
     val cardsDistributorId: UUID?,
     val contractNumber: String,
@@ -15,6 +15,7 @@ data class ContractResponse(
     val endDate: LocalDate?,
     val status: String,
     val commissionPercent: BigDecimal?,
+    val attributes: String?,
     val createdAt: Instant,
     val updatedAt: Instant
 )

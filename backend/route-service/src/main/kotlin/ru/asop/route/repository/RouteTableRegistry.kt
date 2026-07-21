@@ -5,7 +5,8 @@ data class ResourceInfo(
     val tableName: String,
     val pkColumn: String,
     val idSnake: String,
-    val columnExprs: Map<String, String> = emptyMap()
+    val columnExprs: Map<String, String> = emptyMap(),
+    val selectColumns: String? = null
 )
 
 object RouteTableRegistry {
@@ -16,14 +17,16 @@ object RouteTableRegistry {
             tableName = "ASOP_FARE_ZONES",
             pkColumn = "ZONE_ID",
             idSnake = "zone_id",
-            columnExprs = mapOf("zone_polygon" to "ST_GeomFromGeoJSON(NULLIF(:zone_polygon, ''))::geography")
+            columnExprs = mapOf("zone_polygon" to "ST_GeomFromGeoJSON(NULLIF(:zone_polygon, ''))::geography"),
+            selectColumns = "zone_id, zone_code, zone_name, description, ST_AsGeoJSON(zone_polygon)::text AS zone_polygon, region_id"
         ),
         "transport-stops" to ResourceInfo(
             resource = "transport-stops",
             tableName = "ASOP_TRANSPORT_STOPS",
             pkColumn = "STOP_ID",
             idSnake = "stop_id",
-            columnExprs = mapOf("zone_polygon" to "ST_GeomFromGeoJSON(NULLIF(:zone_polygon, ''))::geography")
+            columnExprs = mapOf("zone_polygon" to "ST_GeomFromGeoJSON(NULLIF(:zone_polygon, ''))::geography"),
+            selectColumns = "stop_id, fare_zone_id, region_id, stop_code, stop_name, stop_address, ST_AsGeoJSON(zone_polygon)::text AS zone_polygon, description, is_active, created_at, updated_at"
         ),
         "routes" to ResourceInfo(
             resource = "routes",

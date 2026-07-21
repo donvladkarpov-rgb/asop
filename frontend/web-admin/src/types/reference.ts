@@ -101,6 +101,35 @@ export interface Carrier {
   regionId: string;
 }
 
+export interface CardsDistributor {
+  id: string;
+  distributorName: string;
+  inn: string;
+  kpp?: string;
+  legalAddress?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  contracts?: Contract[];
+}
+
+export interface Contract {
+  id: string;
+  contractorType?: string;
+  carrierId?: string;
+  cardsDistributorId?: string;
+  contractNumber: string;
+  startDate: string;
+  endDate?: string;
+  status: string;
+  commissionPercent?: number;
+  attributes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BenefitStep {
   id: string;
   benefitId: string;

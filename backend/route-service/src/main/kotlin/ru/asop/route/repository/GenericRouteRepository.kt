@@ -21,12 +21,14 @@ class GenericRouteRepository(
     private val db: DatabaseClient
 ) {
     fun list(info: ResourceInfo): Flux<Map<String, Any?>> {
-        val sql = "SELECT * FROM ${info.tableName} ORDER BY ${info.pkColumn} ASC"
+        val selectClause = info.selectColumns ?: "*"
+        val sql = "SELECT $selectClause FROM ${info.tableName} ORDER BY ${info.pkColumn} ASC"
         return db.sql(sql).fetch().all()
     }
 
     fun getById(info: ResourceInfo, id: UUID): Mono<Map<String, Any?>> {
-        val sql = "SELECT * FROM ${info.tableName} WHERE ${info.pkColumn} = :id LIMIT 1"
+        val selectClause = info.selectColumns ?: "*"
+        val sql = "SELECT $selectClause FROM ${info.tableName} WHERE ${info.pkColumn} = :id LIMIT 1"
         return db.sql(sql)
             .bind("id", id)
             .fetch()

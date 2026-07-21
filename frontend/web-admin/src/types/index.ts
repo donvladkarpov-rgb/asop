@@ -28,23 +28,6 @@ export interface Card {
   expiresAt?: string;
 }
 
-export interface Carrier {
-  id: string;
-  name: string;
-  inn: string;
-  status: 'active' | 'blocked';
-  contracts: Contract[];
-}
-
-export interface Contract {
-  id: string;
-  number: string;
-  carrierId: string;
-  validFrom: string;
-  validTo?: string;
-  status: 'active' | 'expired';
-}
-
 export interface Session {
   id: string;
   terminalId: string;

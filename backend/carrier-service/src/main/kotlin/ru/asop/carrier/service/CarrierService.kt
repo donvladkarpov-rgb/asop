@@ -49,6 +49,10 @@ class CarrierService(
     fun getById(id: UUID): Mono<CarrierResponse> {
         return carrierRepository.findById(id).map { it.toResponse() }
     }
+
+    fun delete(id: UUID): Mono<Void> {
+        return carrierRepository.deleteById(id)
+    }
 }
 
 private fun CarrierEntity.toResponse() = CarrierResponse(

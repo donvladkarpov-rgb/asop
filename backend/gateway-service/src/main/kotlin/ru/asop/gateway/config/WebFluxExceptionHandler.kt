@@ -61,6 +61,14 @@ class WebFluxExceptionHandler : ErrorWebExceptionHandler {
                     path = path
                 )
             }
+            is IllegalArgumentException -> {
+                log.warn("Bad request at {}: {}", path, ex.message)
+                HttpStatus.BAD_REQUEST to ErrorResponse(
+                    errorCode = ErrorCode.VALIDATION_ERROR.code,
+                    message = ex.message ?: "Bad request",
+                    path = path
+                )
+            }
             is org.springframework.web.server.ResponseStatusException -> {
                 log.warn("ResponseStatusException at {}: {}", path, ex.message)
                 HttpStatus.valueOf(ex.statusCode.value()) to ErrorResponse(

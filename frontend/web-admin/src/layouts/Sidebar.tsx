@@ -8,8 +8,13 @@ const navItems = [
   { to: '/users', label: 'Пользователи', icon: '👥' },
   { to: '/terminals', label: 'Терминалы', icon: '💳' },
   { to: '/cards', label: 'Карты', icon: '🪪' },
-  { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
   { to: '/sessions', label: 'Смены', icon: '🔐' },
+];
+
+const contractorItems = [
+  { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
+  { to: '/cards-distributors', label: 'Дистрибьюторы карт', icon: '📦' },
+  { to: '/contracts', label: 'Договоры', icon: '📄' },
 ];
 
 const regionItems = [
@@ -84,6 +89,22 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
+      <CollapsibleSection label="Контрагенты" defaultOpen={true}>
+        <nav className="sidebar-nav">
+          {contractorItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
       <CollapsibleSection label="Регионы и территории">
         <nav className="sidebar-nav">
           {regionItems.map((item) => (

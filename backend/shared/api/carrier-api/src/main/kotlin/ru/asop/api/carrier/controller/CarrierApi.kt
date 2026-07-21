@@ -2,6 +2,7 @@ package ru.asop.api.carrier.controller
 
 import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.DeleteMapping
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -39,4 +40,9 @@ interface CarrierApi {
     fun getCarrier(
         @PathVariable id: UUID
     ): Mono<ResponseEntity<CarrierResponse>>
+
+    @DeleteMapping("/{id}")
+    fun deleteCarrier(
+        @PathVariable id: UUID
+    ): Mono<ResponseEntity<Void>>
 }

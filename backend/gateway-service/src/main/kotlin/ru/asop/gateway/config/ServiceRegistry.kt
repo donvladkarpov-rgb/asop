@@ -16,6 +16,8 @@ class ServiceRegistry {
         "sessions" to svc("session-service", 8085),
         "cards" to svc("card-service", 8086),
         "carriers" to svc("carrier-service", 8087),
+        "cards-distributors" to svc("carrier-service", 8087),
+        "contracts" to svc("carrier-service", 8087),
         "debts" to svc("debt-service", 8088),
         "audit" to svc("audit-service", 8089),
         "fiscal" to svc("fiscal-service", 8090),

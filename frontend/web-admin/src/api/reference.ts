@@ -142,11 +142,20 @@ export const deleteBenefit = (id: string) =>
 export const getCarriers = () =>
   apiClient.get<Carrier[]>('/carriers').then((r) => r.data);
 
+export const getCarrier = (id: string) =>
+  apiClient.get<Carrier>(`/carriers/${id}`).then((r) => r.data);
+
+export const updateCarrier = (id: string, data: Partial<Carrier>) =>
+  apiClient.put<Carrier>(`/carriers/${id}`, data).then((r) => r.data);
+
+export const deleteCarrier = (id: string) =>
+  apiClient.delete(`/carriers/${id}`);
+
 // Vehicles — moved to api/routes.ts (per-table CRUD for route-service)
 
 // Benefit Steps
 export const getBenefitSteps = (benefitId?: string) =>
-  apiClient.get<BenefitStep[]>('/benefit-steps', { params: { benefitId } }).then((r) => r.data);
+  apiClient.get<BenefitStep[]>(benefitId ? '/benefit-steps/by-benefit' : '/benefit-steps', { params: benefitId ? { benefitId } : {} }).then((r) => r.data);
 export const createBenefitStep = (data: Partial<BenefitStep>) =>
   apiClient.post<BenefitStep>('/benefit-steps', data).then((r) => r.data);
 export const updateBenefitStep = (id: string, data: Partial<BenefitStep>) =>

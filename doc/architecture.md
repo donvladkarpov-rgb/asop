@@ -87,7 +87,7 @@ backend/shared/api/{name}-api/
 | terminal-service | 8084 | Управление терминалами |
 | session-service | 8085 | Сессии/смены (иерархия) |
 | card-service | 8086 | Карты (MIFARE, банковские) |
-| carrier-service | 8087 | Перевозчики, договоры (R2DBC) |
+| carrier-service | 8087 | Перевозчики, договоры, дистрибьюторы карт (R2DBC) |
 | debt-service | 8088 | Долги по картам |
 | audit-service | 8089 | КРС (проверки) |
 | fiscal-service | 8090 | Фискализация (ОФД) |
@@ -374,7 +374,8 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 
 ### Ключевые таблицы
 - `ASOP_USERS`, `ASOP_USER_ROLES`, `ASOP_USER_CARRIERS` — пользователи
-- `ASOP_CARRIERS`, `ASOP_CONTRACTS`, `ASOP_VEHICLES` — перевозчики
+- `ASOP_CARRIERS`, `ASOP_CARDS_DISTRIBUTORS`, `ASOP_CONTRACTS`, `ASOP_VEHICLES` — перевозчики, дистрибьюторы карт, договоры, ТС
+- `ASOP_CONTRACTS` — общий справочник договоров: `CONTRACTOR_TYPE` (CARRIER | CARDS_DISTRIBUTOR, nullable), `CARRIER_ID`/`CARDS_DISTRIBUTOR_ID` (оба nullable, CHECK запрещает оба NOT NULL), `ATTRIBUTES JSONB` (абстрактная информация)
 - `ASOP_CARDS`, `ASOP_CARD_MIFARES`, `ASOP_CARD_TARIFFS`, `ASOP_CARD_BANKS` — карты
 - `ASOP_TERMINALS` (с `UNIQUE` constraint на `TERMINAL_SERIAL`), `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — терминалы
 - `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (v002):
@@ -397,7 +398,7 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 - Vite dev mode проксирует `/api` → `http://localhost:8080` (gateway)
 - API-клиент: `BASE=/api/v1`, Bearer token из oidc-client-ts
 - `useCommand` hook: паттерн 202 + polling для write-команд
-- Страницы: `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+- Страницы: `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
 - Язык UI: русский (для английского нужен i18n)
 
 ### Android Terminal (`frontend/android-terminal/`)

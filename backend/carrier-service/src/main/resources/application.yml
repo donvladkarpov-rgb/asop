@@ -45,3 +45,4 @@ asop:
   kafka:
     topics:
       carrier-commands: asop.carrier.commands
+      carrier-events: asop.carrier.events

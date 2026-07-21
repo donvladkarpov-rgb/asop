@@ -18,6 +18,9 @@ import { TransactionResultsPage } from './pages/TransactionResults';
 import { ServicesPage } from './pages/Services';
 import { BenefitsPage } from './pages/Benefits';
 import { BenefitStepsPage } from './pages/BenefitSteps';
+import { CarriersPage } from './pages/Carriers';
+import { CardsDistributorsPage } from './pages/CardsDistributors';
+import { ContractsPage } from './pages/Contracts';
 import { FareZonesPage } from './pages/routes/FareZonesPage';
 import { TransportStopsPage } from './pages/routes/TransportStopsPage';
 import { RoutesPage } from './pages/routes/RoutesPage';
@@ -85,6 +88,9 @@ function AppRoutes() {
         <Route path="services" element={<ServicesPage />} />
         <Route path="benefits" element={<BenefitsPage />} />
         <Route path="benefit-steps" element={<BenefitStepsPage />} />
+        <Route path="carriers" element={<CarriersPage />} />
+        <Route path="cards-distributors" element={<CardsDistributorsPage />} />
+        <Route path="contracts" element={<ContractsPage />} />
         <Route path="fare-zones" element={<FareZonesPage />} />
         <Route path="transport-stops" element={<TransportStopsPage />} />
         <Route path="routes" element={<RoutesPage />} />

@@ -12,10 +12,23 @@ export function BenefitStepsPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ['benefit-steps', filterBenefit], queryFn: () => getBenefitSteps(filterBenefit || undefined) });
   const [edit, setEdit] = useState<Partial<BenefitStep> | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const createMut = useMutation({ mutationFn: createBenefitStep, onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefit-steps'] }); setShowForm(false); } });
-  const updateMut = useMutation({ mutationFn: ({ id, data }: { id: string; data: Partial<BenefitStep> }) => updateBenefitStep(id, data), onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefit-steps'] }); setEdit(null); } });
-  const deleteMut = useMutation({ mutationFn: deleteBenefitStep, onSuccess: () => qc.invalidateQueries({ queryKey: ['benefit-steps'] }) });
+  const createMut = useMutation({
+    mutationFn: createBenefitStep,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefit-steps'] }); setShowForm(false); setFormError(null); },
+    onError: (e) => setFormError(JSON.stringify((e as { response?: { data?: unknown } })?.response?.data ?? (e as Error).message)),
+  });
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<BenefitStep> }) => updateBenefitStep(id, data),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['benefit-steps'] }); setEdit(null); setFormError(null); },
+    onError: (e) => setFormError(JSON.stringify((e as { response?: { data?: unknown } })?.response?.data ?? (e as Error).message)),
+  });
+  const deleteMut = useMutation({
+    mutationFn: deleteBenefitStep,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['benefit-steps'] }),
+    onError: (e) => console.error('Delete failed', e),
+  });
 
   if (isLoading) return <div>Загрузка...</div>;
   if (error) return <div>Ошибка: {(error as Error).message}</div>;
@@ -33,12 +46,14 @@ export function BenefitStepsPage() {
         </div>
       </div>
 
+      {formError && <div style={{ color: 'red', marginTop: 8, marginBottom: 8 }}>{formError}</div>}
+
       {(showForm || edit) && (
         <BenefitStepForm
           benefits={benefits || []}
           initial={edit}
           onSave={(d) => edit?.id ? updateMut.mutate({ id: edit.id!, data: d }) : createMut.mutate(d)}
-          onCancel={() => { setShowForm(false); setEdit(null); }}
+          onCancel={() => { setShowForm(false); setEdit(null); setFormError(null); }}
         />
       )}
 

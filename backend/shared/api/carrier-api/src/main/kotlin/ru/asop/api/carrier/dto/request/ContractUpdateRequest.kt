@@ -1,33 +1,33 @@
 package ru.asop.api.carrier.dto.request
 
-import jakarta.validation.constraints.NotBlank
-import jakarta.validation.constraints.NotNull
 import jakarta.validation.constraints.PositiveOrZero
 import jakarta.validation.constraints.Size
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.util.UUID
 
-data class ContractCreateRequest(
+data class ContractUpdateRequest(
     val contractorType: String? = null,
 
     val carrierId: UUID? = null,
 
     val cardsDistributorId: UUID? = null,
 
-    @field:NotBlank(message = "Contract number is required")
     @field:Size(max = 100, message = "Contract number must be less than 100 characters")
-    val contractNumber: String,
+    val contractNumber: String? = null,
 
-    @field:NotNull(message = "Start date is required")
-    val startDate: LocalDate,
+    val startDate: LocalDate? = null,
 
     val endDate: LocalDate? = null,
 
-    val status: String = "ACTIVE",
+    val status: String? = null,
 
     @field:PositiveOrZero
     val commissionPercent: BigDecimal? = null,
 
-    val attributes: String? = null
+    val attributes: String? = null,
+
+    val clearCarrierId: Boolean = false,
+
+    val clearCardsDistributorId: Boolean = false
 )

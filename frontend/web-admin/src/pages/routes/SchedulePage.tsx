@@ -4,6 +4,19 @@ import { getSchedules, createSchedule, updateSchedule, deleteSchedule, getPaths,
 import { getRegions } from '../../api/reference';
 import type { Schedule } from '../../types/route';
 
+const DAY_LABELS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const DAY_BITS = [1, 2, 4, 8, 16, 32, 64];
+
+function maskToDays(mask: number): boolean[] {
+  return DAY_BITS.map((b) => (mask & b) !== 0);
+}
+function daysToMask(days: boolean[]): number {
+  return days.reduce((m, checked, i) => (checked ? m | DAY_BITS[i] : m), 0);
+}
+function maskToDayNames(mask: number): string {
+  return DAY_LABELS.filter((_, i) => (mask & DAY_BITS[i]) !== 0).join(', ') || '—';
+}
+
 
 export function SchedulePage() {
   const qc = useQueryClient();
@@ -11,6 +24,7 @@ export function SchedulePage() {
   const [edit, setEdit] = useState<Partial<Schedule> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [dayMaskChecked, setDayMaskChecked] = useState<boolean[]>(maskToDays(127));
 
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
   const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
@@ -38,7 +52,7 @@ export function SchedulePage() {
     <div>
       <div className="page-header">
         <h1>Расписание</h1>
-        <button className="btn-primary" onClick={() => { setEdit({}); setShowForm(true); setFormError(null); }}>
+        <button className="btn-primary" onClick={() => { setEdit({}); setShowForm(true); setFormError(null); setDayMaskChecked(maskToDays(127)); }}>
           + Добавить
         </button>
       </div>
@@ -51,7 +65,7 @@ export function SchedulePage() {
             e.preventDefault();
             const form = e.currentTarget;
             const data = Object.fromEntries(new FormData(form)) as any;
-            data.dayMask = Number(data.dayMask);
+            data.dayMask = daysToMask(dayMaskChecked);
             data.dwellTimeSec = data.dwellTimeSec ? Number(data.dwellTimeSec) : null;
             data.isActive = form.querySelector<HTMLInputElement>('input[name="isActive"]')?.checked || false;
             if (edit?.id) updateMut.mutate({ id: edit.id, data });
@@ -77,8 +91,16 @@ export function SchedulePage() {
                 </select>
               </div>
               <div className="form-group">
-                <label>Маска дней (1-127)</label>
-                <input type="number" name="dayMask" min={1} max={127} defaultValue={(edit as any)?.dayMask || ''} required />
+                <label>Дни недели</label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+                  {DAY_LABELS.map((label, i) => (
+                    <label key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={dayMaskChecked[i]}
+                        onChange={() => setDayMaskChecked(prev => prev.map((v, j) => j === i ? !v : v))} />
+                      {label}
+                    </label>
+                  ))}
+                </div>
               </div>
               <div className="form-group">
                 <label>Время прибытия</label>
@@ -134,13 +156,13 @@ export function SchedulePage() {
             <tr key={item.id}>
               <td>{paths?.find((p: any) => p.id === item.pathId)?.pathName || item.pathId}</td>
               <td>{stops?.find((s: any) => s.id === item.stopId)?.stopName || item.stopId}</td>
-              <td>{item.dayMask}</td>
+              <td>{maskToDayNames(item.dayMask)}</td>
               <td>{item.arrivalTime}</td>
               <td>{item.dwellTimeSec ?? '—'}</td>
               <td>{regions?.find((r: any) => r.id === item.regionId)?.municipalDivision || item.regionId}</td>
               <td>{item.isActive ? 'Да' : 'Нет'}</td>
               <td style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-secondary btn-sm" onClick={() => { setEdit(item); setFormError(null); }}>✎</button>
+                <button className="btn-secondary btn-sm" onClick={() => { setEdit(item); setFormError(null); setDayMaskChecked(maskToDays(item.dayMask)); }}>✎</button>
                 <button className="btn-danger btn-sm"
                   onClick={() => { if (confirm('Удалить?')) deleteMut.mutate(item.id); }}>✕</button>
               </td>

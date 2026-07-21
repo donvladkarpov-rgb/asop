@@ -376,7 +376,12 @@ Root CA (self-signed, ECC P-256, 10 лет)
 
 **Перевозчики:**
 - `ASOP_CARRIERS` — перевозчики
-- `ASOP_CONTRACTS` — договоры
+- `ASOP_CARDS_DISTRIBUTORS` — дистрибьюторы карт (юридические лица, пополняющие MIFARE-карты через свои платёжные терминалы)
+- `ASOP_CONTRACTS` — договоры (общий для перевозчиков и дистрибьюторов)
+  - `CONTRACTOR_TYPE` VARCHAR(20) — `CARRIER` | `CARDS_DISTRIBUTOR` (nullable)
+  - `CARRIER_ID`, `CARDS_DISTRIBUTOR_ID` — оба nullable; CHECK `chk_contracts_contractor` разрешает оба NULL, но запрещает оба NOT NULL
+  - `ATTRIBUTES JSONB` — произвольная абстрактная информация по договору (nullable)
+  - `COMMISSION_PERCENT` NUMERIC(5,2) — 0-100, nullable
 
 **Маршруты (route-service):**
 - `ASOP_ROUTES` — справочник маршрутов
@@ -471,9 +476,14 @@ Liquibase запускается **отдельным Docker-контейнер�
 См. подробнее в `doc/smoke-tests.md` (7 сценариев интеграционного тестирования).
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
 
 Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
+
+Отдельные пункты в Sidebar:
+- **Перевозчики** (`/carriers`) — список перевозчиков, редактирование (БЕЗ создания — создание идёт через async Kafka). Поля: name, INN, region.
+- **Дистрибьюторы карт** (`/cards-distributors`) — полный CRUD + выбиралка договоров (привязка/отвязка через `PUT /api/v1/contracts/{id}`).
+- **Договоры** (`/contracts`) — полный CRUD. Форма валидирует "только одно поле" (carrierId XOR cardsDistributorId). Поле `attributes` — textarea для JSON.
 
 Экран Android-приложения: **"Подписать новый сертификат"** — генерация ключевой пары, отправка публичного ключа через Gateway, polling `GET /api/v1/events/{eventId}`, сохранение сертификата и CA-цепочки в AndroidKeyStore.
 

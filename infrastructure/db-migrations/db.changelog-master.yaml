@@ -1,6 +1,7 @@
 databaseChangeLog:
-  # ВАЖНО: v001-init.sql содержит ВСЮ схему, включая ASOP_TERMINAL_CERTS (раньше в v002).
-  # При обновлении с версии, где v002 был отдельным changeset, будет checksum mismatch.
+  # ВАЖНО: v001-init.sql содержит ВСЮ схему, включая ASOP_TERMINAL_CERTS (раньше в v002)
+  # и CREATED_AT/UPDATED_AT в ASOP_CARRIERS (раньше в отдельной v002-carrier-timestamps).
+  # При обновлении с версии, где они были отдельными changeset'ами, будет checksum mismatch.
   # Решение: docker compose down -v (полное пересоздание БД) — см. AGENTS.md.
   - include:
       file: migrations/v001-init.yaml
