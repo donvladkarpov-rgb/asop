@@ -101,3 +101,20 @@ export interface Vehicle {
   vehicleNumber: string;
   vehicleName?: string | null;
 }
+
+export interface VehicleType {
+  id: string;
+  typeName: string;
+}
+
+export interface VehicleModel {
+  id: string;
+  modelName: string;
+}
+
+export interface ContractRoute {
+  contractId: string;
+  routeId: string;
+  routeNumber?: string | null;
+  contractNumber?: string | null;
+}

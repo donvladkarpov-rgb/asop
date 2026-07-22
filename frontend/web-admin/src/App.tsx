@@ -31,6 +31,13 @@ import { PathServicesPage } from './pages/routes/PathServicesPage';
 import { PathDiscountsPage } from './pages/routes/PathDiscountsPage';
 import { PathBenefitsPage } from './pages/routes/PathBenefitsPage';
 import { VehiclesPage } from './pages/routes/VehiclesPage';
+import { VehicleTypesPage } from './pages/routes/VehicleTypesPage';
+import { VehicleModelsPage } from './pages/routes/VehicleModelsPage';
+import { ContractRoutesPage } from './pages/routes/ContractRoutesPage';
+import { UsersAdminPage } from './pages/security/UsersAdminPage';
+import { UserRolesPage } from './pages/security/UserRolesPage';
+import { UserCarriersPage } from './pages/security/UserCarriersPage';
+import { UserRegionsPage } from './pages/security/UserRegionsPage';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
@@ -101,6 +108,13 @@ function AppRoutes() {
         <Route path="path-discounts" element={<PathDiscountsPage />} />
         <Route path="path-benefits" element={<PathBenefitsPage />} />
         <Route path="vehicles" element={<VehiclesPage />} />
+        <Route path="vehicle-types" element={<VehicleTypesPage />} />
+        <Route path="vehicle-models" element={<VehicleModelsPage />} />
+        <Route path="contract-routes" element={<ContractRoutesPage />} />
+        <Route path="admin-users" element={<UsersAdminPage />} />
+        <Route path="user-roles" element={<UserRolesPage />} />
+        <Route path="user-carriers" element={<UserCarriersPage />} />
+        <Route path="user-regions" element={<UserRegionsPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

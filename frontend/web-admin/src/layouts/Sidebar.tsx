@@ -15,6 +15,14 @@ const contractorItems = [
   { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
   { to: '/cards-distributors', label: 'Дистрибьюторы карт', icon: '📦' },
   { to: '/contracts', label: 'Договоры', icon: '📄' },
+  { to: '/contract-routes', label: 'Связи договор-маршрут', icon: '🔗' },
+];
+
+const securityItems = [
+  { to: '/admin-users', label: 'Пользователи', icon: '👤' },
+  { to: '/user-roles', label: 'Роли пользователей', icon: '🔑' },
+  { to: '/user-carriers', label: 'Перевозчики пользователей', icon: '🚌' },
+  { to: '/user-regions', label: 'Регионы пользователей', icon: '🗺️' },
 ];
 
 const regionItems = [
@@ -36,6 +44,12 @@ const refItems = [
   { to: '/benefit-steps', label: 'Шаги льгот', icon: '📐' }
 ];
 
+const transportItems = [
+  { to: '/vehicle-types', label: 'Типы ТС', icon: '🚗' },
+  { to: '/vehicle-models', label: 'Модели ТС', icon: '🚙' },
+  { to: '/vehicles', label: 'ТС', icon: '🚐' },
+];
+
 const routeItems = [
   { to: '/fare-zones', label: 'Тарифные зоны', icon: '🗺️' },
   { to: '/transport-stops', label: 'Остановки', icon: '🚏' },
@@ -46,7 +60,6 @@ const routeItems = [
   { to: '/path-services', label: 'Услуги на пути', icon: '⚙️' },
   { to: '/path-discounts', label: 'Скидки на пути', icon: '💸' },
   { to: '/path-benefits', label: 'Льготы на пути', icon: '🎫' },
-  { to: '/vehicles', label: 'ТС', icon: '🚐' },
 ];
 
 const bottomItems = [
@@ -89,6 +102,22 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
+      <CollapsibleSection label="Пользователи и Безопасность" defaultOpen={true}>
+        <nav className="sidebar-nav">
+          {securityItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
       <CollapsibleSection label="Контрагенты" defaultOpen={true}>
         <nav className="sidebar-nav">
           {contractorItems.map((item) => (
@@ -124,6 +153,22 @@ export function Sidebar() {
       <CollapsibleSection label="Справочники">
         <nav className="sidebar-nav">
           {refItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
+      <CollapsibleSection label="Транспорт" defaultOpen={true}>
+        <nav className="sidebar-nav">
+          {transportItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

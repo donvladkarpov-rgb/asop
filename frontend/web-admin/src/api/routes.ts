@@ -2,6 +2,26 @@ import apiClient from './client';
 
 export type RouteEntity = Record<string, unknown> & { id: string };
 
+// ===== VehicleType =====
+export interface VehicleType {
+  id: string;
+  typeName: string;
+}
+
+// ===== VehicleModel =====
+export interface VehicleModel {
+  id: string;
+  modelName: string;
+}
+
+// ===== ContractRoute =====
+export interface ContractRoute {
+  contractId: string;
+  routeId: string;
+  routeNumber?: string | null;
+  contractNumber?: string | null;
+}
+
 // ===== FareZone =====
 export interface FareZone {
   id: string;
@@ -284,6 +304,99 @@ export const createVehicle = (data: VehicleCreate) =>
 export const updateVehicle = (id: string, data: VehicleUpdate) =>
   apiClient.put<Vehicle>(`/vehicles/${id}`, data).then((r) => r.data);
 export const deleteVehicle = (id: string) => apiClient.delete(`/vehicles/${id}`);
+
+// VehicleType
+export const getVehicleTypes = (): Promise<VehicleType[]> =>
+  apiClient.get<VehicleType[]>('/vehicle-types').then((r) => r.data ?? []);
+export const createVehicleType = (data: { typeName: string }) =>
+  apiClient.post<VehicleType>('/vehicle-types', data).then((r) => r.data);
+export const updateVehicleType = (id: string, data: { typeName: string }) =>
+  apiClient.put<VehicleType>(`/vehicle-types/${id}`, data).then((r) => r.data);
+export const deleteVehicleType = (id: string) => apiClient.delete(`/vehicle-types/${id}`);
+
+// VehicleModel
+export const getVehicleModels = (): Promise<VehicleModel[]> =>
+  apiClient.get<VehicleModel[]>('/vehicle-models').then((r) => r.data ?? []);
+export const createVehicleModel = (data: { modelName: string }) =>
+  apiClient.post<VehicleModel>('/vehicle-models', data).then((r) => r.data);
+export const updateVehicleModel = (id: string, data: { modelName: string }) =>
+  apiClient.put<VehicleModel>(`/vehicle-models/${id}`, data).then((r) => r.data);
+export const deleteVehicleModel = (id: string) => apiClient.delete(`/vehicle-models/${id}`);
+
+// ContractRoute
+export const getContractRoutes = (params?: { contractId?: string; routeId?: string }): Promise<ContractRoute[]> =>
+  apiClient.get<ContractRoute[]>('/contract-routes', { params }).then((r) => r.data ?? []);
+export const createContractRoute = (data: { contractId: string; routeId: string }) =>
+  apiClient.post<ContractRoute>('/contract-routes', data).then((r) => r.data);
+export const deleteContractRoute = (contractId: string, routeId: string) =>
+  apiClient.delete('/contract-routes', { params: { contractId, routeId } });
+
+// ===== Admin User =====
+export interface AdminUser {
+  id: string;
+  firstName: string;
+  lastNameInitial: string;
+  patronymicInitial?: string | null;
+  phone?: string | null;
+  keycloakId?: string | null;
+}
+export type AdminUserCreate = Omit<AdminUser, 'id' | 'keycloakId'>;
+
+export const getAdminUsers = (): Promise<AdminUser[]> =>
+  apiClient.get<AdminUser[]>('/admin-users').then((r) => r.data ?? []);
+export const createAdminUser = (data: AdminUserCreate) =>
+  apiClient.post<AdminUser>('/admin-users', data).then((r) => r.data);
+export const updateAdminUser = (id: string, data: AdminUserCreate) =>
+  apiClient.put<AdminUser>(`/admin-users/${id}`, data).then((r) => r.data);
+export const deleteAdminUser = (id: string) => apiClient.delete(`/admin-users/${id}`);
+
+// ===== UserRole =====
+export interface UserRole {
+  userId: string;
+  roleId: string;
+  roleName?: string | null;
+  firstName?: string | null;
+  lastNameInitial?: string | null;
+}
+
+export const getUserRoles = (params?: { userId?: string; roleId?: string }): Promise<UserRole[]> =>
+  apiClient.get<UserRole[]>('/user-roles', { params }).then((r) => r.data ?? []);
+export const createUserRole = (data: { userId: string; roleId: string }) =>
+  apiClient.post<UserRole>('/user-roles', data).then((r) => r.data);
+export const deleteUserRole = (userId: string, roleId: string) =>
+  apiClient.delete('/user-roles', { params: { userId, roleId } });
+
+// ===== UserCarrier =====
+export interface UserCarrier {
+  userId: string;
+  carrierId: string;
+  carrierName?: string | null;
+  firstName?: string | null;
+  lastNameInitial?: string | null;
+}
+
+export const getUserCarriers = (params?: { userId?: string; carrierId?: string }): Promise<UserCarrier[]> =>
+  apiClient.get<UserCarrier[]>('/user-carriers', { params }).then((r) => r.data ?? []);
+export const createUserCarrier = (data: { userId: string; carrierId: string }) =>
+  apiClient.post<UserCarrier>('/user-carriers', data).then((r) => r.data);
+export const deleteUserCarrier = (userId: string, carrierId: string) =>
+  apiClient.delete('/user-carriers', { params: { userId, carrierId } });
+
+// ===== UserRegion =====
+export interface UserRegion {
+  userId: string;
+  regionId: string;
+  regionName?: string | null;
+  firstName?: string | null;
+  lastNameInitial?: string | null;
+}
+
+export const getUserRegions = (params?: { userId?: string; regionId?: string }): Promise<UserRegion[]> =>
+  apiClient.get<UserRegion[]>('/user-regions', { params }).then((r) => r.data ?? []);
+export const createUserRegion = (data: { userId: string; regionId: string }) =>
+  apiClient.post<UserRegion>('/user-regions', data).then((r) => r.data);
+export const deleteUserRegion = (userId: string, regionId: string) =>
+  apiClient.delete('/user-regions', { params: { userId, regionId } });
 
 // Suppress unused warning for helper
 export { stripId, normalize };

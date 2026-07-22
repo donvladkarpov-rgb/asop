@@ -76,6 +76,24 @@ object RouteTableRegistry {
             tableName = "ASOP_VEHICLES",
             pkColumn = "VEHICLE_ID",
             idSnake = "vehicle_id"
+        ),
+        "vehicle-types" to ResourceInfo(
+            resource = "vehicle-types",
+            tableName = "ASOP_VEHICLE_TYPES",
+            pkColumn = "VEHICLE_TYPE_ID",
+            idSnake = "vehicle_type_id"
+        ),
+        "vehicle-models" to ResourceInfo(
+            resource = "vehicle-models",
+            tableName = "ASOP_VEHICLE_MODELS",
+            pkColumn = "VEHICLE_MODEL_ID",
+            idSnake = "vehicle_model_id"
+        ),
+        "contract-routes" to ResourceInfo(
+            resource = "contract-routes",
+            tableName = "ASOP_CONTRACT_ROUTES",
+            pkColumn = "CONTRACT_ID",
+            idSnake = "contract_id"
         )
     )
 

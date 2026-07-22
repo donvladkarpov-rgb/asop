@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getVehicles, createVehicle, updateVehicle, deleteVehicle } from '../../api/routes';
+import { getVehicles, createVehicle, updateVehicle, deleteVehicle, getVehicleTypes, getVehicleModels } from '../../api/routes';
 import { getCarriers } from '../../api/reference';
 import type { Vehicle } from '../../types/route';
 
@@ -12,6 +12,8 @@ export function VehiclesPage() {
   const [formError, setFormError] = useState<string | null>(null);
 
   const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { data: vehicleTypes } = useQuery({ queryKey: ['vehicle-types'], queryFn: getVehicleTypes });
+  const { data: vehicleModels } = useQuery({ queryKey: ['vehicle-models'], queryFn: getVehicleModels });
 
   const createMut = useMutation({
     mutationFn: createVehicle,
@@ -65,12 +67,18 @@ export function VehiclesPage() {
                 <label>Тип ТС</label>
                 <select name="vehicleTypeId" defaultValue={(edit as any)?.vehicleTypeId || ''} required>
                   <option value="">Выберите тип ТС</option>
+                  {vehicleTypes?.map((t: any) => (
+                    <option key={t.id} value={t.id}>{t.typeName}</option>
+                  ))}
                 </select>
               </div>
               <div className="form-group">
                 <label>Модель ТС</label>
                 <select name="vehicleModelId" defaultValue={(edit as any)?.vehicleModelId || ''} required>
                   <option value="">Выберите модель ТС</option>
+                  {vehicleModels?.map((m: any) => (
+                    <option key={m.id} value={m.id}>{m.modelName}</option>
+                  ))}
                 </select>
               </div>
               <div className="form-group">
@@ -109,8 +117,8 @@ export function VehiclesPage() {
           {data?.map((item) => (
             <tr key={item.id}>
               <td>{carriers?.find((c: any) => c.id === item.carrierId)?.carrierName || item.carrierId || '—'}</td>
-              <td>{item.vehicleTypeId}</td>
-              <td>{item.vehicleModelId}</td>
+              <td>{vehicleTypes?.find((t: any) => t.id === item.vehicleTypeId)?.typeName || item.vehicleTypeId}</td>
+              <td>{vehicleModels?.find((m: any) => m.id === item.vehicleModelId)?.modelName || item.vehicleModelId}</td>
               <td>{item.vehicleNumber}</td>
               <td>{item.vehicleName}</td>
               <td style={{ display: 'flex', gap: 8 }}>

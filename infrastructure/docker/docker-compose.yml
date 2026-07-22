@@ -67,8 +67,8 @@ services:
     image: confluentinc/cp-zookeeper:7.5.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-    ports:
-      - "2181:2181"
+    #ports:
+    #  - "2181:2181"
     networks:
       - asop-net
 
@@ -127,7 +127,6 @@ services:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
     ports:
-      - "8180:8080"
       - "8443:8443"
     volumes:
       - certs_data:/certs:ro
@@ -147,13 +146,16 @@ services:
 
   # === Application Services ===
 
+  # ВНИМАНИЕ: порты backend-сервисов закрыты наружу. Доступ только через gateway (8080).
+  # Для dev-доступа к конкретному сервису раскомментируйте его секцию ports.
+
   crypto-service:
     mem_limit: 256m
     build:
       context: ../../backend/crypto-service
       dockerfile: Dockerfile
-    ports:
-      - "8081:8081"
+    #ports:
+    #  - "8081:8081"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -220,8 +222,8 @@ services:
     build:
       context: ../../backend/user-service
       dockerfile: Dockerfile
-    ports:
-      - "8082:8082"
+    #ports:
+    #  - "8082:8082"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -262,8 +264,8 @@ services:
     build:
       context: ../../backend/terminal-service
       dockerfile: Dockerfile
-    ports:
-      - "8084:8084"
+    #ports:
+    #  - "8084:8084"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -300,8 +302,8 @@ services:
     build:
       context: ../../backend/session-service
       dockerfile: Dockerfile
-    ports:
-      - "8085:8085"
+    #ports:
+    #  - "8085:8085"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -338,8 +340,8 @@ services:
     build:
       context: ../../backend/card-service
       dockerfile: Dockerfile
-    ports:
-      - "8086:8086"
+    #ports:
+    #  - "8486:8086"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -374,8 +376,8 @@ services:
     build:
       context: ../../backend/carrier-service
       dockerfile: Dockerfile
-    ports:
-      - "8087:8087"
+    #ports:
+    #  - "8487:8087"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -412,8 +414,8 @@ services:
     build:
       context: ../../backend/debt-service
       dockerfile: Dockerfile
-    ports:
-      - "8088:8088"
+    #ports:
+    #  - "8488:8088"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -450,8 +452,8 @@ services:
     build:
       context: ../../backend/audit-service
       dockerfile: Dockerfile
-    ports:
-      - "8089:8089"
+    #ports:
+    #  - "8489:8089"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -488,8 +490,8 @@ services:
     build:
       context: ../../backend/fiscal-service
       dockerfile: Dockerfile
-    ports:
-      - "8090:8090"
+    #ports:
+    #  - "8490:8090"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -526,8 +528,8 @@ services:
     build:
       context: ../../backend/admin-service
       dockerfile: Dockerfile
-    ports:
-      - "8091:8091"
+    #ports:
+    #  - "8484:8091"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:
@@ -557,8 +559,8 @@ services:
     build:
       context: ../../backend/route-service
       dockerfile: Dockerfile
-    ports:
-      - "8092:8092"
+    #ports:
+    #  - "8485:8092"
     entrypoint: ["/provision.sh"]
     command: ["java", "-jar", "app.jar"]
     environment:

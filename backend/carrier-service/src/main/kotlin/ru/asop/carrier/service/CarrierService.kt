@@ -1,5 +1,6 @@
 package ru.asop.carrier.service
 
+import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -14,6 +15,7 @@ import java.util.UUID
 
 @Service
 class CarrierService(
+    private val template: R2dbcEntityTemplate,
     private val carrierRepository: CarrierRepository
 ) {
 
@@ -27,7 +29,7 @@ class CarrierService(
             createdAt = now,
             updatedAt = now
         )
-        return carrierRepository.save(entity).map { it.toResponse() }
+        return template.insert(entity).map { it.toResponse() }
     }
 
     fun update(id: UUID, request: CarrierUpdateRequest): Mono<CarrierResponse> {

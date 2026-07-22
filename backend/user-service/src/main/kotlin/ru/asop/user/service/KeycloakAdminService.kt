@@ -116,6 +116,22 @@ class KeycloakAdminService(
         }
     }
 
+    fun removeAllRoles(userId: String) {
+        val keycloak = adminClient()
+        try {
+            val userResource = keycloak.realm(properties.realm).users().get(userId)
+            val roles = userResource.roles().realmLevel().listAll()
+            if (roles.isNotEmpty()) {
+                userResource.roles().realmLevel().remove(roles)
+            }
+            log.info("Removed all realm roles from Keycloak user '{}'", userId)
+        } catch (e: Exception) {
+            log.error("Failed to remove roles from user '{}': {}", userId, e.message)
+        } finally {
+            keycloak.close()
+        }
+    }
+
     fun assignRole(userId: String, roleName: String) {
         val keycloak = adminClient()
         try {
@@ -127,6 +143,19 @@ class KeycloakAdminService(
         } catch (e: Exception) {
             log.error("Failed to assign role '{}' to user '{}': {}", roleName, userId, e.message)
             throw e
+        } finally {
+            keycloak.close()
+        }
+    }
+
+    fun getRoleName(roleId: String): String? {
+        val keycloak = adminClient()
+        return try {
+            keycloak.realm(properties.realm).roles().list()
+                .firstOrNull { it.id == roleId }?.name
+        } catch (e: Exception) {
+            log.error("Failed to get role name for id '{}': {}", roleId, e.message)
+            null
         } finally {
             keycloak.close()
         }
@@ -147,6 +176,37 @@ class KeycloakAdminService(
         } catch (e: Exception) {
             log.error("Failed to update password for user '{}': {}", userId, e.message)
             throw e
+        } finally {
+            keycloak.close()
+        }
+    }
+
+    fun updateUser(keycloakId: String, firstName: String, lastName: String, email: String) {
+        val keycloak = adminClient()
+        try {
+            val userResource = keycloak.realm(properties.realm).users().get(keycloakId)
+            val rep = userResource.toRepresentation()
+            rep.firstName = firstName
+            rep.lastName = lastName
+            rep.email = email
+            rep.username = email
+            userResource.update(rep)
+            log.info("Updated Keycloak user '{}'", keycloakId)
+        } catch (e: Exception) {
+            log.error("Failed to update Keycloak user '{}': {}", keycloakId, e.message)
+            throw e
+        } finally {
+            keycloak.close()
+        }
+    }
+
+    fun deleteUser(keycloakId: String) {
+        val keycloak = adminClient()
+        try {
+            keycloak.realm(properties.realm).users().delete(keycloakId)
+            log.info("Deleted Keycloak user '{}'", keycloakId)
+        } catch (e: Exception) {
+            log.error("Failed to delete Keycloak user '{}': {}", keycloakId, e.message)
         } finally {
             keycloak.close()
         }

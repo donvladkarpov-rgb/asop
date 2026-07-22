@@ -46,6 +46,13 @@ class ServiceRegistry {
         "path-discounts" to svc("route-service", 8092),
         "path-benefits" to svc("route-service", 8092),
         "vehicles" to svc("route-service", 8092),
+        "vehicle-types" to svc("route-service", 8092),
+        "vehicle-models" to svc("route-service", 8092),
+        "contract-routes" to svc("route-service", 8092),
+        "admin-users" to svc("user-service", 8082),
+        "user-roles" to svc("user-service", 8082),
+        "user-carriers" to svc("user-service", 8082),
+        "user-regions" to svc("user-service", 8082),
     )
 
     private fun svc(host: String, port: Int): String {
