@@ -6,6 +6,7 @@ import reactor.core.publisher.Mono
 import ru.asop.api.terminal.controller.TerminalApi
 import ru.asop.api.terminal.dto.request.TerminalRegisterRequest
 import ru.asop.api.terminal.dto.request.TerminalStatusChangeRequest
+import ru.asop.api.terminal.dto.response.TerminalRegisterResponse
 import ru.asop.api.terminal.dto.response.TerminalResponse
 import ru.asop.terminal.service.TerminalService
 import java.security.Principal
@@ -19,7 +20,7 @@ class TerminalController(
     override fun registerTerminal(
         request: TerminalRegisterRequest,
         principal: Mono<Principal>
-    ): Mono<ResponseEntity<TerminalResponse>> {
+    ): Mono<ResponseEntity<TerminalRegisterResponse>> {
         return terminalService.register(request)
             .map { ResponseEntity.ok(it) }
     }

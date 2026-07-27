@@ -326,7 +326,7 @@ credentials = listOf(CredentialRepresentation().apply {
 ### Команды (async writes)
 - POST/PUT/DELETE с явным контроллером отправляются в Kafka
 - Gateway возвращает `202 Accepted` + `AcceptResponse { eventId, topic, acceptedAt }`
-- Статус отслеживается через `EventService` (in-memory)
+- Статус отслеживается через `EventService` (**Redis**, key `asop:event:{eventId}`, TTL 24 ч, реактивный `ReactiveStringRedisTemplate`)
 
 ### Прокси (sync proxy)
 - GET и необработанные запросы через `ProxyController`

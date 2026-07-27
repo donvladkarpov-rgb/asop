@@ -55,18 +55,18 @@ class CommandEventConsumer(
             }
 
             if (errorMessage != null) {
-                eventService.fail(eventId, errorMessage)
+                eventService.fail(eventId, errorMessage).subscribe()
                 log.warn("CommandEvent {} -> EventService FAILED: eventId={}, topic={}, error={}",
                     eventType, eventId, record.topic(), errorMessage)
             } else {
-                eventService.complete(eventId, resultData)
+                eventService.complete(eventId, resultData).subscribe()
                 log.debug("CommandEvent {} -> EventService COMPLETED: eventId={}, topic={}",
                     eventType, eventId, record.topic())
             }
         } catch (e: Exception) {
             log.error("Failed to process command event: eventId={}, topic={}, error={}",
                 eventId, record.topic(), e.message, e)
-            eventService.fail(eventId, "Failed to process event: ${e.message}")
+            eventService.fail(eventId, "Failed to process event: ${e.message}").subscribe()
         }
     }
 

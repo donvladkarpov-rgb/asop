@@ -31,6 +31,7 @@
 | Spring Boot | 3.3.5 (WebFlux) | Реактивный фреймворк |
 | PostgreSQL | 14 + PostGIS | База данных |
 | Kafka | 3.7.1 | Асинхронная шина |
+| Redis | 7 (alpine) | Event store gateway: статусы async-команд, TTL 24 ч |
 | Keycloak | 25.0.4 | OIDC-провайдер |
 | Bouncy Castle | 1.78.1 | Криптография (ECC P-256) |
 | Gradle | 8.10.2 | Система сборки |
@@ -116,13 +117,13 @@ backend/shared/api/{name}-api/
 - Gateway добавляет заголовок `X-Keycloak-Id`, **удаляет** `Authorization`
 
 #### 3. Event tracking
-- После отправки в Kafka `EventService` сохраняет статус `PENDING` (in-memory `ConcurrentHashMap`, TTL 30 мин)
+- После отправки команды в Kafka `EventService` сохраняет статус `PENDING` в **Redis** (key `asop:event:{eventId}`, TTL 24 ч, реактивный `ReactiveStringRedisTemplate` + Jackson-сериализация `EventStatus`). Состояние переживает рестарт gateway — оффлайн-терминал успеет добрать результат в течение суток. До переезда в Redis хранилище было `ConcurrentHashMap` в памяти (TTL 30 мин, терялось при рестарте).
 - Фронт поллит `GET /api/v1/events/{eventId}`:
   - `202 Accepted` пока PENDING
   - `200 OK` с `resultData` (JSON) когда COMPLETED (cert saga — PEM)
   - `422 Unprocessable Entity` с `errorMessage` когда FAILED
   - `404 Not Found` если eventId неизвестен
-- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус навсегда PENDING.
+- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус остаётся PENDING в течение TTL 24 ч.
 
 #### 4. Cert signing flow (choreographed saga, 4 hops)
 Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg при первой регистрации):
@@ -166,7 +167,7 @@ XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TE
 | `controller/AuditCommandController.kt` | POST /sync/audit/tasks (mTLS async) |
 | `controller/GpsCommandController.kt` | POST /sync/gps/positions (mTLS async) |
 | `controller/EventController.kt` | Эндпоинт статуса события |
-| `service/EventService.kt` | In-memory event store с методами complete/fail |
+| `service/EventService.kt` | Redis-backed event store (key `asop:event:{eventId}`, TTL 24 ч, reactive) |
 | `service/CertCommandService.kt` | Producer CertSignRequested в `asop.terminal.cert.commands` |
 | `service/SessionCommandService.kt` | Производитель SessionOpenedEvent/SessionClosedEvent |
 | `service/TransactionCommandService.kt` | Производитель TransactionCompletedEvent |
@@ -377,7 +378,8 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 - `ASOP_CARRIERS`, `ASOP_CARDS_DISTRIBUTORS`, `ASOP_CONTRACTS`, `ASOP_VEHICLES` — перевозчики, дистрибьюторы карт, договоры, ТС
 - `ASOP_CONTRACTS` — общий справочник договоров: `CONTRACTOR_TYPE` (CARRIER | CARDS_DISTRIBUTOR, nullable), `CARRIER_ID`/`CARDS_DISTRIBUTOR_ID` (оба nullable, CHECK запрещает оба NOT NULL), `ATTRIBUTES JSONB` (абстрактная информация)
 - `ASOP_CARDS`, `ASOP_CARD_MIFARES`, `ASOP_CARD_TARIFFS`, `ASOP_CARD_BANKS` — карты
-- `ASOP_TERMINALS` (с `UNIQUE` constraint на `TERMINAL_SERIAL`), `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — терминалы
+- `ASOP_TERMINALS` (с `UNIQUE` constraint на `TERMINAL_SERIAL`), `ASOP_DISTRIBUTOR_TERMINALS`, `ASOP_TIDS` — терминалы. `TERMINAL_NUMBER` теперь nullable (инвентарный номер вводится вручную); добавлены `CREATED_AT`/`UPDATED_AT TIMESTAMPTZ DEFAULT now()`.
+- **Register endpoint** (`terminal-service`): синхронный upsert в `TerminalService.resolveTerminal` — см. `doc/context.md` раздел 8 «Terminal registration».
 - `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (v002):
   - `IS_CURRENT` boolean, `CA_CHAIN` PEM
   - **UNIQUE partial index** `uq_tc_current_per_terminal ON (TERMINAL_ID) WHERE IS_CURRENT = true` — не более одного активного
@@ -473,7 +475,7 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 | **API-модули как отдельные Gradle-подпроекты** | Чистое разделение контрактов; сервис и клиент используют одни DTO/интерфейсы |
 | **UUID v7** | Time-ordered → лучшая производительность B-tree индексов чем UUID v4 |
 | **ECC P-256 для сертификатов** | Ключи меньше RSA; аппаратная поддержка в Android StrongBox, DESFire EV3 |
-| **In-memory event store (TTL 30 мин)** | MVP-простота; события эфемерны (только отслеживание до подтверждения сервисом) |
+| **Redis-backed event store (TTL 24 ч)** | Statусы async-команд живут в Redis (`asop:event:{eventId}`), состояние переживает рестарт gateway; оффлайн-терминал успеет забрать результат в течение суток |
 | **mTLS для терминалов** | Аутентификация устройств офлайн; независимость от Keycloak |
 | **Chain 1 + Chain 2 в SecurityConfig** | Чистое разделение mTLS (терминалы) и JWT (веб) потоков |
 | **Cert signing choreographed saga** (4 hops через Kafka) | Хореография через топики `asop.terminal.cert.{commands,issued,events}` с пробросом `X-Event-Id` через headers — нет single point of failure, каждая стадия независимо ретраится |

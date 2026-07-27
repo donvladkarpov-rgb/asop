@@ -50,8 +50,7 @@ class SessionCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent SessionOpened to topic={}, eventId={}, sessionId={}",
@@ -59,7 +58,7 @@ class SessionCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send SessionOpened to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)
@@ -89,8 +88,7 @@ class SessionCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent SessionClosed to topic={}, eventId={}, sessionId={}",
@@ -98,7 +96,7 @@ class SessionCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send SessionClosed to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)

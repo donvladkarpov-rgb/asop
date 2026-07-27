@@ -29,13 +29,13 @@ Gateway обрабатывает запросы двумя способами:
 
 2. **Sync proxy (GET + остальные запросы)** — `ProxyController` пересылает запросы в backend-сервисы через `WebClient`. Маппинг ресурсов (`users`, `carriers`, `cards`, etc.) → base URL сервиса определён в `ServiceRegistry`. Для local dev `ASOP_ENV=local` (default → `localhost`), для Docker `ASOP_ENV=docker` (→ Docker hostnames).
 
-3. **Event tracking** — после отправки команды в Kafka `EventService` сохраняет статус `PENDING` (in-memory `ConcurrentHashMap<UUID, EventStatus>`, TTL 30 мин). Фронт поллит `GET /api/v1/events/{eventId}`:
-   - `202 Accepted` пока PENDING
-   - `200 OK` с `resultData` когда COMPLETED (cert saga — JSON с PEM)
-   - `422 Unprocessable Entity` с `errorMessage` когда FAILED
-   - `404 Not Found` если eventId неизвестен
+3. **Event tracking** — после отправки команды в Kafka `EventService` сохраняет статус `PENDING` в **Redis** (key `asop:event:{eventId}`, TTL 24 ч, реактивный `ReactiveStringRedisTemplate` + Jackson-сериализация `EventStatus`). Состояние переживает рестарт gateway. Фронт поллит `GET /api/v1/events/{eventId}`:
+  - `202 Accepted` пока PENDING
+  - `200 OK` с `resultData` когда COMPLETED (cert saga — JSON с PEM)
+  - `422 Unprocessable Entity` с `errorMessage` когда FAILED
+  - `404 Not Found` если eventId неизвестен
 
-   Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус навсегда PENDING.
+  Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус остаётся PENDING в течение TTL 24 ч. Раньше хранилище было `ConcurrentHashMap` в памяти (TTL 30 мин, терялось при рестарте). Все `createPending`/`complete`/`fail` теперь реактивные (`Mono<Void>`); продюсеры/консьюмеры Kafka переключены на `.then()`/`.subscribe()`.
 
 ### Cert signing saga (choreographed, 4 hops)
 
@@ -74,7 +74,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - `service/CertCommandService.kt` — producer `CertSignRequested` в `asop.terminal.cert.commands`
 - `kafka/CertEventConsumer.kt` — consumer `asop.terminal.cert.events` → `EventService.complete/fail`
 - `kafka/CommandEventConsumer.kt` — consumer всех 7 domain event topics → `EventService.complete/fail`
-- `service/EventService.kt` — in-memory `ConcurrentHashMap<UUID, EventStatus>` с TTL-очисткой
+- `service/EventService.kt` — Redis-backed event store (`ReactiveStringRedisTemplate`, key `asop:event:{eventId}`, TTL 24 ч, реактивные `Mono<Void>` для createPending/complete/fail)
 - `model/EventStatus.kt` — `EventState` (PENDING, COMPLETED, FAILED) + `EventStatus` (с `resultData: String?`)
 
 **Terminal async command controllers** (все под mTLS `/api/v1/sync/**`):
@@ -160,8 +160,10 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
   - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
   - `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
-  - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store
+  - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store. `terminalSerial` = `Settings.Secure.ANDROID_ID` (через `TerminalViewModel.getAndroidId(application)`). Смена ANDROID_ID = новый терминал.
   - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
+  - `TerminalNavHost`: при старте, если `certificateReady && terminalId != null` → экран `main` (`loadTerminal(id)`); если только `certificateReady` → экран `registration`. Иначе — `provisioning`.
+  - `RegistrationScreen`: серийный номер (`ANDROID_ID`) — read-only; пользователь вводит только **модель** (опц.) и **инвентарный номер** (`terminalNumber`, обязательно). После успешной регистрации `TerminalViewModel.registerTerminal` сохраняет `response.terminal.id` через `SyncPreferences.setTerminalId(...)`. В запросе передаётся сохранённый `terminalId` (если есть) или `null`.
 
   **Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
 
@@ -245,7 +247,7 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 ### Terminal-service (порт 8084, mTLS через gateway)
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/register` | Регистрация терминала в БД |
+| POST | `/api/v1/terminals/register` | Регистрация/обновление терминала (sync upsert, `TerminalRegisterResponse { terminal, operationStatus, errorMessage? }`). `TerminalService.resolveTerminal`: если `terminalId != null` и найден — update; иначе `findByTerminalSerial` (обычный кейс после cert-saga) — update; иначе insert нового (`UuidUtils.newId()`, `status = WAREHOUSE`). `terminalSerial` = `ANDROID_ID` устройства. Сертификат при регистрации НЕ пересохраняется (он уже лежит в `ASOP_TERMINAL_CERTS` после cert-saga). |
 | GET | `/api/v1/terminals/{id}` | Получить терминал |
 | PUT | `/api/v1/terminals/{id}/status` | Изменить статус терминала |
 

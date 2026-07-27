@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping
 import reactor.core.publisher.Mono
 import ru.asop.api.terminal.dto.request.TerminalRegisterRequest
 import ru.asop.api.terminal.dto.request.TerminalStatusChangeRequest
+import ru.asop.api.terminal.dto.response.TerminalRegisterResponse
 import ru.asop.api.terminal.dto.response.TerminalResponse
 import java.security.Principal
 import java.util.UUID
@@ -22,7 +23,7 @@ interface TerminalApi {
     fun registerTerminal(
         @Valid @RequestBody request: TerminalRegisterRequest,
         principal: Mono<Principal>
-    ): Mono<ResponseEntity<TerminalResponse>>
+    ): Mono<ResponseEntity<TerminalRegisterResponse>>
 
     @GetMapping("/{id}")
     fun getTerminal(

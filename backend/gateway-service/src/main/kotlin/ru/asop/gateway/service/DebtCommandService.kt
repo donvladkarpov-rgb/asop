@@ -52,8 +52,7 @@ class DebtCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.DEBT_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent DebtCreated to topic={}, eventId={}, debtId={}",
@@ -61,7 +60,7 @@ class DebtCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send DebtCreated to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)
@@ -91,8 +90,7 @@ class DebtCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.DEBT_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent DebtRecovered to topic={}, eventId={}, debtId={}",
@@ -100,7 +98,7 @@ class DebtCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send DebtRecovered to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)

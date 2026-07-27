@@ -11,7 +11,7 @@ import ru.asop.terminal.network.models.*
 interface GatewayApi {
 
     @POST("api/v1/terminals/register")
-    suspend fun registerTerminal(@Body request: TerminalRegisterRequest): TerminalResponse
+    suspend fun registerTerminal(@Body request: TerminalRegisterRequest): TerminalRegisterResponse
 
     @GET("api/v1/terminals/{id}")
     suspend fun getTerminal(@Path("id") id: String): TerminalResponse

@@ -38,6 +38,10 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **GpsTrackingService** — триггерит one-shot sync при batch threshold
 - [x] **WorkScheduler** — schedulePeriodicSync вызывается из AsopTerminalApp.onCreate
 - [x] **doc/smoke-tests.md** — 7 end-to-end сценариев с HTTP-трассировкой
+- [x] **EventService → Redis** — `ReactiveStringRedisTemplate`, TTL 24 ч (было in-memory ConcurrentHashMap, 30 мин). Docker-service `redis:7-alpine` добавлен в `docker-compose.yml`. Gateway `depends_on.redis: service_healthy`, env `REDIS_HOST=redis`.
+- [x] **Terminal registration upsert** (`POST /api/v1/terminals/register`, terminal-service) — `TerminalService.resolveTerminal`: findById(terminalId) → findByTerminalSerial → insert new. `TerminalRegisterResponse { terminal, operationStatus, errorMessage? }`.
+- [x] **Android registration flow** — serial=read-only `ANDROID_ID` (`Settings.Secure.ANDROID_ID`); пользователь вводит только модель (опц.) и инвентарный номер (обязательно). После регистрации `TerminalViewModel.registerTerminal` сберегает `response.terminal.id` через `SyncPreferences.setTerminalId`. `TerminalNavHost` skip registration если `terminalId != null` && certReady.
+- [x] **Schema fixes** — `ASOP_TERMINALS`: `TERMINAL_NUMBER` теперь nullable (инвентарный вводится вручную), добавлены `CREATED_AT`/`UPDATED_AT TIMESTAMPTZ DEFAULT now()`.
 
 ## 4. Frontend: Admin UI
 

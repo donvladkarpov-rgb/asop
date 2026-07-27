@@ -46,8 +46,7 @@ class AuditCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.AUDIT_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent AuditTaskCreated to topic={}, eventId={}, taskId={}",
@@ -55,7 +54,7 @@ class AuditCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send AuditTaskCreated to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)

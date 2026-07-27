@@ -15,7 +15,6 @@ fun RegistrationScreen(
 ) {
     val state by viewModel.state.collectAsState()
 
-    var serial by remember { mutableStateOf("") }
     var model by remember { mutableStateOf("") }
     var number by remember { mutableStateOf("") }
 
@@ -39,9 +38,10 @@ fun RegistrationScreen(
         Spacer(Modifier.height(24.dp))
 
         OutlinedTextField(
-            value = serial,
-            onValueChange = { serial = it },
-            label = { Text("Серийный номер") },
+            value = viewModel.androidId,
+            onValueChange = {},
+            label = { Text("ANDROID ID (серийный номер)") },
+            readOnly = true,
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -59,15 +59,15 @@ fun RegistrationScreen(
         OutlinedTextField(
             value = number,
             onValueChange = { number = it },
-            label = { Text("Номер терминала") },
+            label = { Text("Инвентарный номер") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(24.dp))
 
         Button(
-            onClick = { viewModel.registerTerminal(serial, model.ifBlank { null }, number.ifBlank { null }) },
-            enabled = serial.isNotBlank() && state !is TerminalViewModel.UiState.Registering,
+            onClick = { viewModel.registerTerminal(model.ifBlank { null }, number.ifBlank { null }) },
+            enabled = number.isNotBlank() && state !is TerminalViewModel.UiState.Registering,
             modifier = Modifier.fillMaxWidth()
         ) {
             if (state is TerminalViewModel.UiState.Registering) {

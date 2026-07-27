@@ -15,5 +15,7 @@ data class TerminalRegisterRequest(
     @field:Size(max = 100, message = "Terminal model must be less than 100 characters")
     val terminalModel: String? = null,
 
-    val carrierId: UUID? = null
+    val carrierId: UUID? = null,
+
+    val terminalId: UUID? = null
 )

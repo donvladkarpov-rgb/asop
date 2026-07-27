@@ -8,13 +8,21 @@ data class TerminalRegisterRequest(
     @Json(name = "terminalSerial") val terminalSerial: String,
     @Json(name = "terminalNumber") val terminalNumber: String? = null,
     @Json(name = "terminalModel") val terminalModel: String? = null,
-    @Json(name = "carrierId") val carrierId: String? = null
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "terminalId") val terminalId: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class TerminalStatusChangeRequest(
     @Json(name = "newStatus") val newStatus: String,
     @Json(name = "reason") val reason: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TerminalRegisterResponse(
+    @Json(name = "terminal") val terminal: TerminalResponse,
+    @Json(name = "operationStatus") val operationStatus: String,
+    @Json(name = "errorMessage") val errorMessage: String? = null
 )
 
 @JsonClass(generateAdapter = true)

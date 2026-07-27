@@ -32,6 +32,7 @@
 - **Фреймворк:** Spring Boot 3.3.5 (WebFlux, реактивный)
 - **БД:** PostgreSQL 14+ с PostGIS
 - **Очереди:** Kafka 3.7.1
+- **Event store:** Redis 7 (alpine) — `gateway-service` хранит статусы async-команд в Redis, TTL 24 ч
 - **Аутентификация:** Keycloak 25.0.4 (JWT для веба)
 - **Криптография:** Bouncy Castle 1.78.1, ECC P-256
 - **Сборка:** Gradle 8.10.2
@@ -151,13 +152,14 @@ backend/shared/api/{name}-api/
 - Gateway добавляет `X-Keycloak-Id`, **убирает** `Authorization`
 
 #### 3. Event tracking
-- После отправки команды в Kafka `EventService` сохраняет статус `PENDING` (in-memory, TTL 30 мин)
+- После отправки команды в Kafka `EventService` сохраняет статус `PENDING` в **Redis** (key `asop:event:{eventId}`, TTL 24 ч). Состояние переживает рестарт gateway — оффлайн-терминал успеет добрать результат в течение суток.
+- Раньше хранилище было `ConcurrentHashMap` в памяти gateway (TTL 30 мин) — теперь реактивный `ReactiveStringRedisTemplate` + Jackson-сериализация `EventStatus`. Старый `Executors`-cleaner удалён (TTL встроен в Redis).
 - Фронт поллит `GET /api/v1/events/{eventId}`:
   - `202 Accepted` пока PENDING
   - `200 OK` с `resultData` когда COMPLETED (cert saga — JSON с PEM)
   - `422 Unprocessable Entity` с `errorMessage` когда FAILED
   - `404 Not Found` если eventId неизвестен
-- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус навсегда PENDING.
+- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус остаётся PENDING в течение TTL 24 ч.
 
 #### 4. Cert signing saga (choreographed, 4 hops)
 Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg):
@@ -198,7 +200,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 | `controller/EventController.kt` | GET /api/v1/events/{eventId} |
 | `controller/CarrierController.kt` | POST /api/v1/carriers (async) |
 | `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (open HTTPS, async через Kafka) |
-| `service/EventService.kt` | In-memory event store с методами complete/fail |
+| `service/EventService.kt` | Redis-backed event store (key `asop:event:{eventId}`, TTL 24 ч, reactive) |
 | `service/CarrierCommandService.kt` | Kafka producer с X-Keycloak-Id header |
 | `service/CertCommandService.kt` | CertSignRequested producer в asop.terminal.cert.commands |
 | `kafka/CertEventConsumer.kt` | Listener asop.terminal.cert.events → EventService.complete/fail |
@@ -398,7 +400,7 @@ Root CA (self-signed, ECC P-256, 10 лет)
 - `ASOP_CARD_BANKS` — банковские карты
 
 **Терминалы:**
-- `ASOP_TERMINALS` — терминалы (с `UNIQUE` constraint на `TERMINAL_SERIAL`)
+- `ASOP_TERMINALS` — терминалы (с `UNIQUE` constraint на `TERMINAL_SERIAL`). `TERMINAL_NUMBER` теперь nullable (инвентарный номер вводится вручную на Registration-экране Android). Добавлены `CREATED_AT` / `UPDATED_AT TIMESTAMPTZ` (`DEFAULT now()`), маппятся на `TerminalEntity.createdAt`/`updatedAt`.
 - `ASOP_DISTRIBUTOR_TERMINALS` — терминалы дистрибьюторов
 - `ASOP_TIDS` — пул TID
 - `ASOP_TERMINAL_CERTS` — история X.509 сертификатов терминалов (DDL влит в v001-init.sql, ранее v002)
@@ -407,6 +409,14 @@ Root CA (self-signed, ECC P-256, 10 лет)
   - **UNIQUE partial index** `uq_tc_current_per_terminal ON (TERMINAL_ID) WHERE IS_CURRENT = true` — не более одного активного сертификата
   - `uq_tc_cert_serial` UNIQUE на `CERT_SERIAL`
   - CHECK: `expires_at > issued_at`, не более одного `IS_CURRENT=true AND REVOKED_AT IS NOT NULL`
+
+**Terminal registration (`POST /api/v1/terminals/register`, terminal-service)** — синхронный upsert:
+- Запрос `TerminalRegisterRequest { terminalSerial, terminalNumber?, terminalModel?, carrierId?, terminalId? }`. `terminalSerial` = `ANDROID_ID` устройства.
+- Логика `TerminalService.resolveTerminal`:
+  1. Если `terminalId != null` → `findById(terminalId)`. Если найден — обновить `terminalSerial`/`terminalNumber`/`terminalModel`/`carrierId`/`updatedAt`, вернуть тот же `terminalId`. Если не найден — fallback к шагу 2.
+  2. `findByTerminalSerial(serial)` — это «обычный кейс» после cert-sign saga (cert-saga уже создала терминал по serial + сохранила cert). Обновить атрибуты, вернуть существующий `terminalId`.
+  3. Если по serial тоже нет — создать новый `TerminalEntity` через `R2dbcEntityTemplate.insert()` (не `save()`, см. AGENTS.md save-bug), `terminalId = UuidUtils.newId()` (UUIDv7), `status = "WAREHOUSE"`.
+- Ответ: `TerminalRegisterResponse { terminal: TerminalResponse, operationStatus: "SUCCESS", errorMessage? }`. Сертификат при регистрации НЕ пересохраняется — он уже лежит в `ASOP_TERMINAL_CERTS` после cert-saga (с `IS_CURRENT=true` и атомарной ротацией старых через `markAllAsNotCurrent` в `CertCommandService`).
 
 **Транзакции:**
 - `ASOP_SESSIONS` — сессии (иерархические)
@@ -471,7 +481,17 @@ Liquibase запускается **отдельным Docker-контейнер�
 - `CertSignApi` — использует plain (без mTLS) HTTPS-клиент для endpoint'а `/api/v1/terminals/cert-sign` (chicken-and-egg при первой регистрации)
 - `GatewayApi` — использует mTLS-клиент для остальных защищённых endpoint'ов
 
-**Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
+**Трёхэкранный флоу терминала** (без навигационных меню, последовательный `provisioning → registration → main`):
+1. **Provisioning** — генерация ECC P-256 ключевой пары в AndroidKeyStore, `POST /api/v1/terminals/cert-sign` (plain HTTPS, без mTLS — chicken-and-egg), polling `GET /api/v1/events/{eventId}` каждые 2 сек до 5 мин, сохранение PEM-цепочки в SharedPreferences (`asop_terminal_cert`).
+2. **Registration** — `POST /api/v1/terminals/register` через mTLS. Серийный номер = `Settings.Secure.ANDROID_ID` (read-only, не редактируется). Пользователь вводит только:
+   - **Модель** (опционально) — `terminalModel`
+   - **Инвентарный номер** (обязательно) — `terminalNumber`
+   В теле запроса также передаётся сохранённый ранее `terminalId` (UUID, ПК терминала в БД), если он есть в DataStore, иначе `null`. После успешной регистрации сберегается возвращённый `id` через `SyncPreferences.setTerminalId()`.
+3. **Main** (Dashboard) — `LazyColumn` с картами: инфо терминала, синхронизация (badge PENDING-событий + кнопка «Синхронизировать сейчас», тоггл синхронизации в TopBar), GPS-трекинг. Фоновая работа: `SyncWorker` (15 мин), `EventPollWorker` (5 мин, до 20 ретраев → FAILED), `NetworkMonitor` (одноразовый sync на восстановлении сети), `GpsTrackingService` (foreground, `FusedLocationProviderClient`, 30 сек, batch ≥ 10 → trigger sync).
+
+**Navhost skip-логика (`TerminalNavHost.kt`):** при старте приложения, если `certificateReady && terminalId != null` → `loadTerminal(id)` и сразу экран `main`; если только `certificateReady` → экран `registration`. Смена `ANDROID_ID` (factory reset / смена signing-key) даёт новый serial → cert-sign saga через `findByTerminalSerial` создаст новый терминал → регистрация сохранит новый `terminalId`.
+
+**Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED (теперь статус живёт в Redis, TTL 24 ч).
 
 См. подробнее в `doc/smoke-tests.md` (7 сценариев интеграционного тестирования).
 
@@ -671,7 +691,7 @@ Docker-compose включает 19 контейнеров (11 application servic
 27. **Async terminal writes vs sync admin writes** — осознанный CQRS-lite split. Admin operations (route-service CRUD, admin справочники, carrier, card, audit, fiscal, debt) — sync через ProxyController (online, low latency, HTTP cache). Terminal operations (sessions, transactions, GPS, cards register/block, debts, fiscal, audit tasks) — async через Kafka (offline-capable, eventual consistency, 202 + polling).
 28. **CommandResult generic pattern** — единый контракт для подтверждения async команд. Backend consumer после DB write публикует `CommandResult(eventId, "COMPLETED" | "FAILED", resultData, errorMessage)` в `{domain}.events`. Gateway `CommandEventConsumer` обновляет `EventService`. Android `EventPollWorker` получает результат через polling `GET /api/v1/events/{eventId}`.
 29. **Android offline buffering** — Room DB (PendingEventEntity) + WorkManager (SyncWorker 15 min, EventPollWorker 5 min) + GpsTrackingService foreground service. Offline → enqueue в Room. Online → flush через SyncWorker → 202 + eventId → polling COMPLETED/FAILED.
-30. **EventService in-memory (TTL 30 min)** — MVP архитектура. Для production нужен persistent store (Redis/Postgres) — при рестарте gateway теряются все PENDING статусы, Android polling получает 404 → FAILED.
+30. **EventService переехал в Redis (TTL 24 ч)** — раньше был `ConcurrentHashMap` в памяти gateway (терял статусы при рестарте, всего 30 мин окно для polling). Теперь `ReactiveStringRedisTemplate`, Jackson-сериализация `EventStatus`, key `asop:event:{eventId}`, TTL встроен в Redis (`set(key, value, Duration.ofHours(24))`). Состояние переживает рестарт gateway; оффлайн-терминал успеет забрать результат в течение суток. Все `createPending`/`complete`/`fail` — реактивные (`Mono<Void>`), продюсеры и консьюмеры Kafka переключены на `.then()`/`.subscribe()`. Docker-сервис `redis:7-alpine` добавлен в `docker-compose.yml` (volume `redis_data`, healthcheck `redis-cli ping`), gateway зависит от `redis: service_healthy`, env `REDIS_HOST=redis`.
 
 ### 📋 Чеклист для новых модулей
 - [ ] Создать API-модуль в `backend/shared/api/{name}-api/`

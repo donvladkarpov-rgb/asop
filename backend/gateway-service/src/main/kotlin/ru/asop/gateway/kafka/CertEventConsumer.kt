@@ -49,12 +49,12 @@ class CertEventConsumer(
                             "caChain" to node.get("caChain").asText()
                         )
                     )
-                    eventService.complete(eventId, resultData)
+                    eventService.complete(eventId, resultData).subscribe()
                     log.info("CertStored → EventService COMPLETED: eventId={}", eventId)
                 }
                 "CertSignFailed" -> {
                     val reason = node.get("reason")?.asText() ?: "Unknown error"
-                    eventService.fail(eventId, reason)
+                    eventService.fail(eventId, reason).subscribe()
                     log.warn("CertSignFailed → EventService FAILED: eventId={}, reason={}", eventId, reason)
                 }
                 else -> {
@@ -63,7 +63,7 @@ class CertEventConsumer(
             }
         } catch (e: Exception) {
             log.error("Failed to process cert event: eventId={}, error={}", eventId, e.message, e)
-            eventService.fail(eventId, "Failed to process cert event: ${e.message}")
+            eventService.fail(eventId, "Failed to process cert event: ${e.message}").subscribe()
         }
     }
 

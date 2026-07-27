@@ -59,8 +59,7 @@ class CarrierCommandService(
             }
 
             eventService.createPending(eventId, KafkaTopic.CARRIER_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent {} to topic={}, eventId={}, carrierId={}, partition={}, offset={}",
@@ -73,7 +72,7 @@ class CarrierCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error(
                         "Failed to send {} to Kafka: {}",
                         event.eventType,

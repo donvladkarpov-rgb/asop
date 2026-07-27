@@ -26,6 +26,9 @@ dependencies {
     implementation(libs.spring.boot.starter.validation)
     implementation(libs.spring.boot.starter.actuator)
 
+    // Redis (reactive) for EventService state
+    implementation(libs.spring.boot.starter.data.redis.reactive)
+
     // Spring Kafka (реактивный producer через ReactiveKafkaProducerTemplate)
     implementation(libs.spring.kafka)
     implementation(libs.reactor.kafka)

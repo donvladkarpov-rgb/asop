@@ -50,8 +50,7 @@ class TransactionCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.TRANSACTION_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent TransactionCompleted to topic={}, eventId={}, transactionId={}",
@@ -59,7 +58,7 @@ class TransactionCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send TransactionCompleted to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)

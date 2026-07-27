@@ -48,8 +48,7 @@ class CardCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.CARD_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent CardRegistered to topic={}, eventId={}, cardId={}",
@@ -57,7 +56,7 @@ class CardCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send CardRegistered to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)
@@ -87,8 +86,7 @@ class CardCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.CARD_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent CardBlocked to topic={}, eventId={}, cardId={}",
@@ -96,7 +94,7 @@ class CardCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send CardBlocked to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)

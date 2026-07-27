@@ -1,72 +1,110 @@
 package ru.asop.gateway.service
 
-import jakarta.annotation.PostConstruct
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
+import org.springframework.data.redis.core.ReactiveStringRedisTemplate
 import org.springframework.stereotype.Service
+import reactor.core.publisher.Mono
 import ru.asop.gateway.model.EventState
 import ru.asop.gateway.model.EventStatus
+import java.time.Duration
 import java.time.Instant
 import java.util.Optional
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 @Service
-class EventService {
-
+class EventService(
+    private val redis: ReactiveStringRedisTemplate,
+    private val objectMapper: ObjectMapper
+) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private val store = ConcurrentHashMap<UUID, EventStatus>()
+    companion object {
+        private const val KEY_PREFIX = "asop:event:"
+        private val TTL = Duration.ofHours(24)
+    }
 
-    private val ttlMinutes = 30L
+    private fun redisKey(eventId: UUID): String = KEY_PREFIX + eventId
 
-    fun createPending(eventId: UUID, commandTopic: String): EventStatus {
+    fun createPending(eventId: UUID, commandTopic: String): Mono<Void> {
         val status = EventStatus(
             eventId = eventId,
             commandTopic = commandTopic,
             state = EventState.PENDING
         )
-        store[eventId] = status
-        log.debug("Event created: {} on topic {}", eventId, commandTopic)
-        return status
+        return try {
+            val json = objectMapper.writeValueAsString(status)
+            redis.opsForValue()
+                .set(redisKey(eventId), json, TTL)
+                .doOnSuccess {
+                    log.debug("Event created in Redis: {} on topic {}", eventId, commandTopic)
+                }
+                .then()
+        } catch (e: Exception) {
+            log.error("Failed to serialize EventStatus for {}", eventId, e)
+            Mono.error(e)
+        }
     }
 
-    fun complete(eventId: UUID, resultData: String? = null) {
-        store.computeIfPresent(eventId) { _, existing ->
-            existing.copy(
-                state = EventState.COMPLETED,
-                resultData = resultData ?: existing.resultData,
-                completedAt = Instant.now()
-            )
-        } ?: log.warn("Attempted to complete unknown event: {}", eventId)
+    fun complete(eventId: UUID, resultData: String? = null): Mono<Void> {
+        return getStatus(eventId)
+            .flatMap { maybeStatus ->
+                if (maybeStatus.isEmpty) {
+                    log.warn("Attempted to complete unknown event: {}", eventId)
+                    return@flatMap Mono.empty()
+                }
+                val existing = maybeStatus.get()
+                val updated = existing.copy(
+                    state = EventState.COMPLETED,
+                    resultData = resultData ?: existing.resultData,
+                    completedAt = Instant.now()
+                )
+                saveAndExpire(eventId, updated)
+            }
+            .then()
     }
 
-    fun fail(eventId: UUID, errorMessage: String) {
-        store.computeIfPresent(eventId) { _, existing ->
-            existing.copy(
-                state = EventState.FAILED,
-                errorMessage = errorMessage,
-                completedAt = Instant.now()
-            )
-        } ?: log.warn("Attempted to fail unknown event: {}", eventId)
+    fun fail(eventId: UUID, errorMessage: String): Mono<Void> {
+        return getStatus(eventId)
+            .flatMap { maybeStatus ->
+                if (maybeStatus.isEmpty) {
+                    log.warn("Attempted to fail unknown event: {}", eventId)
+                    return@flatMap Mono.empty()
+                }
+                val existing = maybeStatus.get()
+                val updated = existing.copy(
+                    state = EventState.FAILED,
+                    errorMessage = errorMessage,
+                    completedAt = Instant.now()
+                )
+                saveAndExpire(eventId, updated)
+            }
+            .then()
     }
 
-    fun getStatus(eventId: UUID): Optional<EventStatus> {
-        return Optional.ofNullable(store[eventId])
+    fun getStatus(eventId: UUID): Mono<Optional<EventStatus>> {
+        return redis.opsForValue().get(redisKey(eventId))
+            .map { json ->
+                try {
+                    Optional.of(objectMapper.readValue<EventStatus>(json))
+                } catch (e: Exception) {
+                    log.error("Failed to deserialize EventStatus for {}", eventId, e)
+                    Optional.empty()
+                }
+            }
+            .defaultIfEmpty(Optional.empty())
     }
 
-    @PostConstruct
-    fun startCleanup() {
-        Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(
-            {
-                val cutoff = Instant.now().minusSeconds(ttlMinutes * 60)
-                store.entries.removeIf { it.value.createdAt.isBefore(cutoff) }
-            },
-            ttlMinutes,
-            ttlMinutes,
-            TimeUnit.MINUTES
-        )
-        log.info("Event cleanup scheduled every {} minutes", ttlMinutes)
+    private fun saveAndExpire(eventId: UUID, status: EventStatus): Mono<Void> {
+        return try {
+            val json = objectMapper.writeValueAsString(status)
+            redis.opsForValue()
+                .set(redisKey(eventId), json, TTL)
+                .then()
+        } catch (e: Exception) {
+            log.error("Failed to serialize EventStatus for {}", eventId, e)
+            Mono.error(e)
+        }
     }
 }

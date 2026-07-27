@@ -11,7 +11,7 @@ services:
   # === Infrastructure ===
 
   postgres:
-    mem_limit: 512m
+    mem_limit: 1024m
     image: postgis/postgis:14-3.4
     environment:
       POSTGRES_DB: asop
@@ -30,7 +30,7 @@ services:
       - asop-net
 
   liquibase:
-    mem_limit: 128m
+    mem_limit: 256m
     image: liquibase/liquibase:4.27
     working_dir: /liquibase/changelog
     command:
@@ -48,7 +48,7 @@ services:
       - asop-net
 
   certs-init:
-    mem_limit: 64m
+    mem_limit: 128m
     build:
       context: ./certs
       dockerfile: Dockerfile.certs-init
@@ -63,7 +63,7 @@ services:
       - asop-net
 
   zookeeper:
-    mem_limit: 128m
+    mem_limit: 256m
     image: confluentinc/cp-zookeeper:7.5.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
@@ -73,7 +73,7 @@ services:
       - asop-net
 
   kafka:
-    mem_limit: 512m
+    mem_limit: 1024m
     image: confluentinc/cp-kafka:7.5.0
     environment:
       KAFKA_BROKER_ID: 1
@@ -109,7 +109,7 @@ services:
       - asop-net
 
   keycloak:
-    mem_limit: 256m
+    mem_limit: 512m
     image: quay.io/keycloak/keycloak:25.0.4
     command:
       - "start-dev"
@@ -150,7 +150,7 @@ services:
   # Для dev-доступа к конкретному сервису раскомментируйте его секцию ports.
 
   crypto-service:
-    mem_limit: 256m
+    mem_limit: 512m
     build:
       context: ../../backend/crypto-service
       dockerfile: Dockerfile
@@ -184,8 +184,23 @@ services:
     networks:
       - asop-net
 
+  redis:
+    mem_limit: 256m
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - asop-net
+
   gateway-service:
-    mem_limit: 1024m
+    mem_limit: 2048m
     build:
       context: ../../backend/gateway-service
       dockerfile: Dockerfile
@@ -204,10 +219,14 @@ services:
       KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
       KEYCLOAK_JWK_SET_URI: ${KEYCLOAK_JWK_SET_URI:-http://keycloak:8080/realms/asop/protocol/openid-connect/certs}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
       ASOP_ENV: docker
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
     depends_on:
+      redis:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       keycloak:
@@ -218,7 +237,7 @@ services:
       - asop-net
 
   user-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/user-service
       dockerfile: Dockerfile
@@ -260,7 +279,7 @@ services:
       - asop-net
 
   terminal-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/terminal-service
       dockerfile: Dockerfile
@@ -298,7 +317,7 @@ services:
       - asop-net
 
   session-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/session-service
       dockerfile: Dockerfile
@@ -336,7 +355,7 @@ services:
       - asop-net
 
   card-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/card-service
       dockerfile: Dockerfile
@@ -372,7 +391,7 @@ services:
       - asop-net
 
   carrier-service:
-    mem_limit: 256m
+    mem_limit: 512m
     build:
       context: ../../backend/carrier-service
       dockerfile: Dockerfile
@@ -410,7 +429,7 @@ services:
       - asop-net
 
   debt-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/debt-service
       dockerfile: Dockerfile
@@ -448,7 +467,7 @@ services:
       - asop-net
 
   audit-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/audit-service
       dockerfile: Dockerfile
@@ -486,7 +505,7 @@ services:
       - asop-net
 
   fiscal-service:
-    mem_limit: 128m
+    mem_limit: 256m
     build:
       context: ../../backend/fiscal-service
       dockerfile: Dockerfile
@@ -524,7 +543,7 @@ services:
       - asop-net
 
   admin-service:
-    mem_limit: 256m
+    mem_limit: 512m
     build:
       context: ../../backend/admin-service
       dockerfile: Dockerfile
@@ -555,7 +574,7 @@ services:
       - asop-net
 
   route-service:
-    mem_limit: 256m
+    mem_limit: 512m
     build:
       context: ../../backend/route-service
       dockerfile: Dockerfile
@@ -586,7 +605,7 @@ services:
       - asop-net
 
   web-admin:
-    mem_limit: 64m
+    mem_limit: 128m
     build:
       context: ../../frontend/web-admin
       dockerfile: Dockerfile
@@ -614,4 +633,5 @@ volumes:
   postgres_data:
   crypto_data:
   certs_data:
+  redis_data:
   web_admin_certs:

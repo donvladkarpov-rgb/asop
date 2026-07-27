@@ -31,7 +31,7 @@ curl -k https://localhost:8080/actuator/health
 1. Launch Android emulator
 2. App detects no certificate → shows Provisioning screen
 3. Tap "Generate keys and request certificate"
-4. `CertificateService.provision("test-terminal-001")` executes
+4. `CertificateService.provision(androidId)` выполняется — `terminalSerial` = `Settings.Secure.ANDROID_ID`, НЕ тестовая строка. Polling `GET /api/v1/events/{eventId}` читает статус из Redis (TTL 24 ч).
 
 ### Expected HTTP trace
 

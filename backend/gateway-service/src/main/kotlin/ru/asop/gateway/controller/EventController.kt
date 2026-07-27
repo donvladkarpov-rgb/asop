@@ -19,24 +19,25 @@ class EventController(
     fun getEventStatus(
         @PathVariable eventId: UUID
     ): Mono<ResponseEntity<Any>> {
-        val status = eventService.getStatus(eventId)
+        return eventService.getStatus(eventId)
+            .flatMap { maybeStatus ->
+                if (maybeStatus.isEmpty) {
+                    return@flatMap Mono.just(ResponseEntity.notFound().build())
+                }
 
-        if (status.isEmpty) {
-            return Mono.just(ResponseEntity.notFound().build())
-        }
+                val s = maybeStatus.get()
 
-        val s = status.get()
-
-        return when (s.state) {
-            EventState.PENDING -> Mono.just(
-                ResponseEntity.status(HttpStatus.ACCEPTED).body(s)
-            )
-            EventState.COMPLETED -> Mono.just(
-                ResponseEntity.ok(s)
-            )
-            EventState.FAILED -> Mono.just(
-                ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(s)
-            )
-        }
+                when (s.state) {
+                    EventState.PENDING -> Mono.just(
+                        ResponseEntity.status(HttpStatus.ACCEPTED).body(s)
+                    )
+                    EventState.COMPLETED -> Mono.just(
+                        ResponseEntity.ok(s)
+                    )
+                    EventState.FAILED -> Mono.just(
+                        ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(s)
+                    )
+                }
+            }
     }
 }

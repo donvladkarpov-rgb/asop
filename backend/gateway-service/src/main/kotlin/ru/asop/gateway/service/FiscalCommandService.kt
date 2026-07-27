@@ -48,8 +48,7 @@ class FiscalCommandService(
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
 
             eventService.createPending(eventId, KafkaTopic.FISCAL_COMMANDS)
-
-            kafkaTemplate.send(record)
+                .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
                         "Sent FiscalReceiptRequested to topic={}, eventId={}, receiptId={}",
@@ -57,7 +56,7 @@ class FiscalCommandService(
                     )
                 }
                 .doOnError { error ->
-                    eventService.fail(eventId, error.message ?: "Unknown error")
+                    eventService.fail(eventId, error.message ?: "Unknown error").subscribe()
                     log.error("Failed to send FiscalReceiptRequested to Kafka: {}", error.message, error)
                 }
                 .thenReturn(eventId)
