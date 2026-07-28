@@ -3,6 +3,8 @@ x-jvm-opts: &jvm-opts
     -Djavax.net.ssl.trustStore=/tmp/certs/truststore.p12
     -Djavax.net.ssl.trustStorePassword=changeit
     -Djavax.net.ssl.trustStoreType=PKCS12
+    -Dspring.redis.host=redis
+    -Dspring.redis.port=6379
     -XX:+UseContainerSupport
     -XX:MaxRAMPercentage=75.0
     -Dfile.encoding=UTF-8
@@ -221,6 +223,8 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
       ASOP_ENV: docker
     volumes:
       - ./certs/provision.sh:/provision.sh:ro

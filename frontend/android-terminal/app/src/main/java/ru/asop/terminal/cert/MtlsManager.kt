@@ -22,11 +22,27 @@ class MtlsManager @Inject constructor(
         private const val PREFS_NAME = "asop_terminal_cert"
         private const val KEY_CERT_PEM = "cert_chain_pem"
         private const val KEY_PUBLIC_B64 = "public_key_b64"
+        private const val PREF_KEYGEN_VERSION = "keygen_version"
+        private const val KEYGEN_VERSION = 2
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    /** Если ключ сгенерирован старой версией кода (без DIGEST_NONE) — сбросить */
+    private fun resetIfStale() {
+        if (prefs.getInt(PREF_KEYGEN_VERSION, 0) < KEYGEN_VERSION) {
+            try {
+                val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                if (ks.containsAlias(KEY_ALIAS)) {
+                    ks.deleteEntry(KEY_ALIAS)
+                }
+            } catch (_: Exception) {}
+            prefs.edit().clear().apply()
+        }
+    }
+
     fun hasKeyPair(): Boolean {
+        resetIfStale()
         return try {
             val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
             ks.containsAlias(KEY_ALIAS) && ks.isKeyEntry(KEY_ALIAS)
@@ -35,10 +51,17 @@ class MtlsManager @Inject constructor(
         }
     }
 
-    fun hasCertificate(): Boolean = prefs.contains(KEY_CERT_PEM)
+    fun hasCertificate(): Boolean {
+        resetIfStale()
+        return prefs.contains(KEY_CERT_PEM)
+    }
 
     fun generateKeyPair() {
-        if (hasKeyPair()) return
+        if (hasKeyPair()) {
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            ks.deleteEntry(KEY_ALIAS)
+        }
+        prefs.edit().remove(KEY_CERT_PEM).remove(KEY_PUBLIC_B64).apply()
 
         val spec = KeyGenParameterSpec.Builder(
             KEY_ALIAS,
@@ -46,7 +69,12 @@ class MtlsManager @Inject constructor(
         )
             .setKeySize(256)
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384)
+            .setDigests(
+                KeyProperties.DIGEST_NONE,
+                KeyProperties.DIGEST_SHA256,
+                KeyProperties.DIGEST_SHA384,
+                KeyProperties.DIGEST_SHA512
+            )
             .build()
 
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
@@ -55,6 +83,7 @@ class MtlsManager @Inject constructor(
 
         prefs.edit()
             .putString(KEY_PUBLIC_B64, Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP))
+            .putInt(PREF_KEYGEN_VERSION, KEYGEN_VERSION)
             .apply()
     }
 

@@ -21,6 +21,7 @@ class SecurityConfig {
                 exchanges
                     .pathMatchers("/actuator/health", "/actuator/info").permitAll()
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                    .pathMatchers("/api/v1/terminals/**").permitAll()
                     .anyExchange().authenticated()
             }
             .oauth2ResourceServer { oauth2 ->

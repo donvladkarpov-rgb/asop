@@ -23,6 +23,13 @@ spring:
       trust-store-type: PKCS12
     properties:
       security.protocol: SSL
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: ru.asop.kafka.events.terminal.CertSignRequested
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
 
   jackson:
     serialization:

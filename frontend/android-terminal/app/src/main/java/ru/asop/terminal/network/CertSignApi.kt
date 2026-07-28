@@ -6,6 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.Header
 import retrofit2.http.POST
 import retrofit2.http.Path
+import ru.asop.terminal.network.models.AcceptedResponse
 import ru.asop.terminal.network.models.CertSignRequest
 import ru.asop.terminal.network.models.EventStatusResponse
 
@@ -22,7 +23,7 @@ import ru.asop.terminal.network.models.EventStatusResponse
 interface CertSignApi {
 
     @POST("api/v1/terminals/cert-sign")
-    suspend fun requestCertSign(@Body request: CertSignRequest): Response<EventStatusResponse>
+    suspend fun requestCertSign(@Body request: CertSignRequest): Response<AcceptedResponse>
 
     @GET("api/v1/events/{eventId}")
     suspend fun getEventStatus(

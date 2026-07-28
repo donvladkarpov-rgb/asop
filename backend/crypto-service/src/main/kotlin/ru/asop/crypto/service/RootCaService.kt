@@ -38,6 +38,7 @@ class RootCaService(
 
     init {
         initializeCaHierarchy()
+        exportCaCertificatesToTruststore()
         ensureServerCert()
     }
 
@@ -64,6 +65,35 @@ class RootCaService(
         log.info("CA hierarchy initialized. Root CA subject: {}, Intermediate CA subject: {}",
             rootCaCert.subjectX500Principal.name,
             intermediateCaCert.subjectX500Principal.name)
+    }
+
+    private fun exportCaCertificatesToTruststore() {
+        val rawPath = System.getenv("TRUSTSTORE_PATH") ?: "/tmp/certs/truststore.p12"
+        val truststorePath = rawPath.removePrefix("file:")
+        val password = System.getenv("TRUSTSTORE_PASSWORD") ?: "changeit"
+        val file = File(truststorePath)
+        if (!file.exists()) {
+            log.warn("Truststore not found at {}, skipping CA export", truststorePath)
+            return
+        }
+        val trustStore = KeyStore.getInstance("PKCS12")
+        FileInputStream(file).use { trustStore.load(it, password.toCharArray()) }
+
+        var updated = false
+        if (!trustStore.containsAlias("root-ca")) {
+            trustStore.setCertificateEntry("root-ca", rootCaCert)
+            updated = true
+            log.info("Imported Root CA into truststore")
+        }
+        if (!trustStore.containsAlias("intermediate-ca")) {
+            trustStore.setCertificateEntry("intermediate-ca", intermediateCaCert)
+            updated = true
+            log.info("Imported Intermediate CA into truststore")
+        }
+        if (updated) {
+            FileOutputStream(file).use { trustStore.store(it, password.toCharArray()) }
+            log.info("Truststore updated at {}", truststorePath)
+        }
     }
 
     private fun loadRootCa() {

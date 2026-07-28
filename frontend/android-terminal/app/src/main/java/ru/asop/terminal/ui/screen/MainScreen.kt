@@ -22,9 +22,16 @@ fun MainScreen(
 ) {
     val terminalState by terminalViewModel.state.collectAsState()
     val terminal by terminalViewModel.terminalInfo.collectAsState()
+    val terminalId by terminalViewModel.terminalId.collectAsState()
     val pendingCount by syncViewModel.pendingCount.collectAsState()
     val currentSession by syncViewModel.currentSession.collectAsState()
     val lastSyncTime by syncViewModel.lastSyncTime.collectAsState()
+
+    LaunchedEffect(terminalId) {
+        if (terminalId != null && terminal == null) {
+            terminalViewModel.loadTerminal(terminalId!!)
+        }
+    }
 
     Scaffold(
         topBar = {

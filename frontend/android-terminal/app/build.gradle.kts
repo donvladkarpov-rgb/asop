@@ -8,6 +8,16 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+import java.util.Properties
+import java.io.FileInputStream
+
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) load(FileInputStream(f))
+}
+val gatewayHost = localProps.getProperty("gateway.host", "10.0.2.2")
+val cryptoHost = localProps.getProperty("crypto.host", "10.0.2.2")
+
 android {
     namespace = "ru.asop.terminal"
     compileSdk = 35
@@ -19,8 +29,8 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        buildConfigField("String", "GATEWAY_BASE_URL", "\"https://10.0.2.2:8080\"")
-        buildConfigField("String", "CRYPTO_BASE_URL", "\"https://10.0.2.2:8081\"")
+        buildConfigField("String", "GATEWAY_BASE_URL", "\"https://$gatewayHost:8080\"")
+        buildConfigField("String", "CRYPTO_BASE_URL", "\"https://$cryptoHost:8081\"")
     }
 
     buildTypes {

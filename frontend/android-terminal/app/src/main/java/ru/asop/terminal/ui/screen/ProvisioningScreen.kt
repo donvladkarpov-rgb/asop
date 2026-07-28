@@ -15,8 +15,8 @@ fun ProvisioningScreen(
 ) {
     val state by viewModel.state.collectAsState()
 
-    LaunchedEffect(Unit) {
-        if (viewModel.isCertificateReady()) {
+    LaunchedEffect(state) {
+        if (state is TerminalViewModel.UiState.Ready) {
             onProvisioned()
         }
     }

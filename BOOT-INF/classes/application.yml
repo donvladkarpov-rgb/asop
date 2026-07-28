@@ -1,0 +1,106 @@
+server:
+  port: 8080
+  shutdown: graceful
+  ssl:
+    enabled: true
+    key-store: ${KEYSTORE_PATH:/tmp/certs/gateway-service.p12}
+    key-store-password: ${KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: ${KEY_ALIAS:service}
+    trust-store: ${TRUSTSTORE_PATH:/tmp/certs/truststore.p12}
+    trust-store-password: ${TRUSTSTORE_PASSWORD:changeit}
+    trust-store-type: PKCS12
+    client-auth: want
+
+spring:
+  application:
+    name: gateway-service
+
+  # Redis (reactive EventService state)
+  redis:
+    host: redis
+    port: 6379
+
+  # Jackson
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+      indent-output: false
+    deserialization:
+      fail-on-unknown-properties: false
+
+  # Security (Keycloak)
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # JWKS endpoint Keycloak для валидации JWT
+          # Для локальной разработки: http://localhost:8180/realms/asop/protocol/openid-connect/certs
+          # Для prod: подставлять через ENV
+          jwk-set-uri: ${KEYCLOAK_JWK_SET_URI:https://keycloak:8443/realms/asop/protocol/openid-connect/certs}
+          issuer-uri: ${KEYCLOAK_ISSUER_URI:https://keycloak:8443/realms/asop}
+
+  # Kafka (reactor-kafka producer)
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:kafka:9093}
+    ssl:
+      key-store-location: ${KAFKA_KEYSTORE_PATH:file:/tmp/certs/gateway.p12}
+      key-store-password: ${KAFKA_KEYSTORE_PASSWORD:changeit}
+      trust-store-location: ${KAFKA_TRUSTSTORE_PATH:file:/tmp/certs/truststore.p12}
+      trust-store-password: ${KAFKA_TRUSTSTORE_PASSWORD:changeit}
+      endpoint-identification-algorithm:
+    properties:
+      security.protocol: SSL
+      # Disable hostname verification for internal Docker networking
+      ssl.endpoint.identification.algorithm: ""
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      group-id: gateway-command-events
+      auto-offset-reset: earliest
+      properties:
+        isolation.level: read_committed
+
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+# ASOP custom properties
+asop:
+  kafka:
+    topics:
+      terminal-cert-events: asop.terminal.cert.events
+      session-events: asop.session.events
+      transaction-events: asop.transaction.events
+      card-events: asop.card.events
+      debt-events: asop.debt.events
+      fiscal-events: asop.fiscal.events
+      audit-events: asop.audit.events
+      gps-events: asop.gps.events
+      carrier-events: asop.carrier.events
+    send-timeout-ms: 5000
+
+# Logging
+logging:
+  level:
+    root: INFO
+    ru.asop: DEBUG
+    org.springframework.security: INFO
+    io.netty: WARN
+    reactor.netty: WARN
+    reactor.kafka: INFO
+
+# Actuator
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized

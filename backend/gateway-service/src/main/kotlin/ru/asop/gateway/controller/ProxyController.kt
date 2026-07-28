@@ -50,6 +50,8 @@ class ProxyController(
                 .headers { headers ->
                     val ct = request.headers.getFirst(HttpHeaders.CONTENT_TYPE)
                     if (ct != null) headers.set(HttpHeaders.CONTENT_TYPE, ct)
+                    val auth = request.headers.getFirst(HttpHeaders.AUTHORIZATION)
+                    if (auth != null) headers.set(HttpHeaders.AUTHORIZATION, auth)
                     if (identity != null) {
                         headers.set(identity.first, identity.second)
                     }

@@ -23,6 +23,7 @@ import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.dao.TransactionDao
+import ru.asop.terminal.BuildConfig
 import ru.asop.terminal.network.CertSignApi
 import ru.asop.terminal.network.GatewayApi
 import ru.asop.terminal.network.SyncApi
@@ -87,7 +88,7 @@ object AppModule {
         moshi: Moshi
     ): GatewayApi {
         return Retrofit.Builder()
-            .baseUrl("https://10.0.2.2:8080/")
+            .baseUrl(BuildConfig.GATEWAY_BASE_URL)
             .client(mtlsClient)
             .addConverterFactory(ScalarsConverterFactory.create())
             .addConverterFactory(MoshiConverterFactory.create(moshi))
@@ -102,7 +103,7 @@ object AppModule {
         moshi: Moshi
     ): SyncApi {
         return Retrofit.Builder()
-            .baseUrl("https://10.0.2.2:8080/")
+            .baseUrl(BuildConfig.GATEWAY_BASE_URL)
             .client(mtlsClient)
             .addConverterFactory(ScalarsConverterFactory.create())
             .addConverterFactory(MoshiConverterFactory.create(moshi))
@@ -117,7 +118,7 @@ object AppModule {
         moshi: Moshi
     ): CertSignApi {
         return Retrofit.Builder()
-            .baseUrl("https://10.0.2.2:8080/")
+            .baseUrl(BuildConfig.GATEWAY_BASE_URL)
             .client(plainClient)
             .addConverterFactory(ScalarsConverterFactory.create())
             .addConverterFactory(MoshiConverterFactory.create(moshi))
