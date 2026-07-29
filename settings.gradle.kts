@@ -26,7 +26,8 @@ include(
     ":backend:shared:api:fiscal-api",
     ":backend:shared:api:audit-api",
     ":backend:shared:api:reference-api",
-    ":backend:shared:api:route-api"
+    ":backend:shared:api:route-api",
+    ":backend:shared:api:tid-api"
 )
 
 // ============ Backend services ============

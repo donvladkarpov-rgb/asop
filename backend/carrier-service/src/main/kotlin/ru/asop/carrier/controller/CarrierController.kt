@@ -17,7 +17,7 @@ class CarrierController(
     private val carrierService: CarrierService
 ) : CarrierApi {
 
-    override fun listCarriers(): Flux<CarrierResponse> = carrierService.findAll()
+    override fun listCarriers(regionId: UUID?): Flux<CarrierResponse> = carrierService.findAll(regionId)
 
     override fun createCarrier(
         request: CarrierCreateRequest,

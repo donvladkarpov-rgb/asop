@@ -45,8 +45,14 @@ class CarrierService(
             }
     }
 
-    fun findAll(): Flux<CarrierResponse> =
-        carrierRepository.findAll().map { it.toResponse() }
+    fun findAll(regionId: UUID? = null): Flux<CarrierResponse> {
+        val entities = if (regionId != null) {
+            carrierRepository.findByRegionId(regionId)
+        } else {
+            carrierRepository.findAll()
+        }
+        return entities.map { it.toResponse() }
+    }
 
     fun getById(id: UUID): Mono<CarrierResponse> {
         return carrierRepository.findById(id).map { it.toResponse() }

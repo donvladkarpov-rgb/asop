@@ -123,13 +123,13 @@ API → asop-common dependency via `api(platform(...))` pattern.
 
 | Path | Port | Role |
 |------|------|------|
-| `gateway-service` | 8080 | API Gateway: JWT + mTLS, Kafka producer |
+| `gateway-service` | 8080 | API Gateway: JWT + mTLS, Kafka producer, proxy для регионов/перевозчиков (GET permitAll) |
 | `crypto-service` | 8081 | Root CA, X.509 cert issuance |
 | `user-service` | 8082 | Users + Keycloak bootstrap |
 | `terminal-service` | 8084 | Terminal management |
 | `session-service` | 8085 | Sessions/shifts (tree hierarchy) |
 | `card-service` | 8086 | Cards (MIFARE, bank) |
-| `carrier-service` | 8087 | Carriers, contracts (R2DBC) |
+| `carrier-service` | 8087 | Carriers, contracts, TIDs (R2DBC) |
 | `debt-service` | 8088 | Card debts |
 | `audit-service` | 8089 | Inspections (КРС) |
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
@@ -139,7 +139,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 ### Gateway dual auth
 
 - **Chain 1** (`@Order(1)`): mTLS for `/api/v1/terminals/**`, `/api/v1/sync/**`. Principal = `CN` from X.509 cert. Исключение: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала).
-- **Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else. JWKS cached locally via кастомный `ReactiveJwtDecoder` (см. `JwtDecoderConfig`).
+- **Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else. JWKS cached locally via кастомный `ReactiveJwtDecoder` (см. `JwtDecoderConfig`). `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (терминал запрашивает справочники через mTLS-соединение, gateway не валидирует JWT для публичных GET-справочников).
 - `X509PrincipalExtractor` is from `org.springframework.security.web.authentication.preauth.x509`, not `web.server.authentication`. It's a synchronous interface (returns `Any`, not `Mono<Any>`).
 
 ### Frontend
@@ -147,7 +147,13 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - **`frontend/web-admin/`**: Vite + React + TypeScript + react-router + TanStack Query + oidc-client-ts
   - В Docker контейнере — nginx, HTTPS (порт 3443, сертификат от crypto-service). **Только HTTPS**, HTTP наружу не экспонируется.
   - В dev mode (`npm run dev`) — Vite dev server на `http://localhost:5173`, проксирует `/api` → `http://localhost:8080`.
-- **`frontend/android-terminal/`**: Android (Kotlin + Jetpack Compose + Hilt + Room + WorkManager) — приложение для терминала. mTLS auth через X.509 сертификат crypto-service.
+  - **`frontend/android-terminal/`**: Android (Kotlin + Jetpack Compose + Hilt + Room + WorkManager) — приложение для терминала. mTLS auth через X.509 сертификат crypto-service.
+  
+  **Навигация (drawer):** `ModalNavigationDrawer` с пунктами: "Сертификат" (подтверждение перевыпуска), "Регистрация", "Привязать перевозчика". Открывается через hamburger-иконку в TopAppBar.
+  
+  **Экран регистрации (обновлён):** После cert-sign пользователь выбирает регион (dropdown из `GET /api/v1/regions`), перевозчика (dropdown из `GET /api/v1/carriers?regionId=...`), часовой пояс (device default), модель (опц.), инвентарный номер (обяз.). Все поля передаются в `TerminalRegisterRequest.timezone`/`carrierId`.
+  
+  **Экран привязки перевозчика:** `AssignCarrierScreen` — выбор региона → выбор перевозчика → сохранение через `PUT /api/v1/terminals/{id}/carrier`.
 
   **Офлайн-буферизация:** Все write-команды (session open/close, transaction, card register/block, debt create/recover, fiscal receipt, audit task, GPS position) сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
 
@@ -155,7 +161,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - `AppDatabase` (Room): 3 сущности — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` + 3 DAOs
   - `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
   - `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
-  - `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}`
+  - `GatewayApi` (Retrofit): terminal CRUD + reference data (regions/carriers) + `GET /api/v1/events/{eventId}`
   - `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
   - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
   - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
@@ -163,7 +169,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store. `terminalSerial` = `Settings.Secure.ANDROID_ID` (через `TerminalViewModel.getAndroidId(application)`). Смена ANDROID_ID = новый терминал.
   - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
   - `TerminalNavHost`: при старте, если `certificateReady && terminalId != null` → экран `main` (`loadTerminal(id)`); если только `certificateReady` → экран `registration`. Иначе — `provisioning`.
-  - `RegistrationScreen`: серийный номер (`ANDROID_ID`) — read-only; пользователь вводит только **модель** (опц.) и **инвентарный номер** (`terminalNumber`, обязательно). После успешной регистрации `TerminalViewModel.registerTerminal` сохраняет `response.terminal.id` через `SyncPreferences.setTerminalId(...)`. В запросе передаётся сохранённый `terminalId` (если есть) или `null`.
+  - `RegistrationScreen`: серийный номер (`ANDROID_ID`) — read-only; пользователь вводит регион (dropdown), перевозчика (dropdown), часовой пояс (device default), модель (опц.), инвентарный номер (обяз.). После успешной регистрации `TerminalViewModel.registerTerminal` сохраняет `response.terminal.id` через `SyncPreferences.setTerminalId(...)`. В запросе передаются `carrierId`, `timezone`, `terminalId`.
 
   **Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
 
@@ -177,7 +183,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
-- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, TIDs, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule
 - Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
 ### Kafka topic naming
@@ -247,18 +253,20 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 ### Terminal-service (порт 8084, mTLS через gateway)
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/register` | Регистрация/обновление терминала (sync upsert, `TerminalRegisterResponse { terminal, operationStatus, errorMessage? }`). `TerminalService.resolveTerminal`: если `terminalId != null` и найден — update; иначе `findByTerminalSerial` (обычный кейс после cert-saga) — update; иначе insert нового (`UuidUtils.newId()`, `status = WAREHOUSE`). `terminalSerial` = `ANDROID_ID` устройства. Сертификат при регистрации НЕ пересохраняется (он уже лежит в `ASOP_TERMINAL_CERTS` после cert-saga). |
+| POST | `/api/v1/terminals/register` | Регистрация/обновление терминала (sync upsert, `TerminalRegisterResponse { terminal, operationStatus, errorMessage? }`). `TerminalService.resolveTerminal`: если `terminalId != null` и найден — update; иначе `findByTerminalSerial` (обычный кейс после cert-saga) — update; иначе insert нового (`UuidUtils.newId()`, `status = WAREHOUSE`). `terminalSerial` = `ANDROID_ID` устройства. Сертификат при регистрации НЕ пересохраняется (он уже лежит в `ASOP_TERMINAL_CERTS` после cert-saga). Передаются `carrierId`, `timezone`. |
 | GET | `/api/v1/terminals/{id}` | Получить терминал |
 | PUT | `/api/v1/terminals/{id}/status` | Изменить статус терминала |
+| PUT | `/api/v1/terminals/{id}/carrier` | Привязать/отвязать перевозчика (`TerminalCarrierAssignRequest { carrierId }`) |
 
 ### Carrier-service (порт 8087, через gateway sync proxy)
 | Метод | Путь | Описание | Тип |
 |-------|------|----------|-----|
-| GET | `/api/v1/carriers` | Список перевозчиков | sync |
+| GET | `/api/v1/carriers?regionId=UUID` | Список перевозчиков (с фильтром по региону) | sync |
 | POST | `/api/v1/carriers` | Создание перевозчика (Kafka async, `CarrierCommandService`) | async |
 | GET | `/api/v1/carriers/{id}` | Получить перевозчика | sync |
 | PUT | `/api/v1/carriers/{id}` | Редактировать перевозчика | sync |
 | DELETE | `/api/v1/carriers/{id}` | Удалить перевозчика | sync |
+| GET/POST/PUT/DELETE | `/api/v1/tids[/{id}]?carrierId=UUID` | CRUD TID (пулы), фильтр по перевозчику | sync |
 | GET/POST/PUT/DELETE | `/api/v1/cards-distributors[/{id}]` | CRUD дистрибьюторов карт (R2DBC) | sync |
 | GET/POST/PUT/DELETE | `/api/v1/contracts[/{id}]` | CRUD договоров (R2DBC, `ATTRIBUTES JSONB`, оба `carrierId`/`cardsDistributorId` могут быть null) | sync |
 

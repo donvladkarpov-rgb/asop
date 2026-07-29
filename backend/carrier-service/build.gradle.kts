@@ -12,6 +12,7 @@ dependencies {
     implementation(project(":backend:shared:asop-dto"))
     implementation(project(":backend:shared:asop-kafka-contracts"))
     implementation(project(":backend:shared:api:carrier-api"))
+    implementation(project(":backend:shared:api:tid-api"))
 
     // Spring WebFlux
     implementation(libs.spring.boot.starter.webflux)

@@ -14,6 +14,9 @@ import kotlinx.coroutines.launch
 import ru.asop.terminal.cert.MtlsManager
 import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.network.GatewayApi
+import ru.asop.terminal.network.models.CarrierResponse
+import ru.asop.terminal.network.models.RegionResponse
+import ru.asop.terminal.network.models.TerminalCarrierAssignRequest
 import ru.asop.terminal.network.models.TerminalRegisterRequest
 import ru.asop.terminal.network.models.TerminalResponse
 import ru.asop.terminal.service.CertificateService
@@ -48,6 +51,12 @@ class TerminalViewModel @Inject constructor(
 
     val androidId: String = getAndroidId(application)
 
+    private val _regions = MutableStateFlow<List<RegionResponse>>(emptyList())
+    val regions: StateFlow<List<RegionResponse>> = _regions.asStateFlow()
+
+    private val _carriers = MutableStateFlow<List<CarrierResponse>>(emptyList())
+    val carriers: StateFlow<List<CarrierResponse>> = _carriers.asStateFlow()
+
     fun isCertificateReady(): Boolean = mtlsManager.hasCertificate()
 
     fun autoProvision() {
@@ -62,7 +71,13 @@ class TerminalViewModel @Inject constructor(
         }
     }
 
-    fun registerTerminal(model: String?, number: String?) {
+    fun registerTerminal(
+        regionId: String?,
+        carrierId: String?,
+        timezone: String,
+        model: String?,
+        number: String?
+    ) {
         viewModelScope.launch {
             _state.value = UiState.Registering
             try {
@@ -72,6 +87,8 @@ class TerminalViewModel @Inject constructor(
                         terminalSerial = androidId,
                         terminalNumber = number,
                         terminalModel = model,
+                        carrierId = carrierId,
+                        timezone = timezone,
                         terminalId = savedTerminalId
                     )
                 )
@@ -93,6 +110,51 @@ class TerminalViewModel @Inject constructor(
                 _state.value = UiState.Registered(response)
             } catch (e: Exception) {
                 _state.value = UiState.Error(e.message ?: "Ошибка загрузки данных")
+            }
+        }
+    }
+
+    fun loadReferenceData() {
+        viewModelScope.launch {
+            try {
+                _regions.value = gatewayApi.listRegions()
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message ?: "Ошибка загрузки регионов")
+            }
+        }
+    }
+
+    fun loadCarriersForRegion(regionId: String) {
+        viewModelScope.launch {
+            try {
+                _carriers.value = gatewayApi.listCarriers(regionId)
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message ?: "Ошибка загрузки перевозчиков")
+            }
+        }
+    }
+
+    fun assignCarrier(carrierId: String?) {
+        viewModelScope.launch {
+            try {
+                val id = terminalId.value ?: return@launch
+                val response = gatewayApi.assignCarrier(id, TerminalCarrierAssignRequest(carrierId))
+                _terminalInfo.value = response
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message ?: "Ошибка привязки перевозчика")
+            }
+        }
+    }
+
+    fun regenerateCert() {
+        viewModelScope.launch {
+            try {
+                mtlsManager.resetKeyAndCert()
+                _state.value = UiState.Provisioning
+                certificateService.provision(androidId)
+                _state.value = UiState.Ready
+            } catch (e: Exception) {
+                _state.value = UiState.Error(e.message ?: "Ошибка перевыпуска сертификата")
             }
         }
     }

@@ -130,6 +130,18 @@ export interface Contract {
   updatedAt: string;
 }
 
+export interface Tid {
+  id: string;
+  carrierId: string;
+  terminalId?: string;
+  tidValue: string;
+  status: 'UNUSED' | 'ASSIGNED' | 'REVOKED';
+  assignedAt?: string;
+  unassignedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BenefitStep {
   id: string;
   benefitId: string;

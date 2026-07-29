@@ -18,6 +18,7 @@ class ServiceRegistry {
         "carriers" to svc("carrier-service", 8087),
         "cards-distributors" to svc("carrier-service", 8087),
         "contracts" to svc("carrier-service", 8087),
+        "tids" to svc("carrier-service", 8087),
         "debts" to svc("debt-service", 8088),
         "audit" to svc("audit-service", 8089),
         "fiscal" to svc("fiscal-service", 8090),

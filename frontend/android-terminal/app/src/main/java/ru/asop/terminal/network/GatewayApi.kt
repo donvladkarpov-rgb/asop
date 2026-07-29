@@ -6,6 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 import ru.asop.terminal.network.models.*
 
 interface GatewayApi {
@@ -24,4 +25,16 @@ interface GatewayApi {
 
     @GET("api/v1/events/{eventId}")
     suspend fun getEventStatus(@Path("eventId") eventId: String): Response<EventStatusResponse>
+
+    @PUT("api/v1/terminals/{id}/carrier")
+    suspend fun assignCarrier(
+        @Path("id") id: String,
+        @Body request: TerminalCarrierAssignRequest
+    ): TerminalResponse
+
+    @GET("api/v1/regions")
+    suspend fun listRegions(): List<RegionResponse>
+
+    @GET("api/v1/carriers")
+    suspend fun listCarriers(@Query("regionId") regionId: String? = null): List<CarrierResponse>
 }

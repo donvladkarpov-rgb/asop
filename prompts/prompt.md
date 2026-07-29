@@ -2,18 +2,18 @@
 
 ## Проект
 
-ASOP — Kotlin+Spring Boot 3.3.5 (WebFlux, R2DBC) + PostgreSQL 14/PostGIS + Kafka 3.7.1 + Keycloak 25.0.4, все в Docker. Репозиторий ветка `develop`. Рабочая директория — `/home/vlad/IdeaProjects/asop`. Изучай `AGENTS.md` и `doc/context.md` перед началом.
+ASOP — Kotlin+Spring Boot 3.3.5 (WebFlux, R2DBC) + PostgreSQL 14/PostGIS + Kafka 3.7.1 + Keycloak 25.0.4, все в Docker. Репозиторий ветка `develop`. Рабочая директория — `/home/vlad/IdeaProjects/asop`. Изучай `../AGENTS.md` и `../doc/context.md` перед началом.
 
-Ключевые архитектурные договорённости (читай `AGENTS.md`!):
+Ключевые архитектурные договорённости (читай `../AGENTS.md`!):
 - **Все ID = UUIDv7** через `UuidUtils.newId()` (модуль `:backend:shared:asop-common`, `ru.asop.common.util.UuidUtils`).
 - **WebFlux, реактивщина везде**. `@Transactional` НЕ работает на R2DBC — надо `transactionalOperator.transactional(mono)`. `ReactiveCrudRepository.save()` с непустым `@Id` делает UPDATE, не INSERT — для нового UUID использовать `R2dbcEntityTemplate.insert()`.
-- **Liquibase** — единый changelog `infrastructure/db-migrations/migrations/v001-init.sql` (один файл, 67 таблиц, ~1587 строк). Любые изменения схемы — отдельный changeset в этом файле или новый `v002-*.sql`, подключённый через `db.changelog-master.yaml`. **Важно:** сейчас используется `docker compose down -v` при пересборке, поэтому можно смело дополнять существующий `v001-init.sql` (БД пересоздаётся). Но если делаем новый changeset — фиксируем checksum concerns, смотри AGENTS.md.
+- **Liquibase** — единый changelog `../infrastructure/db-migrations/migrations/v001-init.sql` (один файл, 67 таблиц, ~1587 строк). Любые изменения схемы — отдельный changeset в этом файле или новый `v002-*.sql`, подключённый через `db.changelog-master.yaml`. **Важно:** сейчас используется `docker compose down -v` при пересборке, поэтому можно смело дополнять существующий `v001-init.sql` (БД пересоздаётся). Но если делаем новый changeset — фиксируем checksum concerns, смотри AGENTS.md.
 - **API-модули** (`backend/shared/api/{domain}-api`) содержат только controller-интерфейс + DTO. Реализация в `{domain}-service`.
 - Германичные соглашения по package: `ru.asop.api.{domain}` для API, `ru.asop.{domain}` для сервиса.
 
 ## Текущее состояние термин-флоу (DEPRECATED — что надо менять)
 
-### Provisioning (`frontend/android-terminal`)
+### Provisioning (`../frontend/android-terminal`)
 - `ui/screen/ProvisioningScreen.kt` — кнопка "Сгенерировать ключи и запросить сертификат" → `TerminalViewModel.autoProvision()` (`ui/screen/TerminalViewModel.kt:45`) вызывает `certificateService.provision("terminal-${System.currentTimeMillis()}")` — ЛИТЕРАЛЬНО строка от милллисекунд, НЕ ANDROID_ID!
 - `service/CertificateService.kt:45-112` — `provision()` генерит EC P-256 keypair в AndroidKeyStore, POST на `api/v1/terminals/cert-sign` (plain HTTPS, без mTLS, chicken-and-egg), поллит `GET /api/v1/events/{eventId}` каждые 2 сек, до 5 мин таймаута. Сохраняет PEM цепочку в SharedPreferences `"asop_terminal_cert"`.
 - **ANDROID_ID сейчас не используется нигде** (`grep ANDROID_ID Settings.Secure` returns 0 hits).
@@ -103,7 +103,7 @@ ASOP — Kotlin+Spring Boot 3.3.5 (WebFlux, R2DBC) + PostgreSQL 14/PostGIS + Kaf
 - В DDL `TERMINAL_NUMBER VARCHAR(16) NOT NULL`, но в entity `terminalNumber: String? = null` — если на сервер передаётся null, инерт упадёт на NOT NULL. Решить (например, разрешить NULL — либо через миграцию `ALTER TABLE ASOP_TERMINALS ALTER COLUMN TERMINAL_NUMBER DROP NOT NULL;`, либо требовать inventary number в API).
 
 ## ИЗВЕСТНЫЕ БАГИ КОММИТА
-Незакоммиченные в ветке `develop` файлы — `gradlew`, `infrastructure/docker/certs/provision.sh` (mode → executable) и `docker-compose.yml` (увеличены `mem_limit` для всех сервисов). Не трогай их.
+Незакоммиченные в ветке `develop` файлы — `gradlew`, `../infrastructure/docker/certs/provision.sh` (mode → executable) и `docker-compose.yml` (увеличены `mem_limit` для всех сервисов). Не трогай их.
 
 ---
 
@@ -148,7 +148,7 @@ ASOP — Kotlin+Spring Boot 3.3.5 (WebFlux, R2DBC) + PostgreSQL 14/PostGIS + Kaf
 ### Файлы:
 - `frontend/android-terminal/app/src/main/java/ru/asop/terminal/ui/screen/TerminalViewModel.kt:45` — `certificateService.provision("terminal-${System.currentTimeMillis()}")` → передавать ANDROID_ID.
 - `frontend/android-terminal/app/src/main/java/ru/asop/terminal/service/CertificateService.kt:45` — `provision()` уже принимает `terminalSerial` параметром, ничего не менять (serrial приходит сверху).
-- `frontend/android-terminal/app/src/main/java/ru/asop/terminal/ui/screen/RegistrationScreen.kt` — переделать UI:
+- `../frontend/android-terminal/app/src/main/java/ru/asop/terminal/ui/screen/RegistrationScreen.kt` — переделать UI:
   - Поле "Серийный номер" → **read-only display** ANDROID_ID (показать hex-строку, не редактируется).
   - Поле "Модель" → вводимое, опц.
   - Поле "Инвентарный номер" → вводимое, **обязательное** (это `terminalNumber`).
@@ -177,9 +177,9 @@ object DeviceIdProvider {
 
 ## Текущее состояние (что мигрировать)
 
-- `backend/gateway-service/src/main/kotlin/ru/asop/gateway/service/EventService.kt` (72 строки) — in-memory `ConcurrentHashMap<UUID, EventStatus>`, TTL 30 мин через `Executors.newSingleThreadScheduledExecutor.scheduleAtFixedRate`.
-- `backend/gateway-service/src/main/kotlin/ru/asop/gateway/model/EventStatus.kt` (20 строк) — `enum EventState { PENDING, COMPLETED, FAILED }` + `data class EventStatus(eventId, commandTopic, state, resultData: String?, errorMessage: String?, createdAt, completedAt: Instant?)`.
-- `backend/gateway-service/src/main/kotlin/ru/asop/gateway/controller/EventController.kt` (42 строки) — `GET /api/v1/events/{eventId}` возвращает:
+- `../backend/gateway-service/src/main/kotlin/ru/asop/gateway/service/EventService.kt` (72 строки) — in-memory `ConcurrentHashMap<UUID, EventStatus>`, TTL 30 мин через `Executors.newSingleThreadScheduledExecutor.scheduleAtFixedRate`.
+- `../backend/gateway-service/src/main/kotlin/ru/asop/gateway/model/EventStatus.kt` (20 строк) — `enum EventState { PENDING, COMPLETED, FAILED }` + `data class EventStatus(eventId, commandTopic, state, resultData: String?, errorMessage: String?, createdAt, completedAt: Instant?)`.
+- `../backend/gateway-service/src/main/kotlin/ru/asop/gateway/controller/EventController.kt` (42 строки) — `GET /api/v1/events/{eventId}` возвращает:
   - 404 если `eventService.getStatus(eventId).isEmpty`
   - 202 PENDING
   - 200 COMPLETED (тело = `EventStatus`, `resultData` = JSON статус-результата, e.g. cert PEM для cert-saga)
@@ -190,7 +190,7 @@ object DeviceIdProvider {
 ## Требования:
 
 ### 2.1. Redis в `docker-compose.yml`
-Добавить сервис `redis` аналогично postgres (см. `infrastructure/docker/docker-compose.yml` строки 13-30 как шаблон):
+Добавить сервис `redis` аналогично postgres (см. `../infrastructure/docker/docker-compose.yml` строки 13-30 как шаблон):
 ```yaml
   redis:
     mem_limit: 256m
@@ -210,8 +210,8 @@ object DeviceIdProvider {
 Добавить `redis_data:` в `volumes:` секцию (строки 613-617).
 
 ### 2.2. Зависимости gateway-service от redis
-- В `backend/gateway-service/build.gradle.kts` добавить Spring Data Redis Reactive: `implementation("org.springframework.boot:spring-boot-starter-data-redis-r2dbc")` (или `impl); через `spring-boot-starter-data-redis-runtime` но с реактивным `ReactiveRedisTemplate`). WebFlux stack, поэтому ** ТОЛЬКО РЕАКТИВНЫЙ API** — `ReactiveRedisTemplate<String, String>` (или `ReactiveRedisOperations`).
-- В `backend/gateway-service/src/main/resources/application.yml` (и `application.yml` для Docker) добавить:
+- В `../backend/gateway-service/build.gradle.kts` добавить Spring Data Redis Reactive: `implementation("org.springframework.boot:spring-boot-starter-data-redis-r2dbc")` (или `impl); через `spring-boot-starter-data-redis-runtime` но с реактивным `ReactiveRedisTemplate`). WebFlux stack, поэтому ** ТОЛЬКО РЕАКТИВНЫЙ API** — `ReactiveRedisTemplate<String, String>` (или `ReactiveRedisOperations`).
+- В `../backend/gateway-service/src/main/resources/application.yml` (и `application.yml` для Docker) добавить:
   ```yaml
   spring:
     redis:
@@ -267,7 +267,7 @@ object DeviceIdProvider {
 ## Порядок работы:
 1. Сначала schema — добавить колонки `CREATED_AT` / `UPDATED_AT` в `ASOP_TERMINALS` если их нет, и решить `TERMINAL_NUMBER NOT NULL` vs `nullable` (рекомендуется `DROP NOT NULL`, потому что при first-time cert-sign terminalNumber обычно null).
 2. Потом серверная логика `TerminalService.register` (новая upsert логика + cert handling для edge case "нет такого терминала").
-3. Обновить `TerminalRegisterRequest` DTO в `backend/shared/api/terminal-api/` (добавить `terminalId: UUID?`).
+3. Обновить `TerminalRegisterRequest` DTO в `../backend/shared/api/terminal-api` (добавить `terminalId: UUID?`).
 4. Обновить `TerminalResponse` DTO — добавить `operationStatus: String?` (или `operationResult` enum-like string `"SUCCESS"`/error message; лучше — явно: `data class TerminalRegisterResponse(val terminal: TerminalResponse, val status: OperationStatus, val errorMessage: String?)` — обсудить в PR).
 5. Подключить Redis, добавить в docker-compose, конфиг в `gateway-service`.
 6. Переписать `EventService` (reactive Redis, TTL 24h).
@@ -275,7 +275,7 @@ object DeviceIdProvider {
 8. Андроид — `DeviceIdProvider`, перепилить `RegistrationScreen`, `TerminalViewModel` (persist `terminalId`), `TerminalRegisterRequest` DTO.
 9. Исправить nav программу (если есть terminalId — skip registration).
 10. Проверить build:
-    - `./gradlew build` — все 27 модулей (JVM flags в `gradle.properties` уже настроены: `-Xmx4g`, `-Xmx2g`.
+    - `./gradlew build` — все 27 модулей (JVM flags в `../gradle.properties` уже настроены: `-Xmx4g`, `-Xmx2g`.
     - `docker compose -f infrastructure/docker/docker-compose.yml down -v`
     - `docker compose -f infrastructure/docker/docker-compose.yml up -d --build`
     - Логи: `docker compose -f infrastructure/docker/docker-compose.yml logs -f gateway-service terminal-service redis`

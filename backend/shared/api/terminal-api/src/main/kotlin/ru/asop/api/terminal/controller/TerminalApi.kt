@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import reactor.core.publisher.Mono
+import ru.asop.api.terminal.dto.request.TerminalCarrierAssignRequest
 import ru.asop.api.terminal.dto.request.TerminalRegisterRequest
 import ru.asop.api.terminal.dto.request.TerminalStatusChangeRequest
 import ru.asop.api.terminal.dto.response.TerminalRegisterResponse
@@ -34,6 +35,13 @@ interface TerminalApi {
     fun changeTerminalStatus(
         @PathVariable id: UUID,
         @Valid @RequestBody request: TerminalStatusChangeRequest,
+        principal: Mono<Principal>
+    ): Mono<ResponseEntity<TerminalResponse>>
+
+    @PutMapping("/{id}/carrier")
+    fun assignCarrier(
+        @PathVariable id: UUID,
+        @Valid @RequestBody request: TerminalCarrierAssignRequest,
         principal: Mono<Principal>
     ): Mono<ResponseEntity<TerminalResponse>>
 }

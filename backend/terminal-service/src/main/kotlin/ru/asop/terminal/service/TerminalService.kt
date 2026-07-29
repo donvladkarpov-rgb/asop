@@ -29,6 +29,7 @@ class TerminalService(
                     terminalNumber = request.terminalNumber,
                     terminalModel = request.terminalModel,
                     carrierId = request.carrierId,
+                    timezone = request.timezone ?: entity.timezone,
                     updatedAt = now
                 )
                 terminalRepository.save(updated)
@@ -53,19 +54,20 @@ class TerminalService(
         return terminalRepository.findByTerminalSerial(request.terminalSerial)
                 .switchIfEmpty(
                     Mono.defer {
-                        val entity = TerminalEntity(
-                            terminalId = UuidUtils.newId(),
-                            terminalSerial = request.terminalSerial,
-                            terminalNumber = request.terminalNumber,
-                            terminalModel = request.terminalModel,
-                            carrierId = request.carrierId,
-                            status = "WAREHOUSE",
-                            createdAt = now,
-                            updatedAt = now
-                        )
-                        r2dbcTemplate.insert(entity)
-                    }
-                )
+                    val entity = TerminalEntity(
+                        terminalId = UuidUtils.newId(),
+                        terminalSerial = request.terminalSerial,
+                        terminalNumber = request.terminalNumber,
+                        terminalModel = request.terminalModel,
+                        carrierId = request.carrierId,
+                        timezone = request.timezone,
+                        status = "WAREHOUSE",
+                        createdAt = now,
+                        updatedAt = now
+                    )
+                    r2dbcTemplate.insert(entity)
+                }
+            )
     }
 
     private fun findBySerialFallback(request: TerminalRegisterRequest, now: Instant): Mono<TerminalEntity> {
@@ -78,6 +80,7 @@ class TerminalService(
                         terminalNumber = request.terminalNumber,
                         terminalModel = request.terminalModel,
                         carrierId = request.carrierId,
+                        timezone = request.timezone,
                         status = "WAREHOUSE",
                         createdAt = now,
                         updatedAt = now
@@ -101,6 +104,17 @@ class TerminalService(
                 terminalRepository.save(updated).map { it.toResponse() }
             }
     }
+
+    fun assignCarrier(id: UUID, carrierId: UUID?): Mono<TerminalResponse> {
+        return terminalRepository.findById(id)
+            .flatMap { existing ->
+                val updated = existing.copy(
+                    carrierId = carrierId,
+                    updatedAt = Instant.now()
+                )
+                terminalRepository.save(updated).map { it.toResponse() }
+            }
+    }
 }
 
 private fun TerminalEntity.toResponse() = TerminalResponse(
@@ -109,6 +123,7 @@ private fun TerminalEntity.toResponse() = TerminalResponse(
     terminalNumber = terminalNumber,
     terminalModel = terminalModel,
     carrierId = carrierId,
+    timezone = timezone,
     status = status,
     createdAt = createdAt,
     updatedAt = updatedAt

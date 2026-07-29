@@ -9,6 +9,7 @@ data class TerminalResponse(
     val terminalNumber: String?,
     val terminalModel: String?,
     val carrierId: UUID?,
+    val timezone: String?,
     val status: String,
     val createdAt: Instant,
     val updatedAt: Instant

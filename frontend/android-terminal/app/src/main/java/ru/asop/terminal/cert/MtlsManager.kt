@@ -124,4 +124,14 @@ class MtlsManager @Inject constructor(
     }
 
     fun loadCertificate(): X509Certificate? = loadCertificateChain()?.firstOrNull()
+
+    fun resetKeyAndCert() {
+        try {
+            val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            if (ks.containsAlias(KEY_ALIAS)) {
+                ks.deleteEntry(KEY_ALIAS)
+            }
+        } catch (_: Exception) {}
+        prefs.edit().clear().apply()
+    }
 }

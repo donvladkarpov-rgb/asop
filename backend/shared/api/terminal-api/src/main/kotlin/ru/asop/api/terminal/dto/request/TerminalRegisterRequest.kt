@@ -17,5 +17,7 @@ data class TerminalRegisterRequest(
 
     val carrierId: UUID? = null,
 
+    val timezone: String? = null,
+
     val terminalId: UUID? = null
 )

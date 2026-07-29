@@ -13,6 +13,7 @@ const navItems = [
 
 const contractorItems = [
   { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
+  { to: '/tids', label: 'TID (пулы)', icon: '🔑' },
   { to: '/cards-distributors', label: 'Дистрибьюторы карт', icon: '📦' },
   { to: '/contracts', label: 'Договоры', icon: '📄' },
   { to: '/contract-routes', label: 'Связи договор-маршрут', icon: '🔗' },

@@ -4,6 +4,7 @@ import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
 import ru.asop.api.terminal.controller.TerminalApi
+import ru.asop.api.terminal.dto.request.TerminalCarrierAssignRequest
 import ru.asop.api.terminal.dto.request.TerminalRegisterRequest
 import ru.asop.api.terminal.dto.request.TerminalStatusChangeRequest
 import ru.asop.api.terminal.dto.response.TerminalRegisterResponse
@@ -37,5 +38,15 @@ class TerminalController(
     ): Mono<ResponseEntity<TerminalResponse>> {
         return terminalService.changeStatus(id, request)
             .map { ResponseEntity.ok(it) }
+    }
+
+    override fun assignCarrier(
+        id: UUID,
+        request: TerminalCarrierAssignRequest,
+        principal: Mono<Principal>
+    ): Mono<ResponseEntity<TerminalResponse>> {
+        return terminalService.assignCarrier(id, request.carrierId)
+            .map { ResponseEntity.ok(it) }
+            .defaultIfEmpty(ResponseEntity.notFound().build())
     }
 }
