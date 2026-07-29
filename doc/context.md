@@ -46,7 +46,7 @@ backend/
 │   ├── asop-common/           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, UuidUtils
 │   ├── asop-dto/              # пусто (DTO перенесены в API-модули)
 │   ├── asop-kafka-contracts/  # Kafka события
-│   └── api/                   # API-контракты (11 модулей)
+│   └── api/                   # API-контракты (13 модулей, включая tid-api)
 ├── gateway-service/           # API Gateway (WebFlux + двойная аутентификация)
 ├── crypto-service/            # Root CA, выпуск сертификатов
 ├── carrier-service/           # Управление перевозчиками (R2DBC)
@@ -84,7 +84,7 @@ backend/shared/api/{name}-api/
 
 **Service → API dependency:** `implementation(project(":backend:shared:api:{domain}-api"))`
 
-### Все модули (27)
+### Все модули (28)
 ```
 :backend:shared:asop-common
 :backend:shared:asop-dto
@@ -100,7 +100,9 @@ backend/shared/api/{name}-api/
 :backend:shared:api:fiscal-api
 :backend:shared:api:audit-api
 :backend:shared:api:admin-api
+:backend:shared:api:reference-api
 :backend:shared:api:route-api
+:backend:shared:api:tid-api
 :backend:gateway-service
 :backend:carrier-service
 :backend:crypto-service
@@ -119,13 +121,13 @@ backend/shared/api/{name}-api/
 
 | Путь | Порт | Роль |
 |------|------|------|
-| `gateway-service` | 8080 | API Gateway: JWT + mTLS, Kafka producer |
+| `gateway-service` | 8080 | API Gateway: JWT + mTLS, Kafka producer, proxy для регионов/перевозчиков/TIDs |
 | `crypto-service` | 8081 | Root CA, X.509 cert issuance |
 | `user-service` | 8082 | Users + Keycloak bootstrap |
 | `terminal-service` | 8084 | Terminal management |
 | `session-service` | 8085 | Sessions/shifts (tree hierarchy) |
 | `card-service` | 8086 | Cards (MIFARE, bank) |
-| `carrier-service` | 8087 | Carriers, contracts (R2DBC) |
+| `carrier-service` | 8087 | Carriers, contracts, TIDs (R2DBC) |
 | `debt-service` | 8088 | Card debts |
 | `audit-service` | 8089 | Inspections (КРС) |
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
@@ -357,7 +359,7 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Endpoint'ы crypto-service
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/register` | Выпуск сертификата терминала |
+| POST | `/api/v1/terminals/cert-sign` | Выпуск сертификата терминала (open HTTPS, async 4-hop Kafka saga) |
 | POST | `/api/v1/smart-cards/issue` | Выпуск сертификата карты |
 | GET | `/api/v1/terminals/root-ca(/{format})` | Root CA в PEM/DER |
 
@@ -411,12 +413,21 @@ Root CA (self-signed, ECC P-256, 10 лет)
   - CHECK: `expires_at > issued_at`, не более одного `IS_CURRENT=true AND REVOKED_AT IS NOT NULL`
 
 **Terminal registration (`POST /api/v1/terminals/register`, terminal-service)** — синхронный upsert:
-- Запрос `TerminalRegisterRequest { terminalSerial, terminalNumber?, terminalModel?, carrierId?, terminalId? }`. `terminalSerial` = `ANDROID_ID` устройства.
+- Запрос `TerminalRegisterRequest { terminalSerial, terminalNumber?, terminalModel?, carrierId?, terminalId?, timezone? }`. `terminalSerial` = `ANDROID_ID` устройства. `timezone` (VARCHAR(50), опц.) — таймзона терминала (Android передаёт `TimeZone.getDefault().id`); сервер хранит как есть, все timestamps в БД в UTC.
 - Логика `TerminalService.resolveTerminal`:
-  1. Если `terminalId != null` → `findById(terminalId)`. Если найден — обновить `terminalSerial`/`terminalNumber`/`terminalModel`/`carrierId`/`updatedAt`, вернуть тот же `terminalId`. Если не найден — fallback к шагу 2.
+  1. Если `terminalId != null` → `findById(terminalId)`. Если найден — обновить `terminalSerial`/`terminalNumber`/`terminalModel`/`carrierId`/`timezone`/`updatedAt`, вернуть тот же `terminalId`. Если не найден — fallback к шагу 2.
   2. `findByTerminalSerial(serial)` — это «обычный кейс» после cert-sign saga (cert-saga уже создала терминал по serial + сохранила cert). Обновить атрибуты, вернуть существующий `terminalId`.
   3. Если по serial тоже нет — создать новый `TerminalEntity` через `R2dbcEntityTemplate.insert()` (не `save()`, см. AGENTS.md save-bug), `terminalId = UuidUtils.newId()` (UUIDv7), `status = "WAREHOUSE"`.
-- Ответ: `TerminalRegisterResponse { terminal: TerminalResponse, operationStatus: "SUCCESS", errorMessage? }`. Сертификат при регистрации НЕ пересохраняется — он уже лежит в `ASOP_TERMINAL_CERTS` после cert-saga (с `IS_CURRENT=true` и атомарной ротацией старых через `markAllAsNotCurrent` в `CertCommandService`).
+- Ответ: `TerminalRegisterResponse { terminal: TerminalResponse, operationStatus: "SUCCESS", errorMessage? }`. `TerminalResponse` включает `timezone: String?` и `carrierId: UUID?`. Сертификат при регистрации НЕ пересохраняется — он уже лежит в `ASOP_TERMINAL_CERTS` после cert-saga (с `IS_CURRENT=true` и атомарной ротацией старых через `markAllAsNotCurrent` в `CertCommandService`).
+
+**Terminal assign carrier (`PUT /api/v1/terminals/{id}/carrier`, terminal-service)** — синхронная привязка терминала к перевозчику. Запрос `TerminalCarrierAssignRequest { carrierId: UUID? }` (null = отвязать), ответ `TerminalResponse`. Используется Android-экраном "Привязать перевозчика" из drawer-меню.
+
+**TID CRUD (carrier-service, sync-proxy)** — `GET/POST/PUT/DELETE /api/v1/tids[/{id}]`:
+- `GET /api/v1/tids?carrierId=UUID` — список TID перевозчика (`@RequestParam(required=false) carrierId: UUID?`, `TidRepository.findByCarrierId`); если `carrierId` не передан — все TID.
+- `POST /api/v1/tids` — создать (`TidCreateRequest { carrierId: UUID (NotNull), tidValue: String (NotBlank, Size 20) }`, status всегда `UNUSED`).
+- `PUT /api/v1/tids/{id}` — обновить (`TidUpdateRequest { carrierId?, tidValue?, status?, terminalId? }`; смена `status` и/или `terminalId` корректно обновляет `ASSIGNED_AT`/`UNASSIGNED_AT`).
+- `DELETE /api/v1/tids/{id}` — удалить.
+- Sync-CRUD (R2DBC, `R2dbcEntityTemplate.insert()` для новых), без Kafka. Gateway `ServiceRegistry` маппит `tids` → `carrier-service:8087`, `ProxyController` пересылает.
 
 **Транзакции:**
 - `ASOP_SESSIONS` — сессии (иерархические)
@@ -483,11 +494,19 @@ Liquibase запускается **отдельным Docker-контейнер�
 
 **Трёхэкранный флоу терминала** (без навигационных меню, последовательный `provisioning → registration → main`):
 1. **Provisioning** — генерация ECC P-256 ключевой пары в AndroidKeyStore, `POST /api/v1/terminals/cert-sign` (plain HTTPS, без mTLS — chicken-and-egg), polling `GET /api/v1/events/{eventId}` каждые 2 сек до 5 мин, сохранение PEM-цепочки в SharedPreferences (`asop_terminal_cert`).
-2. **Registration** — `POST /api/v1/terminals/register` через mTLS. Серийный номер = `Settings.Secure.ANDROID_ID` (read-only, не редактируется). Пользователь вводит только:
+2. **Registration** — `POST /api/v1/terminals/register` через mTLS. Серийный номер = `Settings.Secure.ANDROID_ID` (read-only, не редактируется). Пользователь вводит:
+   - **Регион** (обязательно) — dropdown из `GET /api/v1/regions` (sync-proxy через gateway `permitAll` GET)
+   - **Перевозчик** (обязательно) — dropdown из `GET /api/v1/carriers?regionId=...` (фильтр по региону; carrier dropdown доступен только после выбора региона)
+   - **Часовой пояс** (обязательно, read-only) — `TimeZone.getDefault().id`, передаётся в `TerminalRegisterRequest.timezone`
    - **Модель** (опционально) — `terminalModel`
    - **Инвентарный номер** (обязательно) — `terminalNumber`
    В теле запроса также передаётся сохранённый ранее `terminalId` (UUID, ПК терминала в БД), если он есть в DataStore, иначе `null`. После успешной регистрации сберегается возвращённый `id` через `SyncPreferences.setTerminalId()`.
 3. **Main** (Dashboard) — `LazyColumn` с картами: инфо терминала, синхронизация (badge PENDING-событий + кнопка «Синхронизировать сейчас», тоггл синхронизации в TopBar), GPS-трекинг. Фоновая работа: `SyncWorker` (15 мин), `EventPollWorker` (5 мин, до 20 ретраев → FAILED), `NetworkMonitor` (одноразовый sync на восстановлении сети), `GpsTrackingService` (foreground, `FusedLocationProviderClient`, 30 сек, batch ≥ 10 → trigger sync).
+
+**Drawer-меню (`ModalNavigationDrawer`, hamburger-иконка в TopAppBar):** экраны терминала доступны перманентно через drawer (а не только через линейный provisioning → registration → main flow):
+- **"Сертификат"** — диалог подтверждения перевыпуска → `MtlsManager.resetKeyAndCert()` (чистит alias AndroidKeyStore + SharedPreferences) → `CertificateService.provision(androidId)` (новый cert-saga).
+- **"Регистрация"** — переход на RegistrationScreen (см. пункт 2).
+- **"Привязать перевозчика"** — переход на `AssignCarrierScreen`: dropdown регион → dropdown перевозчик (фильтр по `regionId`) → кнопка "Сохранить" → `PUT /api/v1/terminals/{id}/carrier` с `TerminalCarrierAssignRequest { carrierId }`. Текущий перевозчик пред-выбран, отображается на экране. Требует предварительно сохранённый `terminalId` в DataStore.
 
 **Navhost skip-логика (`TerminalNavHost.kt`):** при старте приложения, если `certificateReady && terminalId != null` → `loadTerminal(id)` и сразу экран `main`; если только `certificateReady` → экран `registration`. Смена `ANDROID_ID` (factory reset / смена signing-key) даёт новый serial → cert-sign saga через `findByTerminalSerial` создаст новый терминал → регистрация сохранит новый `terminalId`.
 
@@ -496,12 +515,13 @@ Liquibase запускается **отдельным Docker-контейнер�
 См. подробнее в `doc/smoke-tests.md` (7 сценариев интеграционного тестирования).
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
 
 Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
 
 Отдельные пункты в Sidebar:
 - **Перевозчики** (`/carriers`) — список перевозчиков, редактирование (БЕЗ создания — создание идёт через async Kafka). Поля: name, INN, region.
+- **TID (пулы)** (`/tids`) — полный sync-CRUD TIDs перевозчиков. Filter по carrierId dropdown. Форма: `carrierId` (обязательно), `tidValue` (VARCHAR(20), обязательно), `status` (UNUSED/ASSIGNED/REVOKED, только для редактирования), `terminalId` (optional, для привязки TID к терминалу). Endpoint: `GET/POST/PUT/DELETE /api/v1/tids` (sync-proxy через gateway в carrier-service, без Kafka — Read/Write-CRUD).
 - **Дистрибьюторы карт** (`/cards-distributors`) — полный CRUD + выбиралка договоров (привязка/отвязка через `PUT /api/v1/contracts/{id}`).
 - **Договоры** (`/contracts`) — полный CRUD. Форма валидирует "только одно поле" (carrierId XOR cardsDistributorId). Поле `attributes` — textarea для JSON.
 

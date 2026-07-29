@@ -48,13 +48,13 @@
 
 ## 2. Структура модулей
 
-22 модуля в иерархии:
+28 модулей в иерархии:
 
 ```
 :backend:shared:asop-common           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, утилиты
 :backend:shared:asop-dto              # Пусто — DTO перенесены в API-модули
 :backend:shared:asop-kafka-contracts  # Классы Kafka-событий
-:backend:shared:api:{domain}-api      # 12 модулей: интерфейсы контроллеров + DTO (без реализации)
+:backend:shared:api:{domain}-api      # 13 модулей: интерфейсы контроллеров + DTO (без реализации), включая tid-api
 :backend:{domain}-service             # 12 Spring Boot приложений с реализацией
 ```
 
@@ -352,7 +352,7 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Эндпоинты crypto-service
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/register` | Выпуск сертификата терминала (sync fallback, обычно cert-sign идёт через Kafka) |
+| POST | `/api/v1/terminals/cert-sign` | Выпуск сертификата терминала (open HTTPS, 202 + X-Event-Id, 4-hop Kafka saga) |
 | POST | `/api/v1/smart-cards/issue` | Выпуск сертификата смарт-карты |
 | GET | `/api/v1/terminals/root-ca(/{format})` | Root CA в PEM/DER |
 | POST | `/api/v1/certificates/server` | Выпуск серверного сертификата |
@@ -400,7 +400,7 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 - Vite dev mode проксирует `/api` → `http://localhost:8080` (gateway)
 - API-клиент: `BASE=/api/v1`, Bearer token из oidc-client-ts
 - `useCommand` hook: паттерн 202 + polling для write-команд
-- Страницы: `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+- Страницы: `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
 - Язык UI: русский (для английского нужен i18n)
 
 ### Android Terminal (`frontend/android-terminal/`)
@@ -413,14 +413,21 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 - `AppDatabase` (Room): 3 сущности — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` + 3 DAOs
 - `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
 - `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
-- `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}`
+- `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}` + `GET /api/v1/regions` + `GET /api/v1/carriers?regionId=...` (sync-proxy через gateway, `permitAll` для mTLS-терминала) + `PUT /api/v1/terminals/{id}/carrier`
 - `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
 - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
 - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
 - `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
-- `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store
+- `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store. `terminalSerial` = `Settings.Secure.ANDROID_ID`.
+- `MtlsManager.resetKeyAndCert()`: чистит alias AndroidKeyStore + SharedPreferences — для принудительного перевыпуска сертификата через drawer-меню "Сертификат".
 - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
 - `WorkScheduler`: schedulePeriodicSync вызывается из `AsopTerminalApp.onCreate`
+
+**Drawer-меню (`ModalNavigationDrawer`)** — hamburger-иконка в TopAppBar, открывает панель со тремя пунктами: "Сертификат" (диалог перевыпуска), "Регистрация" (`RegistrationScreen`), "Привязать перевозчика" (`AssignCarrierScreen`). Все три экрана доступны перманентно; `TerminalNavHost` обёрнут в `ModalNavigationDrawer`+`Scaffold`, добавлен route `assign-carrier`.
+
+**Регистрация (RegistrationScreen)** — пользователь выбирает: регион (dropdown из `GET /api/v1/regions`) → перевозчика (dropdown из `GET /api/v1/carriers?regionId=...`, фильтр по региону) → timezone (read-only, `TimeZone.getDefault().id`) → модель (опц.) → инвентарный номер (обяз.). Запрос `TerminalRegisterRequest` содержит `terminalSerial` (ANDROID_ID), `carrierId`, `timezone`, `terminalId` (если уже зарегистрирован). Кнопка дизейблится пока не выбраны region/carrier/inventory.
+
+**Привязка перевозчика (AssignCarrierScreen)** — dropdown регион → dropdown перевозчик (filter по regionId, текущий пред-выбран) → кнопка "Сохранить" → `PUT /api/v1/terminals/{id}/carrier` (`TerminalCarrierAssignRequest { carrierId }`, null = отвязать). Отображает timezone устройства read-only.
 
 **Sync flow:**
 ```

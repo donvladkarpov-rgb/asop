@@ -1,6 +1,6 @@
 # ASOP Platform (asop-platform)
 
-**Стек:** Kotlin 2.0.21, Spring Boot 3.3.5 (WebFlux), PostgreSQL 14 + PostGIS, Kafka 3.7.1, Keycloak 25.0.4, Bouncy Castle 1.78.1, Gradle 8.10.2.
+**Стек:** Kotlin 2.0.21, Spring Boot 3.3.5 (WebFlux), PostgreSQL 14 + PostGIS, Kafka 3.7.1, Redis 7 (event store), Keycloak 25.0.4, Bouncy Castle 1.78.1, Gradle 8.10.2.
 
 ## Build
 
@@ -106,15 +106,17 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 
 Применён в gateway-service и user-service. Для других сервисов нужно добавить при запуске.
 
-### Module structure (27 modules in `settings.gradle.kts`)
+### Module structure (28 modules in `settings.gradle.kts`)
 
 ```
 :backend:shared:asop-common          # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, util
 :backend:shared:asop-dto             # пусто (DTO перенесены в API-модули)
 :backend:shared:asop-kafka-contracts # Kafka event classes
-:backend:shared:api:{domain}-api     # Controller interfaces + DTO (12 модулей)
+:backend:shared:api:{domain}-api     # Controller interfaces + DTO (13 модулей, включая tid-api)
 :backend:{domain}-service            # Spring Boot apps (12 сервисов)
 ```
+
+TID-стек (новый `tid-api` + реализация в `carrier-service` — `TidEntity/TidRepository/TidService/TidController`): sync-CRUD для пулов TID перевозчиков; `GET /api/v1/tids?carrierId=UUID` для фильтра. Без Kafka — только R2DBC. Gateway `ServiceRegistry` маппит `tids` → carrier-service:8087 (sync-proxy).
 
 Service → API dependency: `implementation(project(":backend:shared:api:{domain}-api"))`.
 API → asop-common dependency via `api(platform(...))` pattern.

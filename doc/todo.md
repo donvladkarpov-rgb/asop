@@ -43,6 +43,20 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **Android registration flow** — serial=read-only `ANDROID_ID` (`Settings.Secure.ANDROID_ID`); пользователь вводит только модель (опц.) и инвентарный номер (обязательно). После регистрации `TerminalViewModel.registerTerminal` сберегает `response.terminal.id` через `SyncPreferences.setTerminalId`. `TerminalNavHost` skip registration если `terminalId != null` && certReady.
 - [x] **Schema fixes** — `ASOP_TERMINALS`: `TERMINAL_NUMBER` теперь nullable (инвентарный вводится вручную), добавлены `CREATED_AT`/`UPDATED_AT TIMESTAMPTZ DEFAULT now()`.
 
+## 3.1. TIDs + Android drawer (sync-proxy справочники) ✅
+
+- [x] **TID-стек (backend)** — новый модуль `:backend:shared:api:tid-api` (DTO `TidCreateRequest/TidUpdateRequest/TidResponse`, интерфейс `TidApi` с `listTids(@RequestParam carrierId)`). Реализация в `carrier-service`: `TidEntity/TidRepository/TidService/TidController` (sync-CRUD, R2DBC, `R2dbcEntityTemplate.insert()` для новых). Gateway `ServiceRegistry` маппит `tids` → carrier-service:8087 (sync-proxy через `ProxyController`, без Kafka).
+- [x] **TIDs в web-admin** — `src/pages/Tids.tsx` (sync `useMutation`, не async), `src/api/tids.ts`, type `Tid` в `types/reference.ts`. Sidebar: пункт "TID (пулы)" в `contractorItems` рядом с "Перевозчики". Filter dropdown по перевозчику. Форма создания/редактирования inline card (carrierId обязателен, tidValue обязательно, опционально terminalId для привязки).
+- [x] **Android drawer** — `ModalNavigationDrawer` (hamburger-иконка в TopAppBar). Пункты: "Сертификат" (диалог перевыпуска → `MtlsManager.resetKeyAndCert()` + `provision(androidId)`), "Регистрация", "Привязать перевозчика". `TerminalNavHost` обёрнут в ModalNavigationDrawer + Scaffold, новый route `assign-carrier`.
+- [x] **`MtlsManager.resetKeyAndCert()`** — чистит alias AndroidKeyStore + SharedPreferences `asop_terminal_cert`. Нужен для принудительного перевыпуска.
+- [x] **`PUT /api/v1/terminals/{id}/carrier`** — `TerminalCarrierAssignRequest { carrierId: UUID? }` (null = отвязать), `TerminalService.assignCarrier(id, carrierId)`. Реализован по варианту 1 из промпта (отдельный endpoint, не `register`).
+- [x] **Timezone в DTO** — `TerminalRegisterRequest.timezone: String?` и `TerminalResponse.timezone: String?`. `TerminalService.register` прокидывает в `entity.copy(timezone = request.timezone ?: entity.timezone)` и в insert нового. Android DTO зеркально.
+- [x] **Carrier filter по regionId** — `CarrierApi.listCarriers(@RequestParam regionId: UUID?)`, `CarrierRepository.findByRegionId(regionId)`, `CarrierService.findAll(regionId)`.
+- [x] **Gateway SecurityConfig** — `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` → `permitAll` (терминал под mTLS читает справочники, **sync-proxy через ProxyController**, без Kafka/Redis — EventService зарезервирован для async write-команд).
+- [x] **Android registration UI** — `RegistrationScreen`: dropdown регион → dropdown перевозчик (фильтр по regionId, доступен только после выбора региона) → read-only timezone (device default, `TimeZone.getDefault().id`) → модель (опц.) → инвентарный номер (обязательно). Кнопка дизейблится пока не выбраны region/carrier/inventory.
+- [x] **`AssignCarrierScreen`** — dropdown регион → dropdown перевозчик (filter по regionId) → "Сохранить" → `PUT /api/v1/terminals/{id}/carrier`. Текущий carrier пред-выбран. Отображает timezone устройства (read-only) — передаётся на сервер при регистрации, но при assignCarrier не требуется.
+- [x] **Reference data на Android** — `GatewayApi` дополнен `@GET listRegions()`, `@GET listCarriers(@Query("regionId") regionId: String?)`, `@PUT assignCarrier(...)`. Новые Moshi-модели `RegionResponse`/`CarrierResponse` в `network/models/ReferenceModels.kt`. `TerminalViewModel.loadReferenceData()` / `loadCarriersForRegion(regionId)` для подгрузки справочников.
+
 ## 4. Frontend: Admin UI
 
 - [ ] **Страницы**:
