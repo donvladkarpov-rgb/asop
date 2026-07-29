@@ -1,17 +1,23 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getTids, createTid, updateTid, deleteTid } from '../api/tids';
+import { getRegions } from '../api/reference';
 import { getCarriers } from '../api/carriers';
-import type { Tid, Carrier } from '../types/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
+import type { Tid, Carrier, Region } from '../types/reference';
 
 export function TidsPage() {
   const qc = useQueryClient();
-  const [filterCarrierId, setFilterCarrierId] = useState('');
+  const { regionId: globalRegionId, carrierId: globalCarrierId } = useGlobalFilter();
+
+  const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
   const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+
   const { data, isLoading, error } = useQuery({
-    queryKey: ['tids', filterCarrierId],
-    queryFn: () => getTids(filterCarrierId || undefined),
+    queryKey: ['tids', globalCarrierId],
+    queryFn: () => getTids(globalCarrierId || undefined),
   });
+
   const [edit, setEdit] = useState<Partial<Tid> | null>(null);
   const [showForm, setShowForm] = useState(false);
 
@@ -40,20 +46,12 @@ export function TidsPage() {
         <button className="btn-primary" onClick={() => { setEdit({}); setShowForm(true); }}>+ Добавить</button>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <label>Фильтр по перевозчику: </label>
-        <select value={filterCarrierId} onChange={(e) => setFilterCarrierId(e.target.value)}>
-          <option value="">Все</option>
-          {carriers?.map((c) => (
-            <option key={c.id} value={c.id}>{c.carrierName}</option>
-          ))}
-        </select>
-      </div>
-
       {(showForm || edit) && (
         <TidForm
           initial={edit}
+          regions={regions || []}
           carriers={carriers || []}
+          globalRegionId={globalRegionId}
           onSave={(d) => edit?.id ? updateMut.mutate({ id: edit.id!, data: d }) : createMut.mutate(d as Pick<Tid, 'carrierId' | 'tidValue'>)}
           onCancel={() => { setShowForm(false); setEdit(null); }}
         />
@@ -92,20 +90,53 @@ export function TidsPage() {
   );
 }
 
-function TidForm({ initial, carriers, onSave, onCancel }: {
+function TidForm({ initial, regions, carriers, globalRegionId, onSave, onCancel }: {
   initial?: Partial<Tid> | null;
+  regions: Region[];
   carriers: Carrier[];
+  globalRegionId: string;
   onSave: (d: Partial<Tid>) => void;
   onCancel: () => void;
 }) {
-  const [form, setForm] = useState<Partial<Tid>>(initial || {});
+  const [form, setForm] = useState<Partial<Tid & { regionId?: string }>>(() => {
+    const f: Partial<Tid & { regionId?: string }> = { ...(initial || {}) };
+    if (initial?.carrierId) {
+      const c = carriers.find((x) => x.id === initial.carrierId);
+      if (c) f.regionId = c.regionId;
+    }
+    if (!f.regionId && globalRegionId) f.regionId = globalRegionId;
+    return f;
+  });
+
+  const effectiveRegionId = form.regionId || globalRegionId;
+  const formCarriers = useMemo(() =>
+    effectiveRegionId
+      ? carriers.filter((c) => c.regionId === effectiveRegionId)
+      : carriers,
+    [carriers, effectiveRegionId],
+  );
+
   return (
     <div className="form-card" style={{ marginBottom: 20 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
+        <label>Регион
+          <select
+            value={form.regionId || globalRegionId || ''}
+            onChange={(e) => setForm({ ...form, regionId: e.target.value, carrierId: '' })}
+          >
+            <option value="">— выберите регион —</option>
+            {regions.map((r) => (
+              <option key={r.id} value={r.id}>{r.municipalDivision}</option>
+            ))}
+          </select>
+        </label>
         <label>Перевозчик
-          <select value={form.carrierId || ''} onChange={(e) => setForm({ ...form, carrierId: e.target.value })}>
+          <select
+            value={form.carrierId || ''}
+            onChange={(e) => setForm({ ...form, carrierId: e.target.value })}
+          >
             <option value="">— выберите —</option>
-            {carriers.map((c) => (
+            {formCarriers.map((c) => (
               <option key={c.id} value={c.id}>{c.carrierName}</option>
             ))}
           </select>
@@ -129,7 +160,7 @@ function TidForm({ initial, carriers, onSave, onCancel }: {
         )}
       </div>
       <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-        <button className="btn-primary" onClick={() => onSave(form)}>Сохранить</button>
+        <button className="btn-primary" onClick={() => { const { regionId, ...rest } = form; onSave(rest); }}>Сохранить</button>
         <button className="btn-secondary" onClick={onCancel}>Отмена</button>
       </div>
     </div>

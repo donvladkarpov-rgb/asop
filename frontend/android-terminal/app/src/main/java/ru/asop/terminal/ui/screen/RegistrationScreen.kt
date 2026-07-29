@@ -11,6 +11,49 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import java.util.TimeZone
 
+private val COMMON_TIMEZONES = listOf(
+    "Europe/Kaliningrad",
+    "Europe/Moscow",
+    "Europe/Simferopol",
+    "Europe/Kirov",
+    "Europe/Volgograd",
+    "Europe/Astrakhan",
+    "Europe/Samara",
+    "Europe/Saratov",
+    "Europe/Ulyanovsk",
+    "Asia/Yekaterinburg",
+    "Asia/Omsk",
+    "Asia/Barnaul",
+    "Asia/Novosibirsk",
+    "Asia/Tomsk",
+    "Asia/Krasnoyarsk",
+    "Asia/Novokuznetsk",
+    "Asia/Irkutsk",
+    "Asia/Ulan-Ude",
+    "Asia/Chita",
+    "Asia/Yakutsk",
+    "Asia/Vladivostok",
+    "Asia/Khabarovsk",
+    "Asia/Sakhalin",
+    "Asia/Magadan",
+    "Asia/Srednekolymsk",
+    "Asia/Kamchatka",
+    "Asia/Anadyr",
+    "Etc/UTC",
+    "Europe/London",
+    "Europe/Berlin",
+    "Europe/Paris",
+    "Europe/Helsinki",
+    "Asia/Almaty",
+    "Asia/Tashkent",
+    "Asia/Baku",
+    "Asia/Yerevan",
+    "Asia/Tbilisi",
+    "Asia/Dubai",
+    "Asia/Shanghai",
+    "America/New_York"
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegistrationScreen(
@@ -27,8 +70,8 @@ fun RegistrationScreen(
     var selectedCarrierId by remember { mutableStateOf<String?>(null) }
     var regionExpanded by remember { mutableStateOf(false) }
     var carrierExpanded by remember { mutableStateOf(false) }
-
-    val deviceTimezone = remember { TimeZone.getDefault().id }
+    var timezoneExpanded by remember { mutableStateOf(false) }
+    var selectedTimezone by remember { mutableStateOf(TimeZone.getDefault().id) }
 
     LaunchedEffect(Unit) {
         viewModel.loadReferenceData()
@@ -130,14 +173,33 @@ fun RegistrationScreen(
         }
         Spacer(Modifier.height(12.dp))
 
-        OutlinedTextField(
-            value = deviceTimezone,
-            onValueChange = {},
-            label = { Text("Часовой пояс") },
-            readOnly = true,
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        ExposedDropdownMenuBox(
+            expanded = timezoneExpanded,
+            onExpandedChange = { timezoneExpanded = it }
+        ) {
+            OutlinedTextField(
+                value = selectedTimezone,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Часовой пояс") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = timezoneExpanded) },
+                modifier = Modifier.fillMaxWidth().menuAnchor()
+            )
+            ExposedDropdownMenu(
+                expanded = timezoneExpanded,
+                onDismissRequest = { timezoneExpanded = false }
+            ) {
+                COMMON_TIMEZONES.forEach { tz ->
+                    DropdownMenuItem(
+                        text = { Text(tz) },
+                        onClick = {
+                            selectedTimezone = tz
+                            timezoneExpanded = false
+                        }
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(12.dp))
 
         OutlinedTextField(
@@ -163,7 +225,7 @@ fun RegistrationScreen(
                 viewModel.registerTerminal(
                     regionId = selectedRegionId,
                     carrierId = selectedCarrierId,
-                    timezone = deviceTimezone,
+                    timezone = selectedTimezone,
                     model = model.ifBlank { null },
                     number = number.ifBlank { null }
                 )

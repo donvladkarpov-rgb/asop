@@ -55,9 +55,10 @@ fun TerminalNavHost() {
     var showCertDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        val tid = terminalViewModel.getStoredTerminalId()
         val certReady = terminalViewModel.isCertificateReady()
-        if (certReady && terminalId != null) {
-            terminalViewModel.loadTerminal(terminalId!!)
+        if (certReady && tid != null) {
+            terminalViewModel.loadTerminal(tid)
             navController.navigate("main") {
                 popUpTo(0) { inclusive = true }
             }
@@ -126,7 +127,11 @@ fun TerminalNavHost() {
                     selected = false,
                     onClick = {
                         scope.launch { drawerState.close() }
-                        navController.navigate("registration")
+                        if (terminalId == null) {
+                            navController.navigate("provisioning")
+                        } else {
+                            navController.navigate("registration")
+                        }
                     }
                 )
                 NavigationDrawerItem(
@@ -136,6 +141,36 @@ fun TerminalNavHost() {
                         scope.launch { drawerState.close() }
                         navController.navigate("assign-carrier")
                     }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Загрузить справочники") },
+                    selected = false,
+                    onClick = { scope.launch { drawerState.close() } }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Зарегистрировать карту водителя") },
+                    selected = false,
+                    onClick = { scope.launch { drawerState.close() } }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Открыть смену") },
+                    selected = false,
+                    onClick = { scope.launch { drawerState.close() } }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Закрыть смену") },
+                    selected = false,
+                    onClick = { scope.launch { drawerState.close() } }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Открыть рейс") },
+                    selected = false,
+                    onClick = { scope.launch { drawerState.close() } }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Закрыть рейс") },
+                    selected = false,
+                    onClick = { scope.launch { drawerState.close() } }
                 )
             }
         }

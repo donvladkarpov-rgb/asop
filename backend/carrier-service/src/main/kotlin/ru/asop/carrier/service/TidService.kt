@@ -19,11 +19,11 @@ class TidService(
     private val tidRepository: TidRepository
 ) {
 
-    fun list(carrierId: UUID?): Flux<TidResponse> {
-        val entities = if (carrierId != null) {
-            tidRepository.findByCarrierId(carrierId)
-        } else {
-            tidRepository.findAll()
+    fun list(carrierId: UUID?, regionId: UUID?): Flux<TidResponse> {
+        val entities = when {
+            carrierId != null -> tidRepository.findByCarrierId(carrierId)
+            regionId != null -> tidRepository.findByRegionId(regionId)
+            else -> tidRepository.findAll()
         }
         return entities.map { it.toResponse() }
     }

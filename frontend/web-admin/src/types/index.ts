@@ -10,12 +10,14 @@ export interface User {
 
 export interface Terminal {
   id: string;
-  serialNumber: string;
-  model: string;
-  status: 'active' | 'inactive' | 'blocked';
-  location?: string;
-  lastSeenAt?: string;
-  certificateId?: string;
+  terminalSerial: string;
+  terminalNumber?: string;
+  terminalModel?: string;
+  carrierId?: string;
+  timezone?: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Card {

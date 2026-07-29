@@ -21,7 +21,10 @@ import java.util.UUID
 interface TidApi {
 
     @GetMapping
-    fun listTids(@RequestParam(required = false) carrierId: UUID?): Flux<TidResponse>
+    fun listTids(
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false) regionId: UUID?
+    ): Flux<TidResponse>
 
     @GetMapping("/{id}")
     fun getTid(@PathVariable id: UUID): Mono<ResponseEntity<TidResponse>>

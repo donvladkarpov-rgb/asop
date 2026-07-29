@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import ru.asop.terminal.cert.MtlsManager
@@ -58,6 +59,8 @@ class TerminalViewModel @Inject constructor(
     val carriers: StateFlow<List<CarrierResponse>> = _carriers.asStateFlow()
 
     fun isCertificateReady(): Boolean = mtlsManager.hasCertificate()
+
+    suspend fun getStoredTerminalId(): String? = syncPreferences.terminalId.first()
 
     fun autoProvision() {
         viewModelScope.launch {

@@ -4,6 +4,9 @@ import type { Tid } from '../types/reference';
 export const getTids = (carrierId?: string) =>
   apiClient.get<Tid[]>('/tids', carrierId ? { params: { carrierId } } : undefined).then((r) => r.data);
 
+export const getTidsByRegion = (regionId: string) =>
+  apiClient.get<Tid[]>('/tids', { params: { regionId } }).then((r) => r.data);
+
 export const getTid = (id: string) =>
   apiClient.get<Tid>(`/tids/${id}`).then((r) => r.data);
 

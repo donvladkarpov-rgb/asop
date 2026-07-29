@@ -24,9 +24,6 @@ class SecurityConfig {
                     .pathMatchers("/api/v1/terminals/**").permitAll()
                     .anyExchange().authenticated()
             }
-            .oauth2ResourceServer { oauth2 ->
-                oauth2.jwt { }
-            }
             .build()
     }
 }

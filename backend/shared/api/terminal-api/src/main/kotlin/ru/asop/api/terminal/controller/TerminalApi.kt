@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.terminal.dto.request.TerminalCarrierAssignRequest
 import ru.asop.api.terminal.dto.request.TerminalRegisterRequest
@@ -19,6 +21,12 @@ import java.util.UUID
 
 @RequestMapping("/api/v1/terminals")
 interface TerminalApi {
+
+    @GetMapping
+    fun listTerminals(
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false) regionId: UUID?
+    ): Flux<TerminalResponse>
 
     @PostMapping("/register")
     fun registerTerminal(

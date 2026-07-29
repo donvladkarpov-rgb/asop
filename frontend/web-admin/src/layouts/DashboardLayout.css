@@ -126,3 +126,49 @@
   background: #f5f5f9;
   overflow-y: auto;
 }
+
+.filter-sidebar {
+  width: 260px;
+  background: #fff;
+  border-left: 1px solid #e0e0ea;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.filter-sidebar-header {
+  padding: 20px;
+  border-bottom: 1px solid #e8e8f0;
+}
+
+.filter-sidebar-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
+.filter-sidebar-body {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.filter-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #333;
+}
+
+.filter-label select {
+  padding: 8px 10px;
+  border: 1px solid #d0d0dd;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+}

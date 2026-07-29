@@ -17,8 +17,8 @@ class TidController(
     private val tidService: TidService
 ) : TidApi {
 
-    override fun listTids(carrierId: UUID?): Flux<TidResponse> =
-        tidService.list(carrierId)
+    override fun listTids(carrierId: UUID?, regionId: UUID?): Flux<TidResponse> =
+        tidService.list(carrierId, regionId)
 
     override fun getTid(id: UUID): Mono<ResponseEntity<TidResponse>> =
         tidService.getById(id)

@@ -103,7 +103,7 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <CollapsibleSection label="Пользователи и Безопасность" defaultOpen={true}>
+      <CollapsibleSection label="Пользователи и Безопасность">
         <nav className="sidebar-nav">
           {securityItems.map((item) => (
             <NavLink
@@ -119,7 +119,7 @@ export function Sidebar() {
           ))}
         </nav>
       </CollapsibleSection>
-      <CollapsibleSection label="Контрагенты" defaultOpen={true}>
+      <CollapsibleSection label="Контрагенты">
         <nav className="sidebar-nav">
           {contractorItems.map((item) => (
             <NavLink
@@ -167,7 +167,7 @@ export function Sidebar() {
           ))}
         </nav>
       </CollapsibleSection>
-      <CollapsibleSection label="Транспорт" defaultOpen={true}>
+      <CollapsibleSection label="Транспорт">
         <nav className="sidebar-nav">
           {transportItems.map((item) => (
             <NavLink
@@ -183,7 +183,7 @@ export function Sidebar() {
           ))}
         </nav>
       </CollapsibleSection>
-      <CollapsibleSection label="Маршруты и Пути" defaultOpen={true}>
+      <CollapsibleSection label="Маршруты и Пути">
         <nav className="sidebar-nav">
           {routeItems.map((item) => (
             <NavLink

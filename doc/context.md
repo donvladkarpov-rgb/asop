@@ -218,10 +218,19 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - Пути: `/api/v1/terminals/**`, `/api/v1/sync/**`
 - Principal = `CN` из X.509 сертификата
 - Использует `X509PrincipalExtractor` из `org.springframework.security.web.authentication.preauth.x509` (синхронный, возвращает `Any`)
+- Исключение: `POST /api/v1/terminals/cert-sign` → `permitAll` (chicken-and-egg: mTLS ещё нет в момент первой регистрации).
+- **`GET /api/v1/terminals` и `GET /api/v1/terminals/{id}` — `authenticated()` (mTLS)**, НЕ permitAll. Анонимный доступ к списку терминалов запрещён (device-id, leakage carrier↔terminal недопустим). Терминал читает только свой terminal по id через mTLS; web-admin — список через JWT.
 
 **Chain 2** (`@Order(2)`): JWT (Keycloak) для всего остального
 - JWKS кэшируется локально, обновляется каждые 60 сек
 - Нет сетевых вызовов к Keycloak на каждый запрос
+- `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (public справочники, нужны терминалу под mTLS).
+
+### terminal-service SecurityConfig
+
+terminal-service — `permitAll` для `/api/v1/terminals/**`, **БЕЗ `.oauth2ResourceServer { oauth2.jwt {} }`** (ранее leftover — удалён в коммите review-fix). Сервис внутри Docker доверяет gateway; JWT-валидация не выполняется, terminal-service не имеет ключей/ключей JWKS.
+
+defense-in-depth через gateway: терминалы достаются из внешнего мира только через gateway (chain-1 mTLS / chain-2 JWT). Терминал(client) → gateway (mTLS principal X.509 CN=serial) → terminal-service (trust-gateway, прокси по TLS).
 
 ### JWT issuer (важно!)
 
@@ -505,8 +514,9 @@ Liquibase запускается **отдельным Docker-контейнер�
 
 **Drawer-меню (`ModalNavigationDrawer`, hamburger-иконка в TopAppBar):** экраны терминала доступны перманентно через drawer (а не только через линейный provisioning → registration → main flow):
 - **"Сертификат"** — диалог подтверждения перевыпуска → `MtlsManager.resetKeyAndCert()` (чистит alias AndroidKeyStore + SharedPreferences) → `CertificateService.provision(androidId)` (новый cert-saga).
-- **"Регистрация"** — переход на RegistrationScreen (см. пункт 2).
+- **"Регистрация"** — **доступна всегда** (даже после успешной регистрации). Если `terminalId == null` — навигация на `provisioning` (cert-sign, далее автоматом на `registration`); если `terminalId != null` — сразу на `registration` (update существующего).
 - **"Привязать перевозчика"** — переход на `AssignCarrierScreen`: dropdown регион → dropdown перевозчик (фильтр по `regionId`) → кнопка "Сохранить" → `PUT /api/v1/terminals/{id}/carrier` с `TerminalCarrierAssignRequest { carrierId }`. Текущий перевозчик пред-выбран, отображается на экране. Требует предварительно сохранённый `terminalId` в DataStore.
+- **Stub-пункты** (placeholder, TODO, `onClick` только закрывает drawer): "Загрузить справочники", "Зарегистрировать карту водителя", "Открыть смену", "Закрыть смену", "Открыть рейс", "Закрыть рейс". Оставлены как «заглушки» до реализации.
 
 **Navhost skip-логика (`TerminalNavHost.kt`):** при старте приложения, если `certificateReady && terminalId != null` → `loadTerminal(id)` и сразу экран `main`; если только `certificateReady` → экран `registration`. Смена `ANDROID_ID` (factory reset / смена signing-key) даёт новый serial → cert-sign saga через `findByTerminalSerial` создаст новый терминал → регистрация сохранит новый `terminalId`.
 

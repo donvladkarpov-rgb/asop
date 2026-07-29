@@ -1,14 +1,15 @@
 import apiClient from './client';
-import type { Terminal, PageResponse } from '../types';
+import type { Terminal } from '../types';
 
-export const getTerminals = (params?: Record<string, unknown>) =>
-  apiClient.get<PageResponse<Terminal>>('/terminals', { params }).then((r) => r.data);
+export const getTerminals = (carrierId?: string, regionId?: string) => {
+  const params: Record<string, string> = {};
+  if (carrierId) params.carrierId = carrierId;
+  if (regionId) params.regionId = regionId;
+  return apiClient.get<Terminal[]>('/terminals', { params }).then((r) => r.data);
+};
 
 export const getTerminal = (id: string) =>
   apiClient.get<Terminal>(`/terminals/${id}`).then((r) => r.data);
 
-export const registerTerminal = (data: Omit<Terminal, 'id' | 'lastSeenAt' | 'certificateId'>) =>
-  apiClient.post<Terminal>('/terminals/register', data).then((r) => r.data);
-
 export const blockTerminal = (id: string) =>
-  apiClient.post<Terminal>(`/terminals/${id}/block`).then((r) => r.data);
+  apiClient.post<Terminal>(`/terminals/${id}/status`, { newStatus: 'BLOCKED' }).then((r) => r.data);

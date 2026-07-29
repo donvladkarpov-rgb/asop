@@ -3,7 +3,6 @@ package ru.asop.gateway.controller
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders
 import org.springframework.http.ResponseEntity
-import org.springframework.security.core.Authentication
 import org.springframework.security.core.context.ReactiveSecurityContextHolder
 import org.springframework.security.oauth2.jwt.Jwt
 import org.springframework.web.bind.annotation.RequestMapping
@@ -14,6 +13,8 @@ import org.springframework.web.server.ServerWebExchange
 import reactor.core.publisher.Mono
 import ru.asop.gateway.config.ServiceRegistry
 import java.net.URI
+
+private val NO_IDENTITY = Pair("", "")
 
 @RestController
 @RequestMapping("/api/v1/{resource}/**")
@@ -52,7 +53,7 @@ class ProxyController(
                     if (ct != null) headers.set(HttpHeaders.CONTENT_TYPE, ct)
                     val auth = request.headers.getFirst(HttpHeaders.AUTHORIZATION)
                     if (auth != null) headers.set(HttpHeaders.AUTHORIZATION, auth)
-                    if (identity != null) {
+                    if (identity.first.isNotEmpty()) {
                         headers.set(identity.first, identity.second)
                     }
                 }
@@ -71,22 +72,25 @@ class ProxyController(
         }
     }
 
-    private fun extractIdentity(exchange: ServerWebExchange): Mono<Pair<String, String>?> {
-        return ReactiveSecurityContextHolder.getContext().flatMap { ctx ->
-            val auth = ctx.authentication
-            val identity: Pair<String, String>? = when {
-                auth?.principal is Jwt -> {
-                    val sub = (auth.principal as Jwt).subject
-                    if (sub != null) Pair("X-Keycloak-Id", sub) else null
+    private fun extractIdentity(exchange: ServerWebExchange): Mono<Pair<String, String>> {
+        return ReactiveSecurityContextHolder.getContext()
+            .flatMap { ctx ->
+                val auth = ctx.authentication
+                val identity = when {
+                    auth?.principal is Jwt -> {
+                        val sub = (auth.principal as Jwt).subject
+                        if (sub != null) Pair("X-Keycloak-Id", sub) else null
+                    }
+                    auth != null -> Pair("X-Terminal-Serial", auth.name)
+                    else -> null
                 }
-                auth != null -> Pair("X-Terminal-Serial", auth.name)
-                else -> null
+                if (identity != null) Mono.just(identity) else Mono.empty()
             }
-            Mono.justOrEmpty(identity)
-        }.onErrorResume {
-            log.warn("Failed to extract identity: {}", it.message)
-            Mono.empty()
-        }
+            .switchIfEmpty(Mono.just(NO_IDENTITY))
+            .onErrorResume {
+                log.warn("Failed to extract identity: {}", it.message)
+                Mono.just(NO_IDENTITY)
+            }
     }
 
     private fun extractResource(path: String): String? {

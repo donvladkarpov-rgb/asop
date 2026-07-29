@@ -190,11 +190,16 @@ XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TE
 - Пути: `/api/v1/terminals/**`, `/api/v1/sync/**`
 - Principal = `CN` из X.509 сертификата
 - `X509PrincipalExtractor` из `org.springframework.security.web.authentication.preauth.x509` (синхронный, возвращает `Any`)
-- **Исключение**: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала)
+- **Исключение**: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала). **GET/PUT к `/api/v1/terminals` и `/api/v1/terminals/{id}` — `authenticated()` (mTLS)**; анонимный доступ к списку терминалов/деталим запрещён (device-id leaks).
 
 **Chain 2** (`@Order(2)`): JWT (Keycloak) для всего остального
 - JWKS кэшируется локально, проверка каждые 60 сек
 - Нет сетевых вызовов к Keycloak на каждый запрос
+- `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (public справочники).
+
+### terminal-service SecurityConfig
+
+`permitAll` для `/api/v1/terminals/**`, **БЕЗ `.oauth2ResourceServer`** (ранее leftover — удалён). Сервис внутри Docker доверяет gateway по TLS. defense-in-depth — gateway mTLS chain-1 / JWT chain-2.
 
 ### Проблема JWT issuer
 

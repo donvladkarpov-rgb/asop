@@ -2,6 +2,7 @@ package ru.asop.terminal.controller
 
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.RestController
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.terminal.controller.TerminalApi
 import ru.asop.api.terminal.dto.request.TerminalCarrierAssignRequest
@@ -17,6 +18,9 @@ import java.util.UUID
 class TerminalController(
     private val terminalService: TerminalService
 ) : TerminalApi {
+
+    override fun listTerminals(carrierId: UUID?, regionId: UUID?): Flux<TerminalResponse> =
+        terminalService.list(carrierId, regionId)
 
     override fun registerTerminal(
         request: TerminalRegisterRequest,

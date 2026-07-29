@@ -140,8 +140,9 @@ API → asop-common dependency via `api(platform(...))` pattern.
 
 ### Gateway dual auth
 
-- **Chain 1** (`@Order(1)`): mTLS for `/api/v1/terminals/**`, `/api/v1/sync/**`. Principal = `CN` from X.509 cert. Исключение: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала).
-- **Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else. JWKS cached locally via кастомный `ReactiveJwtDecoder` (см. `JwtDecoderConfig`). `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (терминал запрашивает справочники через mTLS-соединение, gateway не валидирует JWT для публичных GET-справочников).
+- **Chain 1** (`@Order(1)`): mTLS for `/api/v1/terminals/**`, `/api/v1/sync/**`. Principal = `CN` from X.509 cert. Исключение: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала). **GET/PUT/POST к `/api/v1/terminals` и `/api/v1/terminals/{id}` — `authenticated()` (mTLS)**: любой анонимный доступ к списку терминалов/деталим/WRITE запрещён (устройство device-id' leaks). Только cert-sign (первичная подпись ключа) — open HTTPS.
+- **Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else. JWKS cached locally via кастомный `ReactiveJwtDecoder` (см. `JwtDecoderConfig`). `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (терминал запрашивает справочники через mTLS-соединение, gateway не валидирует JWT для публичных GET-справочников). **`GET /api/v1/terminals/**` — НЕ permitAll** (терминалы — приватный справочник, device-id, leakage недопустим; web-admin читает через JWT, терминал через mTLS по своему id).
+- **terminal-service SecurityConfig**: `permitAll` для `/api/v1/terminals/**`, БЕЗ `.oauth2ResourceServer` (terminal-service внутри Docker доверяет gateway, JWT не валидирует). defense-in-depth через gateway mTLS/JWT — терминалы достаются из внешнего мира только через gateway (chain-1 mTLS / chain-2 JWT).
 - `X509PrincipalExtractor` is from `org.springframework.security.web.authentication.preauth.x509`, not `web.server.authentication`. It's a synchronous interface (returns `Any`, not `Mono<Any>`).
 
 ### Frontend
@@ -151,7 +152,11 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - В dev mode (`npm run dev`) — Vite dev server на `http://localhost:5173`, проксирует `/api` → `http://localhost:8080`.
   - **`frontend/android-terminal/`**: Android (Kotlin + Jetpack Compose + Hilt + Room + WorkManager) — приложение для терминала. mTLS auth через X.509 сертификат crypto-service.
   
-  **Навигация (drawer):** `ModalNavigationDrawer` с пунктами: "Сертификат" (подтверждение перевыпуска), "Регистрация", "Привязать перевозчика". Открывается через hamburger-иконку в TopAppBar.
+  **Навигация (drawer):** `ModalNavigationDrawer` с пунктами, открывается через hamburger-иконку в TopAppBar:
+  - "Сертификат" — диалог подтверждения перевыпуска → `MtlsManager.resetKeyAndCert()` + `CertificateService.provision(androidId)`.
+  - "Регистрация" — **доступна всегда** (даже после успешной регистрации). Если `terminalId == null` — навигация на `provisioning` (cert-sign, далее автоматом на `registration`); если `terminalId != null` — сразу на `registration` (update существующего).
+  - "Привязать перевозчика" — `AssignCarrierScreen` через `PUT /api/v1/terminals/{id}/carrier`.
+  - Stub-пункты (placeholder, TODO, `onClick` только закрывает drawer): "Загрузить справочники", "Зарегистрировать карту водителя", "Открыть смену", "Закрыть смену", "Открыть рейс", "Закрыть рейс". Оставлены как «заглушки» до реализации.
   
   **Экран регистрации (обновлён):** После cert-sign пользователь выбирает регион (dropdown из `GET /api/v1/regions`), перевозчика (dropdown из `GET /api/v1/carriers?regionId=...`), часовой пояс (device default), модель (опц.), инвентарный номер (обяз.). Все поля передаются в `TerminalRegisterRequest.timezone`/`carrierId`.
   

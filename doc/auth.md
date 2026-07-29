@@ -138,6 +138,7 @@ private fun extractIdentity(exchange: ServerWebExchange): Mono<String> =
 
 #### Backend сервисы
 - User-service: `SecurityConfig` с `permitAll`, без JWT
+- terminal-service: `permitAll` для `/api/v1/terminals/**`, БЕЗ `.oauth2ResourceServer` (ранее leftover — удалён). Сервис внутри Docker доверяет gateway.
 - Другие сервисы: либо `permitAll`, либо кастомный `JwtDecoderConfig` (без проверки issuer)
 
 ### JWT issuer workaround (Docker)

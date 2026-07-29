@@ -2,6 +2,7 @@ package ru.asop.terminal.service
 
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.stereotype.Service
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.terminal.dto.request.TerminalRegisterRequest
 import ru.asop.api.terminal.dto.request.TerminalStatusChangeRequest
@@ -18,6 +19,15 @@ class TerminalService(
     private val terminalRepository: TerminalRepository,
     private val r2dbcTemplate: R2dbcEntityTemplate
 ) {
+
+    fun list(carrierId: UUID?, regionId: UUID?): Flux<TerminalResponse> {
+        val entities = when {
+            carrierId != null -> terminalRepository.findByCarrierId(carrierId)
+            regionId != null -> terminalRepository.findByRegionId(regionId)
+            else -> terminalRepository.findAll()
+        }
+        return entities.map { it.toResponse() }
+    }
 
     fun register(request: TerminalRegisterRequest): Mono<TerminalRegisterResponse> {
         val now = Instant.now()
