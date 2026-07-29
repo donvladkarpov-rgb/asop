@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUserCarriers, createUserCarrier, deleteUserCarrier } from '../../api/routes';
+import { getAdminUsers } from '../../api/routes';
+import { getCarriers } from '../../api/reference';
 
 export function UserCarriersPage() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({ queryKey: ['user-carriers'], queryFn: () => getUserCarriers() });
+  const { data: users } = useQuery({ queryKey: ['admin-users'], queryFn: getAdminUsers });
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
   const [formError, setFormError] = useState<string | null>(null);
   const [userId, setUserId] = useState('');
   const [carrierId, setCarrierId] = useState('');
@@ -19,6 +23,9 @@ export function UserCarriersPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['user-carriers'] }),
   });
 
+  const userName = (id: string) => users?.find((u) => u.id === id);
+  const carrierName = (id: string) => carriers?.find((c) => c.id === id)?.carrierName || id;
+
   if (isLoading) return <div>Загрузка...</div>;
   if (error) return <div>Ошибка: {(error as Error).message}</div>;
 
@@ -30,11 +37,25 @@ export function UserCarriersPage() {
 
       <div className="form-card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-          <label>User ID <input value={userId} onChange={(e) => setUserId(e.target.value)} /></label>
-          <label>Carrier ID <input value={carrierId} onChange={(e) => setCarrierId(e.target.value)} /></label>
+          <label>Пользователь
+            <select value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">— выберите —</option>
+              {users?.map((u) => (
+                <option key={u.id} value={u.id}>{u.lastNameInitial}. {u.firstName}</option>
+              ))}
+            </select>
+          </label>
+          <label>Перевозчик
+            <select value={carrierId} onChange={(e) => setCarrierId(e.target.value)}>
+              <option value="">— выберите —</option>
+              {carriers?.map((c) => (
+                <option key={c.id} value={c.id}>{c.carrierName}</option>
+              ))}
+            </select>
+          </label>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button className="btn-primary" onClick={() => createMut.mutate({ userId, carrierId })}>Назначить</button>
+          <button className="btn-primary" onClick={() => createMut.mutate({ userId, carrierId })} disabled={!userId || !carrierId}>Назначить</button>
         </div>
         {formError && <div style={{ color: 'red', marginTop: 8 }}>{formError}</div>}
       </div>
@@ -42,25 +63,24 @@ export function UserCarriersPage() {
       <table className="data-table">
         <thead>
           <tr>
-            <th>User ID</th>
             <th>Пользователь</th>
-            <th>Carrier ID</th>
             <th>Перевозчик</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {data?.map((r) => (
-            <tr key={`${r.userId}-${r.carrierId}`}>
-              <td style={{ fontSize: '0.85em', opacity: 0.7 }}>{r.userId}</td>
-              <td>{r.lastNameInitial ? `${r.lastNameInitial}. ${r.firstName}` : ''}</td>
-              <td style={{ fontSize: '0.85em', opacity: 0.7 }}>{r.carrierId}</td>
-              <td>{r.carrierName || ''}</td>
-              <td style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-danger btn-sm" onClick={() => { if (confirm('Удалить?')) deleteMut.mutate({ userId: r.userId, carrierId: r.carrierId }); }}>✕</button>
-              </td>
-            </tr>
-          ))}
+          {data?.map((r) => {
+            const u = userName(r.userId);
+            return (
+              <tr key={`${r.userId}-${r.carrierId}`}>
+                <td>{u ? `${u.lastNameInitial}. ${u.firstName}` : r.userId}</td>
+                <td>{carrierName(r.carrierId)}</td>
+                <td>
+                  <button className="btn-danger btn-sm" onClick={() => { if (confirm('Удалить?')) deleteMut.mutate({ userId: r.userId, carrierId: r.carrierId }); }}>✕</button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

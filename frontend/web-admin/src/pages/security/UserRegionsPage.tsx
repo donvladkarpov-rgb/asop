@@ -1,10 +1,14 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUserRegions, createUserRegion, deleteUserRegion } from '../../api/routes';
+import { getAdminUsers } from '../../api/routes';
+import { getRegions } from '../../api/reference';
 
 export function UserRegionsPage() {
   const qc = useQueryClient();
   const { data, isLoading, error } = useQuery({ queryKey: ['user-regions'], queryFn: () => getUserRegions() });
+  const { data: users } = useQuery({ queryKey: ['admin-users'], queryFn: getAdminUsers });
+  const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
   const [formError, setFormError] = useState<string | null>(null);
   const [userId, setUserId] = useState('');
   const [regionId, setRegionId] = useState('');
@@ -19,6 +23,9 @@ export function UserRegionsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['user-regions'] }),
   });
 
+  const userName = (id: string) => users?.find((u) => u.id === id);
+  const regionName = (id: string) => regions?.find((r) => r.id === id)?.municipalDivision || id;
+
   if (isLoading) return <div>Загрузка...</div>;
   if (error) return <div>Ошибка: {(error as Error).message}</div>;
 
@@ -30,11 +37,25 @@ export function UserRegionsPage() {
 
       <div className="form-card" style={{ marginBottom: 20 }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-          <label>User ID <input value={userId} onChange={(e) => setUserId(e.target.value)} /></label>
-          <label>Region ID <input value={regionId} onChange={(e) => setRegionId(e.target.value)} /></label>
+          <label>Пользователь
+            <select value={userId} onChange={(e) => setUserId(e.target.value)}>
+              <option value="">— выберите —</option>
+              {users?.map((u) => (
+                <option key={u.id} value={u.id}>{u.lastNameInitial}. {u.firstName}</option>
+              ))}
+            </select>
+          </label>
+          <label>Регион
+            <select value={regionId} onChange={(e) => setRegionId(e.target.value)}>
+              <option value="">— выберите —</option>
+              {regions?.map((r) => (
+                <option key={r.id} value={r.id}>{r.municipalDivision}</option>
+              ))}
+            </select>
+          </label>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-          <button className="btn-primary" onClick={() => createMut.mutate({ userId, regionId })}>Назначить</button>
+          <button className="btn-primary" onClick={() => createMut.mutate({ userId, regionId })} disabled={!userId || !regionId}>Назначить</button>
         </div>
         {formError && <div style={{ color: 'red', marginTop: 8 }}>{formError}</div>}
       </div>
@@ -42,25 +63,24 @@ export function UserRegionsPage() {
       <table className="data-table">
         <thead>
           <tr>
-            <th>User ID</th>
             <th>Пользователь</th>
-            <th>Region ID</th>
             <th>Регион</th>
             <th />
           </tr>
         </thead>
         <tbody>
-          {data?.map((r) => (
-            <tr key={`${r.userId}-${r.regionId}`}>
-              <td style={{ fontSize: '0.85em', opacity: 0.7 }}>{r.userId}</td>
-              <td>{r.lastNameInitial ? `${r.lastNameInitial}. ${r.firstName}` : ''}</td>
-              <td style={{ fontSize: '0.85em', opacity: 0.7 }}>{r.regionId}</td>
-              <td>{r.regionName || ''}</td>
-              <td style={{ display: 'flex', gap: 8 }}>
-                <button className="btn-danger btn-sm" onClick={() => { if (confirm('Удалить?')) deleteMut.mutate({ userId: r.userId, regionId: r.regionId }); }}>✕</button>
-              </td>
-            </tr>
-          ))}
+          {data?.map((r) => {
+            const u = userName(r.userId);
+            return (
+              <tr key={`${r.userId}-${r.regionId}`}>
+                <td>{u ? `${u.lastNameInitial}. ${u.firstName}` : r.userId}</td>
+                <td>{regionName(r.regionId)}</td>
+                <td>
+                  <button className="btn-danger btn-sm" onClick={() => { if (confirm('Удалить?')) deleteMut.mutate({ userId: r.userId, regionId: r.regionId }); }}>✕</button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
