@@ -38,6 +38,7 @@ import kotlinx.coroutines.launch
 import ru.asop.terminal.ui.screen.AssignCarrierScreen
 import ru.asop.terminal.ui.screen.MainScreen
 import ru.asop.terminal.ui.screen.ProvisioningScreen
+import ru.asop.terminal.ui.screen.ReferenceSyncViewModel
 import ru.asop.terminal.ui.screen.RegistrationScreen
 import ru.asop.terminal.ui.screen.TerminalViewModel
 
@@ -52,7 +53,12 @@ fun TerminalNavHost() {
     val terminalId by terminalViewModel.terminalId.collectAsState()
     val terminalInfo by terminalViewModel.terminalInfo.collectAsState()
 
+    val referenceSyncViewModel: ReferenceSyncViewModel = hiltViewModel()
+    val pendingDeltaCount by referenceSyncViewModel.pendingDeltaCount.collectAsState()
+    val activeReferenceCount by referenceSyncViewModel.activeReferenceCount.collectAsState()
+
     var showCertDialog by remember { mutableStateOf(false) }
+    var showReferencesDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val tid = terminalViewModel.getStoredTerminalId()
@@ -88,6 +94,35 @@ fun TerminalNavHost() {
             dismissButton = {
                 TextButton(onClick = { showCertDialog = false }) {
                     Text("Отмена")
+                }
+            }
+        )
+    }
+
+    if (showReferencesDialog) {
+        AlertDialog(
+            onDismissRequest = { showReferencesDialog = false },
+            title = { Text("Справочники") },
+            text = {
+                Text(
+                    "Строк в локальных справочниках: $activeReferenceCount\n" +
+                        "Активных дельта-заданий: $pendingDeltaCount"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showReferencesDialog = false
+                    referenceSyncViewModel.requestFullSync()
+                }) {
+                    Text("Полная выкачка")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showReferencesDialog = false
+                    referenceSyncViewModel.requestDeltaSync()
+                }) {
+                    Text("Дельта сейчас")
                 }
             }
         )
@@ -145,7 +180,10 @@ fun TerminalNavHost() {
                 NavigationDrawerItem(
                     label = { Text("Загрузить справочники") },
                     selected = false,
-                    onClick = { scope.launch { drawerState.close() } }
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        showReferencesDialog = true
+                    }
                 )
                 NavigationDrawerItem(
                     label = { Text("Зарегистрировать карту водителя") },

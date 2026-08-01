@@ -66,7 +66,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 
 ### Gateway files
 
-- `config/ServiceRegistry.kt` — маппинг `resource` → `https://service:port/api/v1/{resource}`
+- `config/ServiceRegistry.kt` — маппинг `resource` → `https://service:port/api/v1/{resource}`. Включает все `/delta` ресурсы: organizer-territories → admin-service, card-mifares/card-banks/card-tariffs/blacklists/user-benefits/tariff-rates → card-service.
 - `config/WebClientConfig.kt` — `WebClient` bean для proxy (SSL truststore из `/tmp/certs/truststore.p12`, hostname verification отключён)
 - `controller/ProxyController.kt` — catch-all `/api/v1/{resource}/**` для GET + необработанных запросов
 - `controller/EventController.kt` — `GET /api/v1/events/{eventId}`
@@ -74,7 +74,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - `service/CertCommandService.kt` — producer `CertSignRequested` в `asop.terminal.cert.commands`
 - `kafka/CertEventConsumer.kt` — consumer `asop.terminal.cert.events` → `EventService.complete/fail`
 - `kafka/CommandEventConsumer.kt` — consumer всех 7 domain event topics → `EventService.complete/fail`
-- `service/EventService.kt` — Redis-backed event store (`ReactiveStringRedisTemplate`, key `asop:event:{eventId}`, TTL 24 ч, реактивные `Mono<Void>` для createPending/complete/fail)
+- `service/EventService.kt` — Redis-backed event store (`ReactiveStringRedisTemplate`, key `asop:event:{eventId}`, TTL 24 ч, реактивные `Mono<Void>` для createPending/complete/fail). **Без `@Service`**: bean объявляется через `EventServiceConfig` (`@Bean`) в gateway-service и orchestrator-service — единственных сервисах с `spring-boot-starter-data-redis-reactive`. Иначе любой сервис, сканирующий `ru.asop`, падал бы при старте (`No qualifying bean of type ReactiveStringRedisTemplate`).
 - `model/EventStatus.kt` — `EventState` (PENDING, COMPLETED, FAILED) + `EventStatus` (с `resultData: String?`)
 
 **Terminal async command controllers** (все под mTLS `/api/v1/sync/**`):
@@ -85,6 +85,9 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - `controller/FiscalCommandController.kt` — request fiscal receipt → Kafka
 - `controller/AuditCommandController.kt` — create audit task → Kafka
 - `controller/GpsCommandController.kt` — report GPS position → Kafka
+- `controller/DeltaReferenceController.kt` — `POST /api/v1/sync/references/delta` + `/full` (async), `GET .../{eventId}/meta` + `.../chunks/{n}` + `.../download` (sync, Redis + MinIO-прокси)
+- `service/DeltaCommandService.kt` — producer `DeltaSyncCommand`/`FullSyncCommand` в `asop.delta.commands`/`asop.delta.full.commands`
+- `service/TerminalResolver.kt` — terminalId → carrierId (terminal-service) → regionId (carrier-service)
 
 **Terminal command services** (gateway → Kafka producers):
 - `service/SessionCommandService.kt` — SessionOpenedEvent/SessionClosedEvent → `asop.session.commands`
@@ -137,12 +140,14 @@ API → asop-common dependency via `api(platform(...))` pattern.
 | `fiscal-service` | 8090 | Fiscalization (OFD) |
 | `admin-service` | 8091 | Справочники (Regions, Territories, Organizers) |
 | `route-service` | 8092 | Routes, fare zones, transport stops, vehicles, paths, schedule (R2DBC) |
+| `orchestrator-service` | 8094 | Delta/full-синхронизация справочников: Kafka consumer `asop.delta.commands`/`asop.delta.full.commands`, опрос мастер-сервисов `/delta`, Protobuf-чанки 50 КБ в Redis, ZIP в MinIO, purge-job (soft-delete старше 6 мес) |
 
 ### Gateway dual auth
 
 - **Chain 1** (`@Order(1)`): mTLS for `/api/v1/terminals/**`, `/api/v1/sync/**`. Principal = `CN` from X.509 cert. Исключение: `POST /api/v1/terminals/cert-sign` → `permitAll` (open HTTPS, без JWT и mTLS — chicken-and-egg при первой регистрации терминала). **GET/PUT/POST к `/api/v1/terminals` и `/api/v1/terminals/{id}` — `authenticated()` (mTLS)**: любой анонимный доступ к списку терминалов/деталим/WRITE запрещён (устройство device-id' leaks). Только cert-sign (первичная подпись ключа) — open HTTPS.
 - **Chain 2** (`@Order(2)`): JWT (Keycloak) for everything else. JWKS cached locally via кастомный `ReactiveJwtDecoder` (см. `JwtDecoderConfig`). `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (терминал запрашивает справочники через mTLS-соединение, gateway не валидирует JWT для публичных GET-справочников). **`GET /api/v1/terminals/**` — НЕ permitAll** (терминалы — приватный справочник, device-id, leakage недопустим; web-admin читает через JWT, терминал через mTLS по своему id).
 - **terminal-service SecurityConfig**: `permitAll` для `/api/v1/terminals/**`, БЕЗ `.oauth2ResourceServer` (terminal-service внутри Docker доверяет gateway, JWT не валидирует). defense-in-depth через gateway mTLS/JWT — терминалы достаются из внешнего мира только через gateway (chain-1 mTLS / chain-2 JWT).
+- **card-service SecurityConfig**: `permitAll` (внутреннее доверие как у admin/route/user/carrier). Без этого orchestrator получал бы 401 при прямом опросе `/delta` (у него нет JWT). Внешний доступ — только через gateway (chain-2 JWT).
 - `X509PrincipalExtractor` is from `org.springframework.security.web.authentication.preauth.x509`, not `web.server.authentication`. It's a synchronous interface (returns `Any`, not `Mono<Any>`).
 
 ### Frontend
@@ -156,7 +161,8 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - "Сертификат" — диалог подтверждения перевыпуска → `MtlsManager.resetKeyAndCert()` + `CertificateService.provision(androidId)`.
   - "Регистрация" — **доступна всегда** (даже после успешной регистрации). Если `terminalId == null` — навигация на `provisioning` (cert-sign, далее автоматом на `registration`); если `terminalId != null` — сразу на `registration` (update существующего).
   - "Привязать перевозчика" — `AssignCarrierScreen` через `PUT /api/v1/terminals/{id}/carrier`.
-  - Stub-пункты (placeholder, TODO, `onClick` только закрывает drawer): "Загрузить справочники", "Зарегистрировать карту водителя", "Открыть смену", "Закрыть смену", "Открыть рейс", "Закрыть рейс". Оставлены как «заглушки» до реализации.
+  - "Загрузить справочники" — `AlertDialog` с числом строк в `reference_rows` и активных дельта-заданий; кнопки "Дельта сейчас" (`WorkScheduler.requestDeltaSync`) и "Полная выкачка" (`enqueueFullDump`).
+  - Stub-пункты (placeholder, TODO, `onClick` только закрывает drawer): "Зарегистрировать карту водителя", "Открыть смену", "Закрыть смену", "Открыть рейс", "Закрыть рейс". Оставлены как «заглушки» до реализации.
   
   **Экран регистрации (обновлён):** После cert-sign пользователь выбирает регион (dropdown из `GET /api/v1/regions`), перевозчика (dropdown из `GET /api/v1/carriers?regionId=...`), часовой пояс (device default), модель (опц.), инвентарный номер (обяз.). Все поля передаются в `TerminalRegisterRequest.timezone`/`carrierId`.
   
@@ -165,12 +171,21 @@ API → asop-common dependency via `api(platform(...))` pattern.
   **Офлайн-буферизация:** Все write-команды (session open/close, transaction, card register/block, debt create/recover, fiscal receipt, audit task, GPS position) сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
 
   **Компоненты:**
-  - `AppDatabase` (Room): 3 сущности — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` + 3 DAOs
+  - `AppDatabase` (Room, version 3): 6 сущностей — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` (write-команды) + `SyncMetaEntity`, `DeltaSyncJobEntity`, `ReferenceRowEntity` (справочники)
+  - `ReferenceRowEntity` — **generic-таблица справочников** `reference_rows` (tableName, rowId, payloadJson, updatedAt, deletedAt), composite PK `(table_name, row_id)`. Вместо ~40 отдельных entities — одна таблица, JSON payload. Индексы: table_name, updated_at, deleted_at. `fallbackToDestructiveMigration()`.
+  - `SyncMetaEntity` — `sync_meta` (tableName PK, lastUpdatedAt, lastSyncAt) — lastUpdatedAt на терминале для дельта-запросов.
+  - `DeltaSyncJobEntity` — `delta_sync_jobs` (eventId PK, status PENDING/COMPLETED/FAILED, totalChunks, errorMessage, completedAt).
   - `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
   - `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
   - `GatewayApi` (Retrofit): terminal CRUD + reference data (regions/carriers) + `GET /api/v1/events/{eventId}`
   - `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
   - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
+  - `DeltaSyncWorker`: дельта-запрос справочников (1 час periodic, one-shot через `WorkScheduler.requestDeltaSync`) → `POST /api/v1/sync/references/delta` → `DeltaSyncJobEntity` PENDING
+  - `DeltaChunkPollWorker`: polling COMPLETED дельта-заданий (5 min periodic), скачивает чанки `GET /api/v1/sync/references/{eventId}/chunks/{n}` (application/x-protobuf), `ReferenceSyncStore.applyChunk` — атомарный накат в `reference_rows` + обновление `sync_meta` (MAX updated_at). JOB_TTL 24ч (просроченные удаляются).
+  - `FullDumpDownloadWorker`: полная выкачка (one-shot), поллит `GET /api/v1/events/{eventId}` (10с×60), качает ZIP по `s3Url` → `ZipInputStream` → `.pb` файлы → `applyFile`
+  - `ReferenceSyncStore`: парсинг protobuf (`ru.asop.proto.v1.*File`), `applyChunk(DeltaChunk)` + `applyFile(fileName, byte[])`, `db.withTransaction` + sync_meta. **Protobuf НЕ lite**: `JsonFormat.printer()` + descriptor reflection (`Message`/`Descriptors`) отсутствуют в `protobuf-javalite`, поэтому в `app/build.gradle.kts` оставлены `protobuf-java` + `protobuf-java-util` (не трогать).
+  - `WorkScheduler`: периодические DeltaSync 60м + DeltaChunkPoll 5м, one-shot delta, `enqueueFullDump`
+  - `ReferenceSyncViewModel`: pendingDeltaCount, activeReferenceCount, `requestDeltaSync`/`requestFullSync`
   - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
   - `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
   - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store. `terminalSerial` = `Settings.Secure.ANDROID_ID` (через `TerminalViewModel.getAndroidId(application)`). Смена ANDROID_ID = новый терминал.
@@ -186,6 +201,10 @@ API → asop-common dependency via `api(platform(...))` pattern.
             GPS → Room (PendingEvent PENDING)
   Online:   NetworkCallback → SyncWorker → POST /sync/** → 202 + eventId → SENDING
             EventPollWorker → GET /events/{eventId} → 200 COMPLETED / 422 FAILED
+
+  Delta:    DeltaSyncWorker (60m) → POST /sync/references/delta → DeltaSyncJob PENDING
+            DeltaChunkPollWorker (5m) → GET .../{eventId}/meta + /chunks/{n} → applyChunk → reference_rows + sync_meta
+  Full:     FullDumpDownloadWorker → GET /events/{eventId} (10с×60) → ZIP по s3Url → applyFile
   ```
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
@@ -195,7 +214,39 @@ API → asop-common dependency via `api(platform(...))` pattern.
 
 ### Kafka topic naming
 
-Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-common`. For example: `asop.carrier.commands`, `asop.session.events`, `asop.terminal.cert.commands` (gateway→crypto), `asop.terminal.cert.issued` (crypto→terminal), `asop.terminal.cert.events` (terminal→gateway).
+Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-common`. For example: `asop.carrier.commands`, `asop.session.events`, `asop.terminal.cert.commands` (gateway→crypto), `asop.terminal.cert.issued` (crypto→terminal), `asop.terminal.cert.events` (terminal→gateway). Delta sync: `asop.delta.commands` (gateway→orchestrator, `DeltaSyncCommand`), `asop.delta.full.commands` (gateway→orchestrator, `FullSyncCommand`).
+
+### Delta sync flow (incremental reference data)
+
+```
+Android → POST /api/v1/sync/references/delta (mTLS, body {terminalId, lastUpdatedAt}) → 202 + X-Event-Id
+       ↓
+Gateway DeltaReferenceController → TerminalResolver (terminalId → carrierId → regionId)
+                                 → DeltaCommandService → Kafka asop.delta.commands
+       ↓
+orchestrator-service DeltaCommandConsumer → опрашивает мастер-сервисы GET /api/v1/{resource}/delta
+                                          → Protobuf rows (asop-proto) → чанки 50 КБ в Redis asop:event:{id}:chunk:{n} + meta
+                                          → EventService.complete(eventId, {totalChunks,totalBytes})
+       ↓
+Android поллит GET /api/v1/events/{eventId} → 200 → GET /api/v1/sync/references/{eventId}/meta (totalChunks)
+       → GET /api/v1/sync/references/{eventId}/chunks/{n} (application/x-protobuf) → атомарный накат в Room
+
+Full: POST /api/v1/sync/references/full → asop.delta.full.commands → orchestrator собирает ZIP .pb файлов
+      → MinIO asop-sync bucket (anonymous download) → complete({s3Url}) → Android качает ZIP по s3Url.
+```
+
+**Master-service `/delta` endpoint'ы** (sync GET, поддерживают `updatedAtSince`, `includeDeleted`, `limit`, фильтры `carrierId`/`regionId`/`userIdsIn`):
+- admin-service (8091): regions, territories, organizers, organizer-territories, roles, card-types, tariff-types, session-types, event-types, transaction-types, transaction-results, services, benefits, benefit-steps (через `DeltaSupport` + `R2dbcEntityTemplate`)
+- carrier-service (8087): carriers, tids, contracts, cards-distributors (`DeltaSupport`)
+- route-service (8092): 13 ресурсов через `GenericRouteRepository.findDelta`
+- user-service (8082): admin-users (с UNION-фильтром по user-carriers/user-regions), user-roles, user-carriers, user-regions (camelCase алиасы через DatabaseClient)
+- card-service (8086): cards, card-mifares, card-banks, card-tariffs, blacklists, user-benefits, tariff-rates (фильтр `userIdsIn` через `@Query`; для mifares/banks/tariffs/blacklists — JOIN ASOP_CARDS на user_id; tariff-rates без user-фильтра)
+
+### MinIO
+
+- `minio` (9000 API / 9001 console) + `minio-init` (создаёт bucket `asop-sync`, `mc anonymous set download`) в docker-compose. Образы: `minio/minio:RELEASE.2024-10-13T13-34-11Z` (старый `2024-09-07` тег не существует) + `minio/mc:latest`. Healthcheck minio использует inline `mc alias set health ... && mc ready health`; minio-init ретраит коннект до 30 раз перед `mc mb`.
+- Оркестратор грузит `full_{eventId}.zip` в `asop-sync`; gateway `GET /api/v1/sync/references/{eventId}/download` проксирует стрим из MinIO по `resultData.s3Url` (терминал качает ZIP через gateway mTLS, наружу MinIO не выставляется)
+- Ключи: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` (defaults `http://minio:9000`, `asop`, `asop-secret`, `asop-sync`)
 
 ## Key conventions
 
@@ -249,6 +300,11 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 | POST | `/api/v1/sync/fiscal/receipts` | Запросить фискальный чек (mTLS terminal) | async |
 | POST | `/api/v1/sync/audit/tasks` | Создать задание КРС (mTLS terminal) | async |
 | POST | `/api/v1/sync/gps/positions` | Отправить GPS-координату (mTLS terminal) | async |
+| POST | `/api/v1/sync/references/delta` | Запросить дельта-синхронизацию справочников (mTLS terminal) | async |
+| POST | `/api/v1/sync/references/full` | Запросить полную выгрузку справочников (mTLS terminal) | async |
+| GET | `/api/v1/sync/references/{eventId}/meta` | Метаданные выгрузки (totalChunks/totalBytes/s3Url) из Redis (mTLS terminal) | sync |
+| GET | `/api/v1/sync/references/{eventId}/chunks/{n}` | Protobuf-чанк из Redis `asop:event:{eventId}:chunk:{n}` (mTLS terminal) | sync |
+| GET | `/api/v1/sync/references/{eventId}/download` | ZIP полной выгрузки (прокси MinIO по `s3Url`, `application/zip`) (mTLS terminal) | sync |
 
 **Terminal async flow:** все async endpoint'ы доступны только через mTLS (chain Order 1, `/api/v1/sync/**`). Gateway возвращает 202 + X-Event-Id. Android терминал поллит `GET /api/v1/events/{eventId}` до COMPLETED/FAILED.
 
@@ -325,6 +381,7 @@ Client                     Gateway                         Service
 
 - **Docker Compose** in `infrastructure/docker/docker-compose.yml` — все 11 сервисов + Postgres + Kafka + Keycloak + Liquibase на общей сети `asop-net`
 - **PostgreSQL 14** with PostGIS
+- **Postgres user SUPERUSER**: `infrastructure/docker/postgres-superuser.sql` монтируется в `/docker-entrypoint-initdb.d/01-superuser.sql` — поднимает `asop` до SUPERUSER при первом старте (пустой volume). Нужен PurgeJob orchestrator'а (`SET session_replication_role = 'replica'` для физического удаления soft-deleted строк). Проверка: `SELECT rolsuper FROM pg_roles WHERE rolname='asop';` → `t`. `ALTER USER ... WITH SUPERUSER` внутри v001-init.sql НЕ сработает (Liquibase подключается как asop).
 - **Keycloak 25.0.4** on port 8180, realm `asop`
 - **Bootstrap** (`BootstrapService` in `user-service`): on `ApplicationReadyEvent`, checks `ASOP_USERS` — if empty, creates Keycloak realm + roles + admin user (`admin@asop.local`, temporary password from `BOOTSTRAP_ADMIN_PASSWORD`). Also creates public OIDC client `asop-admin` via `ensureOidcClient()` (redirectUris: `http://localhost:3000/*`). Records in `ASOP_USERS` + `ASOP_USER_ROLES`. Env vars: `BOOTSTRAP_ENABLED`, `BOOTSTRAP_ADMIN_PASSWORD`, `KEYCLOAK_URL`, `KEYCLOAK_ADMIN_PASSWORD`
   - **Keycloak 25.0.4 bug**: realm creation with bare `{realm: "asop", enabled: true}` breaks Direct Access Grant. Must include `resetPasswordAllowed: true`, `directGrantFlow: "direct grant"`, `registrationAllowed: false`, etc.

@@ -15,5 +15,6 @@ data class BenefitEntity(
     val description: String? = null,
     val isActive: Boolean = true,
     val createdAt: Instant = Instant.now(),
-    val updatedAt: Instant = Instant.now()
+    val updatedAt: Instant = Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

@@ -47,4 +47,8 @@ object KafkaTopic {
     // GPS
     const val GPS_COMMANDS = "asop.gps.commands"
     const val GPS_EVENTS = "asop.gps.events"
+
+    // Delta sync (gateway → orchestrator)
+    const val DELTA_COMMANDS = "asop.delta.commands"
+    const val DELTA_FULL_COMMANDS = "asop.delta.full.commands"
 }

@@ -8,5 +8,8 @@ import java.util.UUID
 data class TransactionResultEntity(
     @Id
     val transactionResultId: UUID,
-    val transactionResultName: String
+    val transactionResultName: String,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

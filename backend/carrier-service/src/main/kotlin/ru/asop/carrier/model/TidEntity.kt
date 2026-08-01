@@ -16,5 +16,6 @@ data class TidEntity(
     val assignedAt: Instant? = null,
     val unassignedAt: Instant? = null,
     val createdAt: Instant = Instant.now(),
-    val updatedAt: Instant = Instant.now()
+    val updatedAt: Instant = Instant.now(),
+    val deletedAt: Instant? = null
 )

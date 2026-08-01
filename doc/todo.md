@@ -160,3 +160,19 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
   - Нужно разработать `recover-certs.sh` для перевыпуска всех сертификатов
   - Детали: `infrastructure/docker/todo.md`
 - [ ] **Скрипты тестовых данных** — `infrastructure/docker/todo.md`
+
+## 12. Delta Sync (инкрементальная дельта-синхронизация) ✅
+
+- [x] **Schema migration** — soft-delete: `UPDATED_AT NOT NULL DEFAULT NOW()` + `DELETED_AT TIMESTAMPTZ` + B-tree индексы на ~42 таблицах через DO-блоки в `v001-init.sql` (свежая миграция с нуля, старая удалена).
+- [x] **BEFORE DELETE триггеры** — generic `trg_fn_soft_delete()` (single-PK) + `trg_fn_soft_delete_2col()` (composite-PK) + `trg_fn_touch_updated()` для AUTO UPDATED_AT на UPDATE.
+- [x] **Postgres SUPERUSER** — `infrastructure/docker/postgres-superuser.sql` монтируется в `/docker-entrypoint-initdb.d/01-superuser.sql`; `asop` = SUPERUSER (нужен для `SET session_replication_role='replica'` в PurgeJob).
+- [x] **Новый модуль `:backend:shared:asop-proto`** — `schema.proto` с ~41 row messages + `DeltaChunk` + `XxxFile` messages. `protobuf-gradle-plugin:0.9.4` + `protobuf-java:3.25.5`.
+- [x] **Новый модуль `:backend:orchestrator-service`** (порт 8094) — Spring Boot 3.3.5 WebFlux, Kafka consumer `asop.delta.commands`/`asop.delta.full.commands`, WebClient к мастер-сервисам, Redis chunk storage, S3 SDK (MinIO), PurgeJob (hourly, `session_replication_role='replica'`), `EventServiceConfig` (shared `EventService` без `@Service`).
+- [x] **Master-service /delta endpoints** — все ~42 таблицы имеют `@GetMapping("/delta")` с query-параметрами `updatedAtSince`/`includeDeleted`/`limit`/`carrierId`/`regionId`/`userIdsIn`. admin-service (14), carrier-service (4), route-service (13), user-service (4 — UNION user_carriers ∪ user_regions + camelCase алиасы), card-service (7 — JOIN ASOP_CARDS для userIdsIn, tariff-rates без user-фильтра).
+- [x] **EventService → asop-common** — перенесён из gateway в `ru.asop.common.event.EventService/EventStatus/EventState` (без `@Service`, bean через `EventServiceConfig` в gateway + orchestrator).
+- [x] **Gateway DeltaReferenceController** — POST /sync/references/delta|full (async, mTLS), GET .../{eventId}/meta|chunks/{n}|download (sync, Redis + MinIO-прокси). DeltaCommandService producer. TerminalResolver (terminalId → carrierId → regionId).
+- [x] **Kafka topics** — `asop.delta.commands` + `asop.delta.full.commands` добавлены в `KafkaTopic.kt`. DTOs `DeltaSyncCommand`/`FullSyncCommand` в `asop-kafka-contracts`.
+- [x] **MinIO infrastructure** — `minio` (9000/9001) + `minio-init` (bucket `asop-sync`, anonymous download) в docker-compose. Образы: `minio/minio:RELEASE.2024-10-13T13-34-11Z` + `minio/mc:latest`.
+- [x] **Spring Boot compression** — `server.compression.enabled=true` на gateway (мими `application/x-protobuf`).
+- [x] **Android** — Protobuf (`protobuf-java` + `protobuf-javalite` NOT used — `JsonFormat.printer()` reflection нужен). Room version 3, 6 entities (PendingEvent, Session, Transaction + SyncMeta, DeltaSyncJob, ReferenceRow). `ReferenceSyncStore` (generic-накат через descriptor reflection). `DeltaSyncWorker` (60м periodic), `DeltaChunkPollWorker` (5м periodic), `FullDumpDownloadWorker` (one-shot). Drawer "Загрузить справочники" (AlertDialog with "Дельта сейчас" + "Полная выкачка").
+- [x] **Build verification** — `./gradlew build -x test` SUCCESS, `:app:assembleDebug` SUCCESS, `tsc -b` 0 ошибок. Docker: 20 контейнеров Up, `rolsuper=t`, soft-delete trigger works, orchestrator 42 tables, Kafka consumers assigned. seed-data.sql INSERTs OK.

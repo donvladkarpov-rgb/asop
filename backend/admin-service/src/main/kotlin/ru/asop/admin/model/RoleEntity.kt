@@ -8,5 +8,8 @@ import java.util.UUID
 data class RoleEntity(
     @Id
     val roleId: UUID,
-    val roleName: String
+    val roleName: String,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

@@ -1,19 +1,23 @@
-package ru.asop.gateway.service
+package ru.asop.common.event
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate
-import org.springframework.stereotype.Service
 import reactor.core.publisher.Mono
-import ru.asop.gateway.model.EventState
-import ru.asop.gateway.model.EventStatus
 import java.time.Duration
 import java.time.Instant
 import java.util.Optional
 import java.util.UUID
 
-@Service
+/**
+ * Redis-backed event store. Shared между gateway-service и orchestrator-service,
+ * так что формат ключа `asop:event:{eventId}` симметричен для обоих.
+ *
+ * НЕ аннотирован @Service: bean создаётся через [EventServiceConfig] с
+ * @ConditionalOnClass(ReactiveStringRedisTemplate) — сервисы без Redis
+ * (terminal/user/admin/...) не получают и не ломают этот компонент.
+ */
 class EventService(
     private val redis: ReactiveStringRedisTemplate,
     private val objectMapper: ObjectMapper

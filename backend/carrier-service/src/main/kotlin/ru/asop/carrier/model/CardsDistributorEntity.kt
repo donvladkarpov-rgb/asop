@@ -16,5 +16,6 @@ data class CardsDistributorEntity(
     val contactEmail: String? = null,
     val isActive: Boolean = true,
     val createdAt: Instant,
-    val updatedAt: Instant
+    val updatedAt: Instant,
+    val deletedAt: Instant? = null
 )

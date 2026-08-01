@@ -1,18 +1,38 @@
 package ru.asop.route.controller
 
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.route.controller.PathTransportStopApi
 import ru.asop.api.route.dto.request.PathTransportStopCreateRequest
 import ru.asop.api.route.dto.response.PathTransportStopResponse
+import ru.asop.route.repository.GenericRouteRepository
+import ru.asop.route.repository.RouteTableRegistry
 import ru.asop.route.service.PathTransportStopService
+import java.time.Instant
+import java.util.UUID
 
 @RestController
 class PathTransportStopController(
-    private val service: PathTransportStopService
+    private val service: PathTransportStopService,
+    private val repository: GenericRouteRepository
 ) : PathTransportStopApi {
+
+    @GetMapping("/delta")
+    fun listDelta(
+        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) includeDeleted: Boolean,
+        @RequestParam(required = false) regionId: UUID?,
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false, defaultValue = "10000") limit: Int
+    ): Flux<Map<String, Any?>> {
+        val info = RouteTableRegistry.resolve("path-transport-stops") ?: return Flux.empty()
+        return repository.findDelta(info, updatedAtSince, includeDeleted == true, regionId, carrierId, limit)
+    }
+
 
     override fun list(): Flux<PathTransportStopResponse> =
         service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->

@@ -8,5 +8,8 @@ import java.util.UUID
 data class OrganizerEntity(
     @Id
     val organizerId: UUID,
-    val organizerName: String
+    val organizerName: String,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

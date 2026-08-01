@@ -18,5 +18,8 @@ data class TerritoryEntity(
     val oktmoCode: String? = null,
     val oktmoBudgetCode: String? = null,
     val fiasId: String? = null,
-    val registryRecordId: String? = null
+    val registryRecordId: String? = null,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

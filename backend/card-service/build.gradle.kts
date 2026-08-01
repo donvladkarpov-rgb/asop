@@ -22,6 +22,7 @@ dependencies {
 
     // Kafka
     implementation(libs.spring.kafka)
+    implementation(libs.reactor.kafka)
 
     // Database
     implementation(libs.r2dbc.postgresql)

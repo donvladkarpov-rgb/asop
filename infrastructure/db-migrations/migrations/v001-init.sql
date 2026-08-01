@@ -1585,5 +1585,190 @@ INSERT INTO ASOP_ROLES (ROLE_ID, ROLE_NAME) VALUES
 ON CONFLICT (ROLE_ID) DO NOTHING;
 
 -- ============================================================
+-- 11. DELTA SYNC SUPPORT (soft-delete, updated_at, indexes)
+--     Справочники для дельта-синхронизации: UPDATED_AT/DELETED_AT
+--     управляются приложением + триггерами. DELETE превращается
+--     в soft-delete (UPDATED_AT = DELETED_AT = now()).
+--     Полная выгрузка мастерами = запрос WITH DELETED_AT IS NULL.
+--     Purge-job переключает session_replication_role='replica'
+--     (user asop поднят до SUPERUSER в postgres-superuser.sql) для
+--     физического удаления.
+-- ============================================================
+
+DO $body$
+DECLARE
+    _t TEXT;
+BEGIN
+    FOREACH _t IN ARRAY ARRAY[
+        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
+        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
+        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
+        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
+        'asop_cards_distributors',
+        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
+        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
+        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
+        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
+        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
+        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
+        'asop_tids'] LOOP
+        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW()', _t);
+        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW()', _t);
+        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS DELETED_AT TIMESTAMPTZ', _t);
+    END LOOP;
+END;
+$body$;
+
+DO $body$
+DECLARE
+    _t TEXT;
+BEGIN
+    FOREACH _t IN ARRAY ARRAY[
+        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
+        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
+        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
+        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
+        'asop_cards_distributors',
+        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
+        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
+        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
+        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
+        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
+        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
+        'asop_tids'] LOOP
+        EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_updated_deleted ON %I (UPDATED_AT, DELETED_AT)', _t, _t);
+        EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_deleted ON %I (DELETED_AT)', _t, _t);
+    END LOOP;
+END;
+$body$;
+
+-- Generic soft-delete trigger: превращает DELETE в UPDATE UPDATED_AT/DELETED_AT.
+-- Аргументы: (pk_column, pk_cast_type)
+CREATE OR REPLACE FUNCTION trg_fn_soft_delete()
+RETURNS TRIGGER AS $body$
+DECLARE
+    _pk    TEXT := TG_ARGV[0];
+    _ptype TEXT := COALESCE(TG_ARGV[1], 'uuid');
+BEGIN
+    EXECUTE format('UPDATE %I SET %I = now(), %I = now() WHERE %I = CAST(btrim($1) AS %s)',
+                   TG_TABLE_NAME, 'updated_at', 'deleted_at', _pk, _ptype)
+        USING row_to_json(OLD) ->> _pk;
+    RETURN NULL;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Generic touch trigger: UPDATE → UPDATED_AT = now() (для дельта-синхронизации).
+-- Приложение не обязано вручную проставлять UPDATED_AT при обновлении.
+CREATE OR REPLACE FUNCTION trg_fn_touch_updated()
+RETURNS TRIGGER AS $body$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Soft-delete trigger для таблиц с составным PK (2 колонки)
+CREATE OR REPLACE FUNCTION trg_fn_soft_delete_2col()
+RETURNS TRIGGER AS $body$
+DECLARE
+    _pk1 TEXT := TG_ARGV[0];
+    _pk2 TEXT := TG_ARGV[1];
+BEGIN
+    EXECUTE format('UPDATE %I SET %I = now(), %I = now() WHERE %I = CAST($1 AS uuid) AND %I = CAST($2 AS uuid)',
+                   TG_TABLE_NAME, 'updated_at', 'deleted_at', _pk1, _pk2)
+        USING row_to_json(OLD) ->> _pk1, row_to_json(OLD) ->> _pk2;
+    RETURN NULL;
+END;
+$body$ LANGUAGE plpgsql;
+
+DO $body$
+DECLARE
+    _tables TEXT[] := ARRAY[
+        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_roles',
+        'asop_card_types', 'asop_tariff_types', 'asop_session_types', 'asop_event_types',
+        'asop_transaction_types', 'asop_transaction_results', 'asop_services',
+        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
+        'asop_cards_distributors',
+        'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
+        'asop_users', 'asop_fare_zones', 'asop_transport_stops', 'asop_routes',
+        'asop_paths', 'asop_path_transport_stops', 'asop_schedule', 'asop_path_services',
+        'asop_path_discounts', 'asop_path_benefits', 'asop_cards', 'asop_card_mifares',
+        'asop_card_banks', 'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits',
+        'asop_tariff_rates', 'asop_tids'];
+    _pks    TEXT[] := ARRAY[
+        'region_id', 'territory_id', 'organizer_id', 'role_id',
+        'card_type_id', 'tariff_type_id', 'session_type_id', 'event_type',
+        'transaction_type_id', 'transaction_result_id', 'service_id',
+        'benefit_id', 'step_id', 'carrier_id', 'contract_id', 'cards_distributor_id',
+        'vehicle_type_id', 'vehicle_model_id', 'vehicle_id',
+        'user_id', 'zone_id', 'stop_id', 'route_id',
+        'path_id', 'path_stop_id', 'schedule_id', 'path_service_id',
+        'path_discount_id', 'path_benefit_id', 'card_id', 'card_id',
+        'card_id', 'card_tariff_id', 'card_id', 'assignment_id',
+        'tariff_rate_id', 'tid_id'];
+    _types  TEXT[] := ARRAY[
+        'uuid', 'uuid', 'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid', 'text',
+        'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid', 'uuid', 'uuid',
+        'uuid', 'uuid'];
+    _i INT;
+BEGIN
+    FOR _i IN 1 .. array_length(_tables, 1) LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS trg_soft_delete_%s ON %I', _tables[_i], _tables[_i]);
+        EXECUTE format('CREATE TRIGGER trg_soft_delete_%s BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete(%L, %L)',
+                       _tables[_i], _tables[_i], _pks[_i], _types[_i]);
+    END LOOP;
+END;
+$body$;
+
+DO $body$
+DECLARE
+    _tables TEXT[] := ARRAY[
+        'asop_organizer_territories', 'asop_contract_routes', 'asop_user_roles',
+        'asop_user_carriers', 'asop_user_regions'];
+    _pks1   TEXT[] := ARRAY['organizer_id', 'contract_id', 'user_id', 'user_id', 'user_id'];
+    _pks2   TEXT[] := ARRAY['territory_id', 'route_id', 'role_id', 'carrier_id', 'region_id'];
+    _i INT;
+BEGIN
+    FOR _i IN 1 .. array_length(_tables, 1) LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS trg_soft_delete_%s ON %I', _tables[_i], _tables[_i]);
+        EXECUTE format('CREATE TRIGGER trg_soft_delete_%s BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col(%L, %L)',
+                       _tables[_i], _tables[_i], _pks1[_i], _pks2[_i]);
+    END LOOP;
+END;
+$body$;
+
+-- Touch-триггеры UPDATED_AT на все таблицы дельта-справочников
+DO $body$
+DECLARE
+    _t TEXT;
+BEGIN
+    FOREACH _t IN ARRAY ARRAY[
+        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
+        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
+        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
+        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
+        'asop_cards_distributors',
+        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
+        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
+        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
+        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
+        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
+        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
+        'asop_tids'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS trg_touch_updated_%s ON %I', _t, _t);
+        EXECUTE format('CREATE TRIGGER trg_touch_updated_%s BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated()',
+                       _t, _t);
+    END LOOP;
+END;
+$body$;
+
+-- ============================================================
 -- ГОТОВО! Все UUID — v7 (Time-Ordered), генерируются на уровне приложения.
 -- ============================================================

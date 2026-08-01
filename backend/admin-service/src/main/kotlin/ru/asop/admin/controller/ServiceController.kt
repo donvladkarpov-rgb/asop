@@ -13,6 +13,14 @@ import ru.asop.api.reference.dto.request.ServiceUpdateRequest
 import ru.asop.api.reference.dto.response.ServiceResponse
 import ru.asop.common.util.UuidUtils
 import java.util.UUID
+import java.time.Instant
+import reactor.core.publisher.Flux
+import org.springframework.data.domain.Sort
+import org.springframework.data.relational.core.query.Criteria
+import org.springframework.data.relational.core.query.Query
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestParam
+import ru.asop.admin.config.DeltaSupport
 
 @RestController
 class ServiceController(
@@ -70,4 +78,18 @@ class ServiceController(
         priority = priority,
         regionId = regionId
     )
+
+
+    @GetMapping("/delta")
+    fun listDelta(
+        @RequestParam(required = false) regionId: java.util.UUID?,
+        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) includeDeleted: Boolean,
+        @RequestParam(required = false, defaultValue = "10000") limit: Int
+    ): Flux<ServiceEntity> {
+        val extra = regionId?.let { Criteria.where("region_id").`is`(it) }
+        return template.select(ServiceEntity::class.java)
+            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit, extra))
+            .all()
+    }
 }

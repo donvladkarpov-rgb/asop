@@ -5,7 +5,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.stereotype.Component
-import ru.asop.gateway.service.EventService
+import ru.asop.common.event.EventService
 import java.util.UUID
 
 /**

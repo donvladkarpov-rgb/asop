@@ -1,6 +1,9 @@
 package ru.asop.user.controller
 
 import org.springframework.http.ResponseEntity
+import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -8,10 +11,13 @@ import ru.asop.api.user.controller.UserAdminApi
 import ru.asop.api.user.dto.request.UserCreateRequest
 import ru.asop.api.user.dto.response.UserResponse
 import ru.asop.user.service.UserAdminService
+import java.time.Instant
+import java.util.UUID
 
 @RestController
 class UserAdminController(
-    private val service: UserAdminService
+    private val service: UserAdminService,
+    private val db: DatabaseClient
 ) : UserAdminApi {
 
     override fun list(): Flux<UserResponse> =
@@ -37,6 +43,37 @@ class UserAdminController(
             if (rows > 0) ResponseEntity.noContent().build()
             else ResponseEntity.notFound().build()
         }
+
+    @GetMapping("/delta")
+    fun listDelta(
+        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) includeDeleted: Boolean?,
+        @RequestParam(required = false) regionId: UUID?,
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false, defaultValue = "10000") limit: Int
+    ): Flux<Map<String, Any?>> {
+        val conditions = mutableListOf<String>()
+        if (updatedAtSince != null) conditions += "updated_at > :since"
+        if (includeDeleted != true) conditions += "deleted_at IS NULL"
+        val unions = mutableListOf<String>()
+        if (carrierId != null) unions += "SELECT user_id FROM ASOP_USER_CARRIERS WHERE carrier_id = :carrierId"
+        if (regionId != null) unions += "SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId"
+        if (unions.isNotEmpty()) conditions += "user_id IN (${unions.joinToString(" UNION ")})"
+        val where = if (conditions.isEmpty()) "" else " WHERE ${conditions.joinToString(" AND ")}"
+        val sql = """
+            SELECT user_id AS "userId", first_name AS "firstName", last_name_initial AS "lastNameInitial",
+                   patronymic_initial AS "patronymicInitial", phone, keycloak_id AS "keycloakId",
+                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
+            FROM ASOP_USERS$where
+            ORDER BY updated_at ASC
+            LIMIT :limit
+        """.trimIndent()
+        var spec = db.sql(sql)
+        if (updatedAtSince != null) spec = spec.bind("since", updatedAtSince)
+        if (carrierId != null) spec = spec.bind("carrierId", carrierId)
+        if (regionId != null) spec = spec.bind("regionId", regionId)
+        return spec.bind("limit", limit).fetch().all()
+    }
 
     private fun rowToResponse(row: Map<String, Any?>): UserResponse = UserResponse(
         id = row["user_id"]?.toString() ?: "",

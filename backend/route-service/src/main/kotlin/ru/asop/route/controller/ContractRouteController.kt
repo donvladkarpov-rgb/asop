@@ -1,18 +1,38 @@
 package ru.asop.route.controller
 
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.route.controller.ContractRouteApi
 import ru.asop.api.route.dto.request.ContractRouteCreateRequest
 import ru.asop.api.route.dto.response.ContractRouteResponse
+import ru.asop.route.repository.GenericRouteRepository
+import ru.asop.route.repository.RouteTableRegistry
 import ru.asop.route.service.ContractRouteService
+import java.time.Instant
+import java.util.UUID
 
 @RestController
 class ContractRouteController(
-    private val service: ContractRouteService
+    private val service: ContractRouteService,
+    private val repository: GenericRouteRepository
 ) : ContractRouteApi {
+
+    @GetMapping("/delta")
+    fun listDelta(
+        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) includeDeleted: Boolean,
+        @RequestParam(required = false) regionId: UUID?,
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false, defaultValue = "10000") limit: Int
+    ): Flux<Map<String, Any?>> {
+        val info = RouteTableRegistry.resolve("contract-routes") ?: return Flux.empty()
+        return repository.findDelta(info, updatedAtSince, includeDeleted == true, regionId, carrierId, limit)
+    }
+
 
     override fun list(contractId: String?, routeId: String?): Flux<ContractRouteResponse> =
         service.list(contractId, routeId).map { row ->

@@ -1,5 +1,6 @@
 package ru.asop.terminal.network
 
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
@@ -37,4 +38,22 @@ interface GatewayApi {
 
     @GET("api/v1/carriers")
     suspend fun listCarriers(@Query("regionId") regionId: String? = null): List<CarrierResponse>
+
+    @POST("api/v1/sync/references/delta")
+    suspend fun deltaSync(@Body request: DeltaSyncRequest): Response<AcceptedResponse>
+
+    @POST("api/v1/sync/references/full")
+    suspend fun fullSync(@Body request: FullSyncRequest): Response<AcceptedResponse>
+
+    @GET("api/v1/sync/references/{eventId}/meta")
+    suspend fun getDeltaMeta(@Path("eventId") eventId: String): Response<DeltaMetaResponse>
+
+    @GET("api/v1/sync/references/{eventId}/chunks/{n}")
+    suspend fun getDeltaChunk(
+        @Path("eventId") eventId: String,
+        @Path("n") n: Int
+    ): Response<ResponseBody>
+
+    @GET("api/v1/sync/references/{eventId}/download")
+    suspend fun downloadFullDump(@Path("eventId") eventId: String): Response<ResponseBody>
 }

@@ -6,6 +6,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
     kotlin("kapt")
     id("com.google.devtools.ksp")
+    id("com.google.protobuf")
 }
 
 import java.util.Properties
@@ -60,6 +61,19 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:3.25.5"
+    }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins {
+                create("java")
+            }
         }
     }
 }
@@ -122,6 +136,12 @@ dependencies {
 
     // Coroutines Play Services (.await() for Task)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")
+
+    // Protobuf (delta sync reference data) — НЕ lite: ReferenceSyncStore
+    // использует JsonFormat.printer() (protobuf-java-util) + descriptor reflection
+    // (Message/Descriptors), которых нет в protobuf-javalite.
+    implementation("com.google.protobuf:protobuf-java:3.25.5")
+    implementation("com.google.protobuf:protobuf-java-util:3.25.5")
 }
 
 kapt {

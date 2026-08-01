@@ -1,6 +1,10 @@
 server:
   port: 8080
   shutdown: graceful
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/plain,application/x-protobuf,application/octet-stream
+    min-response-size: 1024
   ssl:
     enabled: true
     key-store: ${KEYSTORE_PATH:/tmp/certs/gateway-service.p12}

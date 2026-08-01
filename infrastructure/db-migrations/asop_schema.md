@@ -1369,4 +1369,13 @@ Cron-задача: списывает просроченные долги как
 
 ---
 
+## 🔄 Дельта-синхронизация (soft-delete)
+
+Для 41 таблицы справочников (все из разделов 0-6, кроме `ASOP_CARDS_DISTRIBUTORS` — синхронизируются: regions, territories, organizers, organizer_territories, roles, card_types, tariff_types, session_types, event_types, transaction_types, transaction_results, services, benefits, benefit_steps, carriers, contracts, contract_routes, vehicle_types, vehicle_models, vehicles, users, user_roles, user_carriers, user_regions, fare_zones, transport_stops, routes, paths, path_transport_stops, schedule, path_services, path_discounts, path_benefits, cards, card_mifares, card_banks, card_tariffs, blacklists, user_benefits, tariff_rates, tids):
+
+* **Добавлены колонки** `CREATED_AT`, `UPDATED_AT`, `DELETED_AT` (idempotent `ADD COLUMN IF NOT EXISTS`).
+* **Триггеры** `trg_soft_delete_<table>` (BEFORE DELETE): превращают физический DELETE в soft-delete — `UPDATED_AT = DELETED_AT = now()`. Составной PK — функция `trg_fn_soft_delete_2col`.
+* **Индексы**: `ix_<table>_updated_deleted (UPDATED_AT, DELETED_AT)` и `ix_<table>_deleted (DELETED_AT)`.
+* **Purge**: физическое удаление выполняется `purge-job` (orchestrator-service) с `SET session_replication_role='replica'` (пользователь `asop` — SUPERUSER) для отключения триггеров.
+
 *Документация сгенерирована для финальной схемы БД АСОП (TAVRIDA) с модулями фискализации и долгов.*

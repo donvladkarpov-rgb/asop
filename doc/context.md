@@ -207,6 +207,77 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 | `service/CertCommandService.kt` | CertSignRequested producer в asop.terminal.cert.commands |
 | `kafka/CertEventConsumer.kt` | Listener asop.terminal.cert.events → EventService.complete/fail |
 | `model/EventStatus.kt` | EventState (PENDING, COMPLETED, FAILED) + `resultData: String?` |
+| `controller/DeltaReferenceController.kt` | POST /sync/references/delta|full (async), GET .../{eventId}/meta|chunks/{n}|download (sync, Redis + MinIO-прокси) |
+| `service/DeltaCommandService.kt` | Producer DeltaSyncCommand/FullSyncCommand → asop.delta.commands/full.commands |
+| `service/TerminalResolver.kt` | terminalId → carrierId → regionId (WebClient к terminal-service + carrier-service) |
+| `config/GatewayByteArrayRedisConfig.kt` | ReactiveRedisTemplate<String, ByteArray> для chunk storage |
+
+---
+
+## 3.1. Delta Sync (инкрементальная дельта-синхронизация справочников)
+
+### Поток
+
+```
+Android → POST /api/v1/sync/references/delta (mTLS, body {terminalId, lastUpdatedAt}) → 202 + X-Event-Id
+       ↓
+Gateway → TerminalResolver (terminalId → carrierId → regionId)
+        → DeltaCommandService → Kafka asop.delta.commands (X-Event-Id header)
+       ↓
+orchestrator-service @KafkaListener → опрашивает мастер-сервисы GET /api/v1/{resource}/delta?carrierId&regionId&updatedAtSince&includeDeleted&limit
+                                  → Protobuf rows (asop-proto) → чанки 50 КБ (serializedSize > 50000)
+                                  → Redis asop:event:{eventId}:chunk:{n} + asop:event:{eventId}:meta (TTL 24 ч)
+                                  → EventService.complete(eventId, {totalChunks, totalBytes})
+       ↓
+Android поллит GET /api/v1/events/{eventId} → 200 COMPLETED
+       → GET /api/v1/sync/references/{eventId}/meta (totalChunks)
+       → GET /api/v1/sync/references/{eventId}/chunks/{n} (application/x-protobuf)
+       → ReferenceSyncStore.applyChunk → атомарный накат в Room reference_rows + sync_meta
+```
+
+Полная выгрузка: `POST /api/v1/sync/references/full` → `asop.delta.full.commands` → orchestrator собирает ZIP из `.pb` файлов (по таблице на файл) → MinIO `asop-sync` bucket → `EventService.complete(eventId, {s3Url})` → Android качает ZIP через `GET /api/v1/sync/references/{eventId}/download` (gateway проксирует стрим из MinIO).
+
+### Оркестратор (orchestrator-service, порт 8094)
+
+Spring Boot 3.3.5 WebFlux. **БЕЗ R2DBC** (кроме purge-job). Читает Kafka `asop.delta.commands`/`asop.delta.full.commands`, опрашивает мастер-сервисы через WebClient (TLS, truststore), чанкует и пишет в Redis, заливает ZIP в MinIO (AWS S3 SDK). `EventService` — reactive Redis, bean через `EventServiceConfig` (EventService без `@Service` — иначе все сервисы, сканирующие `ru.asop`, падали бы без Redis-зависимости).
+
+**Purge-job**: `@Scheduled(fixedRate = 3600000, initialDelay = 60000)` — раз в час. `SET LOCAL session_replication_role = 'replica'` (отключает BEFORE DELETE триггеры) → физическое удаление soft-deleted строк старше 6 месяцев. Требует `asop` SUPERUSER в PostgreSQL.
+
+### Master-service `/delta` endpoints
+
+Каждый мастер-сервис имеет `@GetMapping("/delta")` с query-параметрами:
+- `updatedAtSince` — фильтр `UPDATED_AT > updatedAtSince` (инкрементальная дельта).
+- `includeDeleted` — включать soft-deleted (для синхронизации удалений).
+- `limit` (default 10000).
+- `carrierId` / `regionId` — где применимо (FK-привязка справочника к перевозчику/региону).
+- `userIdsIn` — для user/card таблиц (оркестратор сначала получает userIds, потом фильтрует карточные по ним).
+
+Маппинг таблиц к сервисам (фактический):
+- admin-service: regions, territories, organizers, organizer-territories, roles, card-types, tariff-types, session-types, event-types, transaction-types, transaction-results, services, benefits, benefit-steps (через `DeltaSupport` + `R2dbcEntityTemplate`)
+- carrier-service: carriers, tids, contracts, cards-distributors (`DeltaSupport`)
+- route-service: 13 ресурсов (fare-zones, transport-stops, routes, paths, path-transport-stops, schedule, path-services, path-discounts, path-benefits, vehicles, vehicle-types, vehicle-models, contract-routes) через `GenericRouteRepository.findDelta`
+- user-service: admin-users (UNION user_carriers ∪ user_regions), user-roles, user-carriers, user-regions (camelCase алиасы через DatabaseClient)
+- card-service: cards, card-mifares, card-banks, card-tariffs, blacklists, user-benefits, tariff-rates. Для mifares/banks/tariffs/blacklists — JOIN ASOP_CARDS на user_id (фильтр `userIdsIn`). Tariff-rates — без user-фильтра (carrierId FK).
+
+### Soft-delete
+
+- `DELETED_AT TIMESTAMPTZ` добавлен во все 42 справочные таблицы через DO-блок в `v001-init.sql`.
+- `BEFORE DELETE` триггер: generic `trg_fn_soft_delete()` (single-PK) + `trg_fn_soft_delete_2col()` (composite-PK: organizer-territories, contract-routes, user-roles, user-carriers, user-regions). Превращает DELETE в `UPDATE DELETED_AT = NOW(), UPDATED_AT = NOW()` и возвращает NULL.
+- `trg_fn_touch_updated()` — авто-pristine `UPDATED_AT` на UPDATE (приложение не обязано проставлять вручную).
+- Индексы: `ix_<table>_updated_deleted ON (UPDATED_AT, DELETED_AT)` + `ix_<table>_deleted ON (DELETED_AT) WHERE DELETED_AT IS NOT NULL`.
+
+### Protobuf
+
+- `:backend:shared:asop-proto` — новый модуль, `schema.proto` с ~41 row messages + `DeltaChunk` (40 repeated-полей) + `XxxFile` messages для full-dump.
+- Генерация через `protobuf-gradle-plugin:0.9.4`, `protobuf-java:3.25.5` (backend) + `protobuf-java-util` для `JsonFormat`.
+- Android: `protobuf-java` + `protobuf-java-util` (НЕ lite — `ReferenceSyncStore` использует `JsonFormat.printer()` + descriptor reflection, которого нет в lite).
+
+### MinIO
+
+- `minio` (9000 API / 9001 console) + `minio-init` (создаёт bucket `asop-sync`, `mc anonymous set download`) в docker-compose.
+- Образы: `minio/minio:RELEASE.2024-10-13T13-34-11Z` + `minio/mc:latest`. minio-init ретраит до 30 раз.
+- Оркестратор грузит `full_{eventId}.zip` в `asop-sync`; gateway `GET .../download` проксирует стрим по `s3Url` из resultData. Терминал качает ZIP через gateway mTLS, наружу MinIO не выставляется.
+- Ключи: `S3_ENDPOINT`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` (defaults `http://minio:9000`, `asop`, `asop-secret`, `asop-sync`).
 
 ---
 

@@ -1,4 +1,4 @@
-package ru.asop.gateway.model
+package ru.asop.common.event
 
 import java.time.Instant
 import java.util.UUID

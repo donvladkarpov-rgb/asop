@@ -1,5 +1,7 @@
 package ru.asop.gateway.service
 
+import ru.asop.common.event.EventService
+
 import org.apache.kafka.clients.producer.ProducerRecord
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate

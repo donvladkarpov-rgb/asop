@@ -10,7 +10,8 @@ enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 include(
     ":backend:shared:asop-common",
     ":backend:shared:asop-dto",
-    ":backend:shared:asop-kafka-contracts"
+    ":backend:shared:asop-kafka-contracts",
+    ":backend:shared:asop-proto"
 )
 
 // ============ Shared API modules ============
@@ -43,7 +44,8 @@ include(
     ":backend:audit-service",
     ":backend:crypto-service",
     ":backend:admin-service",
-    ":backend:route-service"
+    ":backend:route-service",
+    ":backend:orchestrator-service"
 )
 
 // ============ Android terminal app ============

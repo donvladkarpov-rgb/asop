@@ -1,18 +1,38 @@
 package ru.asop.route.controller
 
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.route.controller.PathApi
 import ru.asop.api.route.dto.request.PathCreateRequest
 import ru.asop.api.route.dto.response.PathResponse
+import ru.asop.route.repository.GenericRouteRepository
+import ru.asop.route.repository.RouteTableRegistry
 import ru.asop.route.service.PathService
+import java.time.Instant
+import java.util.UUID
 
 @RestController
 class PathController(
-    private val service: PathService
+    private val service: PathService,
+    private val repository: GenericRouteRepository
 ) : PathApi {
+
+    @GetMapping("/delta")
+    fun listDelta(
+        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) includeDeleted: Boolean,
+        @RequestParam(required = false) regionId: UUID?,
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false, defaultValue = "10000") limit: Int
+    ): Flux<Map<String, Any?>> {
+        val info = RouteTableRegistry.resolve("paths") ?: return Flux.empty()
+        return repository.findDelta(info, updatedAtSince, includeDeleted == true, regionId, carrierId, limit)
+    }
+
 
     override fun listPaths(): Flux<PathResponse> =
         service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->

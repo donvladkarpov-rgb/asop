@@ -13,5 +13,6 @@ data class CarrierEntity(
     val inn: String,
     val regionId: UUID,
     val createdAt: Instant = Instant.now(),
-    val updatedAt: Instant = Instant.now()
+    val updatedAt: Instant = Instant.now(),
+    val deletedAt: Instant? = null
 )

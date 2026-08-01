@@ -19,5 +19,6 @@ data class ContractEntity(
     val commissionPercent: java.math.BigDecimal? = null,
     val attributes: String? = null,
     val createdAt: Instant,
-    val updatedAt: Instant
+    val updatedAt: Instant,
+    val deletedAt: Instant? = null
 )

@@ -8,5 +8,8 @@ import java.util.UUID
 data class CardTypeEntity(
     @Id
     val cardTypeId: UUID,
-    val cardTypeName: String
+    val cardTypeName: String,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

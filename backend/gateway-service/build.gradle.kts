@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":backend:shared:asop-kafka-contracts"))
     implementation(project(":backend:shared:api:gateway-api"))
     implementation(project(":backend:shared:api:terminal-api"))
+    implementation(project(":backend:shared:api:carrier-api"))
     implementation(project(":backend:shared:api:session-api"))
     implementation(project(":backend:shared:api:card-api"))
     implementation(project(":backend:shared:api:debt-api"))

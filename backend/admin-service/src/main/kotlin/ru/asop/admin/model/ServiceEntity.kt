@@ -11,5 +11,8 @@ data class ServiceEntity(
     val serviceName: String,
     val description: String? = null,
     val priority: Int,
-    val regionId: UUID
+    val regionId: UUID,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

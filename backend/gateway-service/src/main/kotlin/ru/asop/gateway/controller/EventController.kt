@@ -6,8 +6,8 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
-import ru.asop.gateway.model.EventState
-import ru.asop.gateway.service.EventService
+import ru.asop.common.event.EventState
+import ru.asop.common.event.EventService
 import java.util.UUID
 
 @RestController

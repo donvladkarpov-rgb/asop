@@ -10,5 +10,8 @@ data class TariffTypeEntity(
     val tariffTypeId: UUID,
     val code: String,
     val name: String,
-    val description: String? = null
+    val description: String? = null,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )

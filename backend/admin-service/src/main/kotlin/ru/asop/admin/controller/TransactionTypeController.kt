@@ -13,6 +13,14 @@ import ru.asop.api.reference.dto.request.TransactionTypeUpdateRequest
 import ru.asop.api.reference.dto.response.TransactionTypeResponse
 import ru.asop.common.util.UuidUtils
 import java.util.UUID
+import java.time.Instant
+import reactor.core.publisher.Flux
+import org.springframework.data.domain.Sort
+import org.springframework.data.relational.core.query.Criteria
+import org.springframework.data.relational.core.query.Query
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestParam
+import ru.asop.admin.config.DeltaSupport
 
 @RestController
 class TransactionTypeController(
@@ -61,4 +69,16 @@ class TransactionTypeController(
         id = transactionTypeId,
         transactionTypeName = transactionTypeName
     )
+
+
+    @GetMapping("/delta")
+    fun listDelta(
+        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) includeDeleted: Boolean,
+        @RequestParam(required = false, defaultValue = "10000") limit: Int
+    ): Flux<TransactionTypeEntity> {
+        return template.select(TransactionTypeEntity::class.java)
+            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit))
+            .all()
+    }
 }

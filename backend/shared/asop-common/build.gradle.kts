@@ -11,5 +11,7 @@ dependencies {
     api(libs.jackson.jsr310)
     api("org.springframework:spring-web:6.1.14")
     api("org.springframework:spring-context:6.1.14")
+    api("org.springframework.data:spring-data-redis:3.3.5")
+    api("io.projectreactor:reactor-core:3.6.11")
     api(libs.slf4j.api)
 }

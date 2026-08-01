@@ -14,5 +14,6 @@ data class CardEntity(
     val isPrimary: Boolean = false,
     val registeredAt: Instant?,
     val createdAt: Instant = Instant.now(),
-    val updatedAt: Instant = Instant.now()
+    val updatedAt: Instant = Instant.now(),
+    val deletedAt: Instant? = null
 )

@@ -31,7 +31,9 @@
 | Spring Boot | 3.3.5 (WebFlux) | Реактивный фреймворк |
 | PostgreSQL | 14 + PostGIS | База данных |
 | Kafka | 3.7.1 | Асинхронная шина |
-| Redis | 7 (alpine) | Event store gateway: статусы async-команд, TTL 24 ч |
+| Redis | 7 (alpine) | Event store gateway: статусы async-команд (TTL 24 ч) + delta-sync chunks (`asop:event:{id}:chunk:{n}`, TTL 24 ч) |
+| MinIO | RELEASE.2024-10-13 | S3-совместимое хранилище ZIP полной выгрузки справочников (bucket `asop-sync`) |
+| Protobuf | 3.25.5 | Сериализация dull-reference-данных в чанках 50 КБ (модуль `:backend:shared:asop-proto`, `protobuf-java` на backend + Android) |
 | Keycloak | 25.0.4 | OIDC-провайдер |
 | Bouncy Castle | 1.78.1 | Криптография (ECC P-256) |
 | Gradle | 8.10.2 | Система сборки |
@@ -373,6 +375,23 @@ Root CA (self-signed, ECC P-256, 10 лет)
 DRIVER: "CN={cardId}, OU=DRIVER:{carrierId}, O=ASOP"
 CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 ```
+
+---
+
+## 8.1. Delta Sync (инкрементальная дельта-синхронизация справочников)
+
+Оркестратор `orchestrator-service` (порт 8094) — новый микросервис: читает Kafka `asop.delta.commands` / `asop.delta.full.commands`, опрашивает мастер-сервисы через REST `/delta`, чанкует по 50 КБ (Protobuf `serializedSize`), пишет чанки в Redis, заливает ZIP в MinIO. `PurgeJob` физически удаляет soft-deleted строки старше 6 месяцев (раз в час, `SET session_replication_role='replica'`). Полный поток:
+
+```
+Android → POST /sync/references/delta → 202 + X-Event-Id
+       → Gateway → Kafka asop.delta.commands
+       → orchestrator → REST /delta к мастер-сервисам → Protobuf → чанки 50КБ → Redis
+       → EventService.complete(eventId, {totalChunks,totalBytes})
+       → Android → GET /events/{eventId} → COMPLETED → GET /sync/references/{eventId}/chunks/{n}
+       → ReferenceSyncStore.applyChunk → Room reference_rows (атомарно) + sync_meta watermark
+```
+
+Soft-delete: все ~42 справочные таблицы имеют `DELETED_AT TIMESTAMPTZ` + `BEFORE DELETE` триггер (generic `trg_fn_soft_delete()` для single-PK, `trg_fn_soft_delete_2col()` для composite-PK). DELETE превращается в `UPDATE DELETED_AT = NOW(), UPDATED_AT = NOW()` и возвращает NULL. `trg_fn_touch_updated()` авто-pristine проставляет `UPDATED_AT` на UPDATE.
 
 ---
 

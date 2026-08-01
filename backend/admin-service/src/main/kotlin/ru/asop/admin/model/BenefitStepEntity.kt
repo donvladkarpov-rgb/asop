@@ -14,5 +14,8 @@ data class BenefitStepEntity(
     val tripThresholdFrom: Int = 0,
     val tripThresholdTo: Int? = null,
     val discountShare: BigDecimal,
-    val periodType: String
+    val periodType: String,
+    val createdAt: java.time.Instant = java.time.Instant.now(),
+    val updatedAt: java.time.Instant = java.time.Instant.now(),
+    val deletedAt: java.time.Instant? = null
 )
