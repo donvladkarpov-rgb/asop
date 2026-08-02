@@ -98,3 +98,13 @@ build/
 *.bak
 *.cache
 prompt-*.md
+
+# ============================================================
+# android-test ethalon JSONs (регенерируются через generate-ethalon.sh)
+# ============================================================
+# expected-1.json (~746 КБ) остаётся в git — разумный размер.
+# expected-2.json (~40 МБ) и expected-all.json (~47 МБ) генерируются
+# по требованию: docker exec -i docker-postgres-1 bash < generate-ethalon.sh
+# после каждого дельта-состояния БД. См. AGENTS.md → "Этап E".
+frontend/android-test/app/src/main/assets/expected-2.json
+frontend/android-test/app/src/main/assets/expected-all.json

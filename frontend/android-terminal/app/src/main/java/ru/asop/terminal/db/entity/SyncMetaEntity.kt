@@ -5,17 +5,17 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * Метка синхронизации по таблице справочника.
- * deltaSync шлёт Map<tableName, lastUpdatedAt>; после успешного apply
- * терминал сохраняет максимальный updated_at по таблице.
+ * Глобальный VERSION-водяной знак дельта-синхронизации.
+ * Единственная строка (id = 0): последний version из sequence
+ * (asop_delta_version_seq), обработанный терминалом.
  */
 @Entity(tableName = "sync_meta")
 data class SyncMetaEntity(
     @PrimaryKey
-    @ColumnInfo(name = "table_name")
-    val tableName: String,
-    @ColumnInfo(name = "last_updated_at")
-    val lastUpdatedAt: String? = null,
+    @ColumnInfo(name = "id")
+    val id: Int = 0,
+    @ColumnInfo(name = "last_version")
+    val lastVersion: Long? = null,
     @ColumnInfo(name = "last_sync_at")
     val lastSyncAt: Long? = null
 )

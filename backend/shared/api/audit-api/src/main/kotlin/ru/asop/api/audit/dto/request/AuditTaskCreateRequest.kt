@@ -11,5 +11,9 @@ data class AuditTaskCreateRequest(
 
     val carrierId: UUID? = null,
 
-    val description: String? = null
+    val description: String? = null,
+
+    val regionId: UUID? = null,
+
+    val timezone: String? = null
 )

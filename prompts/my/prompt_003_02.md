@@ -4,7 +4,7 @@
 
 Проект **ASOP** — платформа оплаты проезда. Монорепо в `/home/vlad/IdeaProjects/asop`. Backend — Kotlin 2.0.21 + Spring Boot 3.3.5 (WebFlux, R2DBC), Kafka, Redis, MinIO, PostgreSQL. Android-терминал — Kotlin + Jetpack Compose + Room.
 
-Схема данных — **источник истины `infrastructure/db-migrations/asop_schema.sql`** (41 таблица-справочник `ASOP_*`). Это консолидированный SQL-файл со всей схемой. Рабочая миграция `infrastructure/db-migrations/migrations/` (для Liquibase) — **копия** `asop_schema.sql`, и в рамках этой задачи она **полностью пересоздаётся с нуля** (старая удаляется, новая строится по изменённому `asop_schema.sql`).
+Схема данных — **источник истины `infrastructure/db-migrations/asop_schema.sql`** (42 таблицы-справочника `ASOP_*`). Это консолидированный SQL-файл со всей схемой. Рабочая миграция `infrastructure/db-migrations/migrations/` (для Liquibase) — **копия** `asop_schema.sql`, и в рамках этой задачи она **полностью пересоздаётся с нуля** (старая удаляется, новая строится по изменённому `asop_schema.sql`).
 
 **Как связаны файлы миграции** (важно понять перед началом):
 - `infrastructure/db-migrations/asop_schema.sql` — **единственный источник DDL**, правим только его;
@@ -37,14 +37,14 @@
 CREATE SEQUENCE IF NOT EXISTS asop_delta_version_seq;
 ```
 
-### 1.2. Колонка VERSION во всех 41 дельта-таблицах
+### 1.2. Колонка VERSION во всех 42 дельта-таблицыах
 Список таблиц уже зафиксирован в двух DO-блоках (строки ~1602-1614 и ~1752-1764). Расширить первый DO-блок: после `DELETED_AT` добавить
 ```sql
 EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS VERSION BIGINT', _t);
 ```
 
 ### 1.3. Триггер простановки VERSION из sequence
-Триггер **на INSERT и UPDATE** проставляет `NEW.version := nextval('asop_delta_version_seq')` (значение, переданное приложением, игнорируется). Переиспользовать паттерн существующего `trg_fn_touch_updated()` (строки ~1662-1668). Создать новую функцию + DO-блок по всем 41 таблице:
+Триггер **на INSERT и UPDATE** проставляет `NEW.version := nextval('asop_delta_version_seq')` (значение, переданное приложением, игнорируется). Переиспользовать паттерн существующего `trg_fn_touch_updated()` (строки ~1662-1668). Создать новую функцию + DO-блок по всем 42 таблицам:
 ```sql
 CREATE OR REPLACE FUNCTION trg_fn_delta_version() RETURNS TRIGGER AS $body$
 BEGIN
@@ -53,7 +53,7 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 ```
-и в DO-блоке (FOREACH по списку из 41 таблицы):
+и в DO-блоке (FOREACH по списку из 42 таблиц):
 ```sql
 EXECUTE format('DROP TRIGGER IF EXISTS trg_delta_version_%s ON %I', _t, _t);
 EXECUTE format('CREATE TRIGGER trg_delta_version_%s BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version()', _t, _t);
@@ -61,7 +61,7 @@ EXECUTE format('CREATE TRIGGER trg_delta_version_%s BEFORE INSERT OR UPDATE ON %
 Триггеры должны навешиваться **после** touch-триггера `trg_touch_updated_*` (порядок срабатывания BEFORE не важен — оба независимы: один ставит updated_at, другой version).
 
 ### 1.4. Soft-delete
-`trg_fn_soft_delete` (строки ~1647-1658): сейчас делает `UPDATE ... SET updated_at = now(), deleted_at = now()`. Обновление пройдёт через `trg_delta_version_*` (BEFORE UPDATE) — version забампается автоматически. Ничего дополнительно делать не нужно, но **убедиться**, что soft-delete-таблицы покрыты version-триггером (все 41 в списке).
+`trg_fn_soft_delete` (строки ~1647-1658): сейчас делает `UPDATE ... SET updated_at = now(), deleted_at = now()`. Обновление пройдёт через `trg_delta_version_*` (BEFORE UPDATE) — version забампается автоматически. Ничего дополнительно делать не нужно, но **убедиться**, что soft-delete-таблицы покрыты version-триггером (все 42 в списке).
 
 ### 1.5. Триггер UPDATED_AT — распространить на INSERT
 Существующий touch-триггер `trg_fn_touch_updated()` (функция ставит `NEW.updated_at := now()`, игнорируя переданное значение) навешивается сейчас **только на `BEFORE UPDATE`** (DO-блок «Touch-триггеры UPDATED_AT», строки ~1763-1766: `CREATE TRIGGER trg_touch_updated_%s BEFORE UPDATE`). Нужно, чтобы поле автоматически заполнялось и при INSERT.
@@ -108,13 +108,13 @@ databaseChangeLog:
 1. `backend/shared/asop-proto/src/main/proto/schema.proto`
 2. `frontend/android-terminal/app/src/main/proto/schema.proto`
 
-**НЕ заменять `updated_at` на `version`.** Поля `created_at`, `updated_at`, `deleted_at` **остаются как есть** (string, те же номера). Вместо этого в каждое из 41 Row-сообщения **ДОБАВИТЬ новое поле**:
+**НЕ заменять `updated_at` на `version`.** Поля `created_at`, `updated_at`, `deleted_at` **остаются как есть** (string, те же номера). Вместо этого в каждое из 42 Row-сообщений **ДОБАВИТЬ новое поле**:
 ```proto
 int64 version = N;   // N = номер поля deleted_at + 1
 ```
 `version` — int64 (число из sequence), `deleted_at` остаётся **последним** полем — новое поле добавляется **после** него.
 
-**Как определить N:** в каждом Row-сообщении поле `deleted_at` сейчас — последнее и имеет максимальный номер (проверено автоматически для всех 41 сообщения). Номер для `version` = номер `deleted_at` + 1 (следующий свободный). Например, у `RegionsRow` `deleted_at = 15`, значит `version = 16`; у сообщений с `deleted_at = 5` → `version = 6`; и т.д. — номер индивидуален для каждого сообщения.
+**Как определить N:** в каждом Row-сообщении поле `deleted_at` сейчас — последнее и имеет максимальный номер (проверено автоматически для всех 42 сообщений). Номер для `version` = номер `deleted_at` + 1 (следующий свободный). Например, у `RegionsRow` `deleted_at = 15`, значит `version = 16`; у сообщений с `deleted_at = 5` → `version = 6`; и т.д. — номер индивидуален для каждого сообщения.
 
 Пример (было):
 ```proto
@@ -364,7 +364,7 @@ val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastVersion = l
 1. **Согласованность asop_schema.sql и миграции**: `diff <(grep -v '^--' infrastructure/db-migrations/asop_schema.sql) <(grep -v '^--' infrastructure/db-migrations/migrations/v001-init.sql)` — пуст (допустимы отличия только в строках-комментариях).
 2. Бэкенд: `./gradlew build -x test` — должен собраться (105+ задач).
 3. Android: `./gradlew -p frontend/android-terminal :app:assembleDebug` — BUILD SUCCESSFUL.
-4. Proto-файлы идентичны друг другу: `diff backend/shared/asop-proto/src/main/proto/schema.proto frontend/android-terminal/app/src/main/proto/schema.proto` — пуст. В каждом из 41 Row-сообщения присутствует новое поле `int64 version = <deleted_at_номер + 1>`, а поля `created_at`/`updated_at`/`deleted_at` не изменены.
+4. Proto-файлы идентичны друг другу: `diff backend/shared/asop-proto/src/main/proto/schema.proto frontend/android-terminal/app/src/main/proto/schema.proto` — пуст. В каждом из 42 Row-сообщений присутствует новое поле `int64 version = <deleted_at_номер + 1>`, а поля `created_at`/`updated_at`/`deleted_at` не изменены.
 5. Интеграционная (обязательная, т.к. миграция пересоздаётся): `docker compose -f infrastructure/docker/docker-compose.yml down -v`, затем `docker compose -f infrastructure/docker/docker-compose.yml up -d --build`. Убедиться, что контейнер `liquibase` отработал успешно (в логах нет ошибок), и что в БД появились sequence `asop_delta_version_seq` и колонки `version`:
    ```sql
    SELECT column_name FROM information_schema.columns WHERE table_name='asop_regions' AND column_name='version';
@@ -391,7 +391,7 @@ val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastVersion = l
 | `infrastructure/db-migrations/migrations/` | **удаляется целиком**, пересоздаётся: `v001-init.sql` = копия `asop_schema.sql`, новый `v001-init.yaml` (этап 1.8) |
 | `infrastructure/db-migrations/db.changelog-master.yaml` | не менять (уже включает `migrations/v001-init.yaml`) |
 | `infrastructure/db-migrations/asop_schema.md` (+html/puml/svg) | справка — отразить sequence/VERSION/триггер |
-| `backend/shared/asop-proto/src/main/proto/schema.proto` | 41× **добавить** поле `int64 version = <deleted_at+1>` (updated_at не трогать) |
+| `backend/shared/asop-proto/src/main/proto/schema.proto` | 42× **добавить** поле `int64 version = <deleted_at+1>` (updated_at не трогать) |
 | `frontend/android-terminal/app/src/main/proto/schema.proto` | то же (синхронно) |
 | admin-service: 14 контроллеров + `config/DeltaSupport.kt` + `OrganizerTerritoryRepository` | `versionSince: Long?` |
 | carrier-service: 4 контроллера + `config/DeltaSupport.kt` | то же |

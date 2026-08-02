@@ -138,7 +138,7 @@ backend/shared/api/{name}-api/
 
 ## 3. Gateway
 
-**Принцип:** Gateway не пишет в БД. Только валидирует аутентификацию и пушит команды в Kafka.
+**Принцип:** Gateway не пишет в БД. Выполняет только авторизацию/аутентификацию/проксирование — бизнес-логики в gateway нет. Терминал сам передаёт business context (`carrierId`, `regionId`, `timezone`) в теле запроса, gateway пробрасывает его в Kafka headers (`X-Carrier-Id`, `X-Region-Id`, `X-Timezone`) — по аналогии с `X-Event-Id`/`X-Keycloak-Id`. Event DTOs в `asop-kafka-contracts` не меняются — контекст идёт только в headers, консьюмеры могут читать (через `@Header`) или игнорировать.
 
 ### Маршрутизация
 
@@ -219,12 +219,12 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 ### Поток
 
 ```
-Android → POST /api/v1/sync/references/delta (mTLS, body {terminalId, lastUpdatedAt}) → 202 + X-Event-Id
+Android → POST /api/v1/sync/references/delta (mTLS, body {terminalId, lastVersion}) → 202 + X-Event-Id
        ↓
 Gateway → TerminalResolver (terminalId → carrierId → regionId)
         → DeltaCommandService → Kafka asop.delta.commands (X-Event-Id header)
        ↓
-orchestrator-service @KafkaListener → опрашивает мастер-сервисы GET /api/v1/{resource}/delta?carrierId&regionId&updatedAtSince&includeDeleted&limit
+orchestrator-service @KafkaListener → опрашивает мастер-сервисы GET /api/v1/{resource}/delta?carrierId&regionId&versionSince&includeDeleted&limit (keyset-пагинация)
                                   → Protobuf rows (asop-proto) → чанки 50 КБ (serializedSize > 50000)
                                   → Redis asop:event:{eventId}:chunk:{n} + asop:event:{eventId}:meta (TTL 24 ч)
                                   → EventService.complete(eventId, {totalChunks, totalBytes})
@@ -246,11 +246,11 @@ Spring Boot 3.3.5 WebFlux. **БЕЗ R2DBC** (кроме purge-job). Читает
 ### Master-service `/delta` endpoints
 
 Каждый мастер-сервис имеет `@GetMapping("/delta")` с query-параметрами:
-- `updatedAtSince` — фильтр `UPDATED_AT > updatedAtSince` (инкрементальная дельта).
+- `versionSince` — фильтр `VERSION > versionSince` (инкрементальная дельта по глобальному sequence `asop_delta_version_seq`). Используется как keyset-курсор: мастер возвращает до `limit` строк, оркестратор переспрашивает с `versionSince` = последний `VERSION` предыдущей страницы, пока не получит пустую страницу.
 - `includeDeleted` — включать soft-deleted (для синхронизации удалений).
 - `limit` (default 10000).
 - `carrierId` / `regionId` — где применимо (FK-привязка справочника к перевозчику/региону).
-- `userIdsIn` — для user/card таблиц (оркестратор сначала получает userIds, потом фильтрует карточные по ним).
+- `userIdsIn` — для user/card таблиц (оркестратор сначала получает userIds, потом фильтрует карточные по ним). URL с `userIdsIn` ограничен ~4 КБ (Reactor Netty `max-initial-line-length`) — оркестратор шлёт userIds батчами по 80.
 
 Маппинг таблиц к сервисам (фактический):
 - admin-service: regions, territories, organizers, organizer-territories, roles, card-types, tariff-types, session-types, event-types, transaction-types, transaction-results, services, benefits, benefit-steps (через `DeltaSupport` + `R2dbcEntityTemplate`)
@@ -259,12 +259,13 @@ Spring Boot 3.3.5 WebFlux. **БЕЗ R2DBC** (кроме purge-job). Читает
 - user-service: admin-users (UNION user_carriers ∪ user_regions), user-roles, user-carriers, user-regions (camelCase алиасы через DatabaseClient)
 - card-service: cards, card-mifares, card-banks, card-tariffs, blacklists, user-benefits, tariff-rates. Для mifares/banks/tariffs/blacklists — JOIN ASOP_CARDS на user_id (фильтр `userIdsIn`). Tariff-rates — без user-фильтра (carrierId FK).
 
-### Soft-delete
+### Soft-delete и VERSION-курсор
 
 - `DELETED_AT TIMESTAMPTZ` добавлен во все 42 справочные таблицы через DO-блок в `v001-init.sql`.
 - `BEFORE DELETE` триггер: generic `trg_fn_soft_delete()` (single-PK) + `trg_fn_soft_delete_2col()` (composite-PK: organizer-territories, contract-routes, user-roles, user-carriers, user-regions). Превращает DELETE в `UPDATE DELETED_AT = NOW(), UPDATED_AT = NOW()` и возвращает NULL.
 - `trg_fn_touch_updated()` — авто-pristine `UPDATED_AT` на UPDATE (приложение не обязано проставлять вручную).
 - Индексы: `ix_<table>_updated_deleted ON (UPDATED_AT, DELETED_AT)` + `ix_<table>_deleted ON (DELETED_AT) WHERE DELETED_AT IS NOT NULL`.
+- **VERSION-курсор**: глобальный sequence `asop_delta_version_seq`; `trg_fn_assign_version()` присваивает `VERSION = nextval(...)` на INSERT/UPDATE/DELETE. Все 42 справочные таблицы имеют `VERSION BIGINT`. `UPDATED_AT` остаётся для аудита, но **дельта-курсор — это `VERSION`** (монотонный глобальный sequence, не зависит от часовых поясов и обновлений несправочных таблиц). Мастера фильтруют `VERSION > versionSince` и сортируют `ORDER BY VERSION ASC` для keyset-пагинации.
 
 ### Protobuf
 

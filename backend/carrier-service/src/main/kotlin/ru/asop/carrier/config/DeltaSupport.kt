@@ -3,22 +3,21 @@ package ru.asop.carrier.config
 import org.springframework.data.domain.Sort
 import org.springframework.data.relational.core.query.Criteria
 import org.springframework.data.relational.core.query.Query
-import java.time.Instant
 
 /**
  * Построение R2DBC Query для /delta эндпоинтов дельта-синхронизации.
- * Фильтр: UPDATED_AT > updatedAtSince, soft-deleted скрываются если !includeDeleted.
+ * Фильтр: VERSION > versionSince, soft-deleted скрываются если !includeDeleted.
  */
 object DeltaSupport {
 
-    fun query(updatedAtSince: Instant?, includeDeleted: Boolean, limit: Int, extra: Criteria? = null): Query {
+    fun query(versionSince: Long?, includeDeleted: Boolean, limit: Int, extra: Criteria? = null): Query {
         val list = mutableListOf<Criteria>()
-        updatedAtSince?.let { list += Criteria.where("updated_at").greaterThan(it) }
+        versionSince?.let { list += Criteria.where("version").greaterThan(it) }
         if (!includeDeleted) list += Criteria.where("deleted_at").isNull()
         extra?.let { list += it }
         val criteria = Criteria.from(list)
         return Query.query(criteria)
-            .sort(Sort.by(Sort.Direction.ASC, "updated_at"))
+            .sort(Sort.by(Sort.Direction.ASC, "version"))
             .limit(limit)
     }
 }

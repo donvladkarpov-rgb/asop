@@ -22,5 +22,11 @@ data class GpsPositionReport(
 
     val speedKmh: BigDecimal? = null,
 
-    val recordedAt: Instant = Instant.now()
+    val recordedAt: Instant = Instant.now(),
+
+    val regionId: UUID? = null,
+
+    val carrierId: UUID? = null,
+
+    val timezone: String? = null
 )

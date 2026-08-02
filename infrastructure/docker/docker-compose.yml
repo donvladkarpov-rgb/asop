@@ -653,7 +653,7 @@ services:
       - asop-net
 
   orchestrator-service:
-    mem_limit: 512m
+    mem_limit: 1g
     build:
       context: ../../backend/orchestrator-service
       dockerfile: Dockerfile

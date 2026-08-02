@@ -22,8 +22,7 @@ class ProtoRowMapper {
         val builder = builderClass.getMethod("newBuilder").invoke(null) as Message.Builder
 
         for (field in builder.descriptorForType.fields) {
-            val jsonKey = snakeToCamel(field.name)
-            val value = node.get(jsonKey) ?: continue
+            val value = node.get(snakeToCamel(field.name)) ?: node.get(field.name) ?: continue
             if (value.isNull || value.isMissingNode) continue
             builder.setField(field, convert(field, value))
         }

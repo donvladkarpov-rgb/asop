@@ -12,5 +12,6 @@ data class SessionTypeEntity(
     val sessionTypeName: String,
     val createdAt: java.time.Instant = java.time.Instant.now(),
     val updatedAt: java.time.Instant = java.time.Instant.now(),
-    val deletedAt: java.time.Instant? = null
+    val deletedAt: java.time.Instant? = null,
+    val version: Long? = null
 )

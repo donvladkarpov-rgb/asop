@@ -24,7 +24,6 @@ import ru.asop.api.gateway.dto.response.AcceptedResponse
 import ru.asop.api.gateway.dto.response.DeltaMetaResponse
 import ru.asop.common.event.EventService
 import ru.asop.gateway.service.DeltaCommandService
-import ru.asop.gateway.service.TerminalResolver
 import java.time.Instant
 import java.util.UUID
 
@@ -35,7 +34,6 @@ import java.util.UUID
 @RestController
 class DeltaReferenceController(
     private val deltaCommandService: DeltaCommandService,
-    private val terminalResolver: TerminalResolver,
     private val eventService: EventService,
     private val chunkRedis: ReactiveRedisTemplate<String, ByteArray>,
     private val objectMapper: ObjectMapper,
@@ -47,11 +45,8 @@ class DeltaReferenceController(
     fun requestDelta(
         @Valid @RequestBody request: DeltaSyncRequest
     ): Mono<ResponseEntity<AcceptedResponse>> {
-        log.info("Delta sync requested: terminalId={}, tables={}", request.terminalId, request.lastUpdatedAt.size)
-        return terminalResolver.resolve(request.terminalId)
-            .flatMap { context ->
-                deltaCommandService.publishDelta(request, context)
-            }
+        log.info("Delta sync requested: terminalId={}, lastVersion={}", request.terminalId, request.lastVersion)
+        return deltaCommandService.publishDelta(request)
             .map { eventId ->
                 ResponseEntity.accepted()
                     .header("X-Event-Id", eventId.toString())
@@ -69,10 +64,7 @@ class DeltaReferenceController(
         @Valid @RequestBody request: FullSyncRequest
     ): Mono<ResponseEntity<AcceptedResponse>> {
         log.info("Full sync requested: terminalId={}", request.terminalId)
-        return terminalResolver.resolve(request.terminalId)
-            .flatMap { context ->
-                deltaCommandService.publishFull(request, context)
-            }
+        return deltaCommandService.publishFull(request)
             .map { eventId ->
                 ResponseEntity.accepted()
                     .header("X-Event-Id", eventId.toString())

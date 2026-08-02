@@ -16,7 +16,6 @@ import ru.asop.card.config.DeltaSupport
 import ru.asop.card.model.CardEntity
 import ru.asop.card.service.CardService
 import java.security.Principal
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -48,7 +47,7 @@ class CardController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false) userIdsIn: String?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
@@ -59,7 +58,7 @@ class CardController(
             if (ids.isNotEmpty()) extra = Criteria.where("user_id").`in`(ids)
         }
         return template.select(CardEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit, extra))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit, extra))
             .all()
     }
 }

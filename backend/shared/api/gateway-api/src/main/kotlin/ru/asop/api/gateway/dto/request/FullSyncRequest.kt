@@ -7,5 +7,7 @@ import java.util.UUID
  * mTLS (chain Order 1).
  */
 data class FullSyncRequest(
-    val terminalId: UUID
+    val terminalId: UUID,
+    val carrierId: UUID? = null,
+    val regionId: UUID? = null
 )

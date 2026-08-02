@@ -95,13 +95,13 @@ class BenefitController(
     @GetMapping("/delta")
     fun listDelta(
         @RequestParam(required = false) regionId: java.util.UUID?,
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<BenefitEntity> {
         val extra = regionId?.let { Criteria.where("region_id").`is`(it) }
         return template.select(BenefitEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit, extra))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit, extra))
             .all()
     }
 }

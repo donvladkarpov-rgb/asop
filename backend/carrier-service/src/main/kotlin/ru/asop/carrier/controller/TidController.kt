@@ -16,7 +16,6 @@ import ru.asop.api.tid.dto.response.TidResponse
 import ru.asop.carrier.config.DeltaSupport
 import ru.asop.carrier.model.TidEntity
 import ru.asop.carrier.service.TidService
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -48,7 +47,7 @@ class TidController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
@@ -56,9 +55,9 @@ class TidController(
         val extra = mutableListOf<Criteria>()
         carrierId?.let { extra += Criteria.where("carrier_id").`is`(it) }
         val query = if (extra.isEmpty()) {
-            DeltaSupport.query(updatedAtSince, includeDeleted, limit)
+            DeltaSupport.query(versionSince, includeDeleted, limit)
         } else {
-            DeltaSupport.query(updatedAtSince, includeDeleted, limit, Criteria.from(extra))
+            DeltaSupport.query(versionSince, includeDeleted, limit, Criteria.from(extra))
         }
         return template.select(TidEntity::class.java)
             .matching(query)

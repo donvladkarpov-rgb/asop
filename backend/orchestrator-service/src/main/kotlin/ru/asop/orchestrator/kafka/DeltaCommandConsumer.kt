@@ -17,8 +17,8 @@ class DeltaCommandConsumer(
     @KafkaListener(topics = ["\${asop.kafka.topics.delta-commands}"], groupId = "orchestrator-delta")
     fun onCommand(command: DeltaSyncCommand, @Header("X-Event-Id") eventId: String?) {
         val resolvedEventId = eventId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: command.eventId
-        log.debug("Delta command received: eventId={}, terminal={}, tables={}",
-            resolvedEventId, command.terminalId, command.lastUpdatedAt.size)
+        log.debug("Delta command received: eventId={}, terminal={}, lastVersion={}",
+            resolvedEventId, command.terminalId, command.lastVersion)
         deltaSyncService.process(command.copy(eventId = resolvedEventId)).subscribe(
             { log.info("Delta processed for event {}", resolvedEventId) },
             { err -> log.error("Delta processing failed for event {}", resolvedEventId, err) }

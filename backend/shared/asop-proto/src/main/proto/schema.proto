@@ -4,7 +4,7 @@ package asop.v1;
 option java_package = "ru.asop.proto.v1";
 option java_multiple_files = true;
 
-// Generated from the ASOP database schema (41 delta-sync reference tables).
+// Generated from the ASOP database schema (42 delta-sync reference tables).
 // Timestamps are RFC3339 strings; UUIDs are canonical string form.
 
 message RegionsRow {
@@ -23,6 +23,7 @@ message RegionsRow {
   string created_at = 13;
   string updated_at = 14;
   string deleted_at = 15;
+  int64 version = 16;
 }
 
 message TerritoriesRow {
@@ -42,6 +43,7 @@ message TerritoriesRow {
   string created_at = 14;
   string updated_at = 15;
   string deleted_at = 16;
+  int64 version = 17;
 }
 
 message OrganizersRow {
@@ -50,6 +52,7 @@ message OrganizersRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message OrganizerTerritoriesRow {
@@ -58,6 +61,7 @@ message OrganizerTerritoriesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message RolesRow {
@@ -66,6 +70,7 @@ message RolesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message CardTypesRow {
@@ -74,6 +79,7 @@ message CardTypesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message TariffTypesRow {
@@ -84,6 +90,7 @@ message TariffTypesRow {
   string created_at = 5;
   string updated_at = 6;
   string deleted_at = 7;
+  int64 version = 8;
 }
 
 message SessionTypesRow {
@@ -93,6 +100,7 @@ message SessionTypesRow {
   string created_at = 4;
   string updated_at = 5;
   string deleted_at = 6;
+  int64 version = 7;
 }
 
 message EventTypesRow {
@@ -101,6 +109,7 @@ message EventTypesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message TransactionTypesRow {
@@ -109,6 +118,7 @@ message TransactionTypesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message TransactionResultsRow {
@@ -117,6 +127,7 @@ message TransactionResultsRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message ServicesRow {
@@ -128,6 +139,7 @@ message ServicesRow {
   string created_at = 6;
   string updated_at = 7;
   string deleted_at = 8;
+  int64 version = 9;
 }
 
 message BenefitsRow {
@@ -140,6 +152,7 @@ message BenefitsRow {
   string created_at = 7;
   string updated_at = 8;
   string deleted_at = 9;
+  int64 version = 10;
 }
 
 message BenefitStepsRow {
@@ -153,6 +166,7 @@ message BenefitStepsRow {
   string created_at = 8;
   string updated_at = 9;
   string deleted_at = 10;
+  int64 version = 11;
 }
 
 message CarriersRow {
@@ -163,6 +177,7 @@ message CarriersRow {
   string created_at = 5;
   string updated_at = 6;
   string deleted_at = 7;
+  int64 version = 8;
 }
 
 message ContractsRow {
@@ -179,6 +194,22 @@ message ContractsRow {
   string created_at = 11;
   string updated_at = 12;
   string deleted_at = 13;
+  int64 version = 14;
+}
+
+message CardsDistributorsRow {
+  string cards_distributor_id = 1;
+  string distributor_name = 2;
+  string inn = 3;
+  string kpp = 4;
+  string legal_address = 5;
+  string contact_phone = 6;
+  string contact_email = 7;
+  bool is_active = 8;
+  string created_at = 9;
+  string updated_at = 10;
+  string deleted_at = 11;
+  int64 version = 12;
 }
 
 message ContractRoutesRow {
@@ -187,6 +218,7 @@ message ContractRoutesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message VehicleTypesRow {
@@ -195,6 +227,7 @@ message VehicleTypesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message VehicleModelsRow {
@@ -203,6 +236,7 @@ message VehicleModelsRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message VehiclesRow {
@@ -215,6 +249,7 @@ message VehiclesRow {
   string created_at = 7;
   string updated_at = 8;
   string deleted_at = 9;
+  int64 version = 10;
 }
 
 message UsersRow {
@@ -229,6 +264,7 @@ message UsersRow {
   string created_at = 9;
   string updated_at = 10;
   string deleted_at = 11;
+  int64 version = 12;
 }
 
 message UserRolesRow {
@@ -237,6 +273,7 @@ message UserRolesRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message UserCarriersRow {
@@ -245,6 +282,7 @@ message UserCarriersRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message UserRegionsRow {
@@ -253,6 +291,7 @@ message UserRegionsRow {
   string created_at = 3;
   string updated_at = 4;
   string deleted_at = 5;
+  int64 version = 6;
 }
 
 message FareZonesRow {
@@ -265,6 +304,7 @@ message FareZonesRow {
   string created_at = 7;
   string updated_at = 8;
   string deleted_at = 9;
+  int64 version = 10;
 }
 
 message TransportStopsRow {
@@ -280,6 +320,7 @@ message TransportStopsRow {
   string created_at = 10;
   string updated_at = 11;
   string deleted_at = 12;
+  int64 version = 13;
 }
 
 message RoutesRow {
@@ -293,6 +334,7 @@ message RoutesRow {
   string created_at = 8;
   string updated_at = 9;
   string deleted_at = 10;
+  int64 version = 11;
 }
 
 message PathsRow {
@@ -310,6 +352,7 @@ message PathsRow {
   string created_at = 12;
   string updated_at = 13;
   string deleted_at = 14;
+  int64 version = 15;
 }
 
 message PathTransportStopsRow {
@@ -321,6 +364,7 @@ message PathTransportStopsRow {
   string created_at = 6;
   string updated_at = 7;
   string deleted_at = 8;
+  int64 version = 9;
 }
 
 message ScheduleRow {
@@ -335,6 +379,7 @@ message ScheduleRow {
   string created_at = 9;
   string updated_at = 10;
   string deleted_at = 11;
+  int64 version = 12;
 }
 
 message PathServicesRow {
@@ -349,6 +394,7 @@ message PathServicesRow {
   string created_at = 9;
   string updated_at = 10;
   string deleted_at = 11;
+  int64 version = 12;
 }
 
 message PathDiscountsRow {
@@ -366,6 +412,7 @@ message PathDiscountsRow {
   string created_at = 12;
   string updated_at = 13;
   string deleted_at = 14;
+  int64 version = 15;
 }
 
 message PathBenefitsRow {
@@ -375,6 +422,7 @@ message PathBenefitsRow {
   string created_at = 4;
   string updated_at = 5;
   string deleted_at = 6;
+  int64 version = 7;
 }
 
 message CardsRow {
@@ -388,6 +436,7 @@ message CardsRow {
   string created_at = 8;
   string updated_at = 9;
   string deleted_at = 10;
+  int64 version = 11;
 }
 
 message CardMifaresRow {
@@ -410,6 +459,7 @@ message CardMifaresRow {
   string created_at = 17;
   string updated_at = 18;
   string deleted_at = 19;
+  int64 version = 20;
 }
 
 message CardBanksRow {
@@ -421,6 +471,7 @@ message CardBanksRow {
   string created_at = 6;
   string updated_at = 7;
   string deleted_at = 8;
+  int64 version = 9;
 }
 
 message CardTariffsRow {
@@ -437,6 +488,7 @@ message CardTariffsRow {
   string created_at = 11;
   string updated_at = 12;
   string deleted_at = 13;
+  int64 version = 14;
 }
 
 message BlacklistsRow {
@@ -448,6 +500,7 @@ message BlacklistsRow {
   string created_at = 6;
   string updated_at = 7;
   string deleted_at = 8;
+  int64 version = 9;
 }
 
 message UserBenefitsRow {
@@ -460,6 +513,7 @@ message UserBenefitsRow {
   string created_at = 7;
   string updated_at = 8;
   string deleted_at = 9;
+  int64 version = 10;
 }
 
 message TariffRatesRow {
@@ -474,6 +528,7 @@ message TariffRatesRow {
   string created_at = 9;
   string updated_at = 10;
   string deleted_at = 11;
+  int64 version = 12;
 }
 
 message TidsRow {
@@ -487,6 +542,7 @@ message TidsRow {
   string created_at = 8;
   string updated_at = 9;
   string deleted_at = 10;
+  int64 version = 11;
 }
 
 // Один дельта-чанк: записи из разных таблиц + метаданные чанка.
@@ -532,6 +588,7 @@ message DeltaChunk {
   repeated UserBenefitsRow asop_user_benefits = 39;
   repeated TariffRatesRow asop_tariff_rates = 40;
   repeated TidsRow asop_tids = 41;
+  repeated CardsDistributorsRow asop_cards_distributors = 42;
   int32 chunk_index = 90;
   int32 total_chunks = 91;
   string event_id = 92;
@@ -554,6 +611,7 @@ message BenefitsFile { repeated BenefitsRow rows = 1; }
 message BenefitStepsFile { repeated BenefitStepsRow rows = 1; }
 message CarriersFile { repeated CarriersRow rows = 1; }
 message ContractsFile { repeated ContractsRow rows = 1; }
+message CardsDistributorsFile { repeated CardsDistributorsRow rows = 1; }
 message ContractRoutesFile { repeated ContractRoutesRow rows = 1; }
 message VehicleTypesFile { repeated VehicleTypesRow rows = 1; }
 message VehicleModelsFile { repeated VehicleModelsRow rows = 1; }

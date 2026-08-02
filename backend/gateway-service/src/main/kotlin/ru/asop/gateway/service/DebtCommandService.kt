@@ -13,6 +13,7 @@ import ru.asop.common.util.UuidUtils
 import ru.asop.kafka.events.debt.DebtCreatedEvent
 import ru.asop.kafka.events.debt.DebtRecoveredEvent
 import ru.asop.api.debt.dto.request.DebtCreateRequest
+import ru.asop.api.debt.dto.request.DebtRecoverRequest
 import java.security.Principal
 import java.time.Instant
 import java.util.UUID
@@ -23,6 +24,12 @@ class DebtCommandService(
     private val eventService: EventService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+
+    private fun ProducerRecord<String, Any>.addContext(regionId: UUID?, carrierId: UUID?, timezone: String?) {
+        headers().add("X-Carrier-Id", carrierId?.toString()?.encodeToByteArray())
+        headers().add("X-Region-Id", regionId?.toString()?.encodeToByteArray())
+        headers().add("X-Timezone", timezone?.encodeToByteArray())
+    }
 
     fun create(request: DebtCreateRequest, principal: Principal?): Mono<UUID> {
         return Mono.fromCallable {
@@ -52,6 +59,7 @@ class DebtCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.carrierId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.DEBT_COMMANDS)
                 .then(kafkaTemplate.send(record))
@@ -69,7 +77,7 @@ class DebtCommandService(
         }
     }
 
-    fun recoverDebt(id: UUID, principal: Principal?): Mono<UUID> {
+    fun recoverDebt(id: UUID, request: DebtRecoverRequest, principal: Principal?): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val correlationId = UuidUtils.newId()
@@ -90,6 +98,7 @@ class DebtCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.carrierId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.DEBT_COMMANDS)
                 .then(kafkaTemplate.send(record))

@@ -13,12 +13,9 @@ interface SyncMetaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(meta: SyncMetaEntity)
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertAll(rows: List<SyncMetaEntity>)
+    @Query("SELECT * FROM sync_meta WHERE id = 0")
+    suspend fun get(): SyncMetaEntity?
 
-    @Query("SELECT * FROM sync_meta")
-    suspend fun getAll(): List<SyncMetaEntity>
-
-    @Query("SELECT * FROM sync_meta")
-    fun observeAll(): Flow<List<SyncMetaEntity>>
+    @Query("SELECT * FROM sync_meta WHERE id = 0")
+    fun observe(): Flow<SyncMetaEntity?>
 }

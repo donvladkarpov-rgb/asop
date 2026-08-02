@@ -23,6 +23,12 @@ class AuditCommandService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    private fun ProducerRecord<String, Any>.addContext(regionId: UUID?, carrierId: UUID?, timezone: String?) {
+        headers().add("X-Carrier-Id", carrierId?.toString()?.encodeToByteArray())
+        headers().add("X-Region-Id", regionId?.toString()?.encodeToByteArray())
+        headers().add("X-Timezone", timezone?.encodeToByteArray())
+    }
+
     fun createTask(request: AuditTaskCreateRequest, principal: Principal?): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
@@ -46,6 +52,7 @@ class AuditCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.carrierId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.AUDIT_COMMANDS)
                 .then(kafkaTemplate.send(record))

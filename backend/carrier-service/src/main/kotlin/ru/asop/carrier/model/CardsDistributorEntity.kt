@@ -17,5 +17,6 @@ data class CardsDistributorEntity(
     val isActive: Boolean = true,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val deletedAt: Instant? = null
+    val deletedAt: Instant? = null,
+    val version: Long? = null
 )

@@ -5,7 +5,7 @@
 Проект **ASOP** — платформа оплаты проезда. Монорепо в `/home/vlad/IdeaProjects/asop`. Backend — Kotlin 2.0.21 + Spring Boot 3.3.5 (WebFlux, R2DBC), Kafka, Redis, MinIO, PostgreSQL.
 
 **Важно: этот промпт выполняется строго ПОСЛЕ `prompt_003_02.md`.** К этому моменту:
-- в БД у всех 41 дельта-таблиц есть колонка `VERSION BIGINT` из глобального sequence `asop_delta_version_seq` (уникальные возрастающие значения, триггер `trg_delta_version_*` на INSERT/UPDATE);
+- в БД у всех 42 дельта-таблицы есть колонка `VERSION BIGINT` из глобального sequence `asop_delta_version_seq` (уникальные возрастающие значения, триггер `trg_delta_version_*` на INSERT/UPDATE);
 - мастера (admin 8091, carrier 8087, route 8092, user 8082, card 8086) принимают `versionSince: Long?` вместо `updatedAtSince` и сортируют `version ASC`;
 - `DeltaSyncCommand` содержит `lastVersion: Long?` (единый глобальный watermark) вместо `lastUpdatedAt: Map<String, Instant>`;
 - в JSON ответов мастеров у каждой строки присутствует ключ `version` (число).

@@ -13,7 +13,6 @@ import ru.asop.api.reference.dto.request.ServiceUpdateRequest
 import ru.asop.api.reference.dto.response.ServiceResponse
 import ru.asop.common.util.UuidUtils
 import java.util.UUID
-import java.time.Instant
 import reactor.core.publisher.Flux
 import org.springframework.data.domain.Sort
 import org.springframework.data.relational.core.query.Criteria
@@ -83,13 +82,13 @@ class ServiceController(
     @GetMapping("/delta")
     fun listDelta(
         @RequestParam(required = false) regionId: java.util.UUID?,
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<ServiceEntity> {
         val extra = regionId?.let { Criteria.where("region_id").`is`(it) }
         return template.select(ServiceEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit, extra))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit, extra))
             .all()
     }
 }

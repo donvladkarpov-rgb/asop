@@ -18,5 +18,9 @@ data class DebtCreateRequest(
 
     val terminalId: UUID? = null,
 
-    val sessionId: UUID? = null
+    val sessionId: UUID? = null,
+
+    val regionId: UUID? = null,
+
+    val timezone: String? = null
 )

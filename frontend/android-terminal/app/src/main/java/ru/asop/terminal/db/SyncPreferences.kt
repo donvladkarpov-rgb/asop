@@ -18,6 +18,9 @@ class SyncPreferences(private val context: Context) {
         private val KEY_CURRENT_SESSION_ID = stringPreferencesKey("current_session_id")
         private val KEY_SYNC_ENABLED = booleanPreferencesKey("sync_enabled")
         private val KEY_TERMINAL_ID = stringPreferencesKey("terminal_id")
+        private val KEY_CARRIER_ID = stringPreferencesKey("carrier_id")
+        private val KEY_REGION_ID = stringPreferencesKey("region_id")
+        private val KEY_TIMEZONE = stringPreferencesKey("timezone")
     }
 
     val lastSyncTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
@@ -34,6 +37,18 @@ class SyncPreferences(private val context: Context) {
 
     val terminalId: Flow<String?> = context.syncDataStore.data.map { prefs ->
         prefs[KEY_TERMINAL_ID]
+    }
+
+    val carrierId: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_CARRIER_ID]
+    }
+
+    val regionId: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_REGION_ID]
+    }
+
+    val timezone: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_TIMEZONE]
     }
 
     suspend fun setLastSyncTime(time: Long) {
@@ -58,6 +73,27 @@ class SyncPreferences(private val context: Context) {
     suspend fun setTerminalId(id: String) {
         context.syncDataStore.edit { prefs ->
             prefs[KEY_TERMINAL_ID] = id
+        }
+    }
+
+    suspend fun setCarrierId(id: String?) {
+        context.syncDataStore.edit { prefs ->
+            if (id != null) prefs[KEY_CARRIER_ID] = id
+            else prefs.remove(KEY_CARRIER_ID)
+        }
+    }
+
+    suspend fun setRegionId(id: String?) {
+        context.syncDataStore.edit { prefs ->
+            if (id != null) prefs[KEY_REGION_ID] = id
+            else prefs.remove(KEY_REGION_ID)
+        }
+    }
+
+    suspend fun setTimezone(tz: String?) {
+        context.syncDataStore.edit { prefs ->
+            if (tz != null) prefs[KEY_TIMEZONE] = tz
+            else prefs.remove(KEY_TIMEZONE)
         }
     }
 }

@@ -23,5 +23,11 @@ data class TransactionCompleteRequest(
 
     val cardId: UUID? = null,
 
-    val metadata: String? = null
+    val metadata: String? = null,
+
+    val regionId: UUID? = null,
+
+    val carrierId: UUID? = null,
+
+    val timezone: String? = null
 )

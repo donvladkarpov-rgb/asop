@@ -13,7 +13,6 @@ import ru.asop.api.reference.dto.request.TariffTypeUpdateRequest
 import ru.asop.api.reference.dto.response.TariffTypeResponse
 import ru.asop.common.util.UuidUtils
 import java.util.UUID
-import java.time.Instant
 import reactor.core.publisher.Flux
 import org.springframework.data.domain.Sort
 import org.springframework.data.relational.core.query.Criteria
@@ -79,12 +78,12 @@ class TariffTypeController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<TariffTypeEntity> {
         return template.select(TariffTypeEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
             .all()
     }
 }

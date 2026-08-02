@@ -11,7 +11,6 @@ import ru.asop.api.user.controller.UserRegionApi
 import ru.asop.api.user.dto.request.UserRegionCreateRequest
 import ru.asop.api.user.dto.response.UserRegionResponse
 import ru.asop.user.service.UserRegionService
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -47,26 +46,27 @@ class UserRegionController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean?,
         @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
         val conditions = mutableListOf<String>()
-        if (updatedAtSince != null) conditions += "updated_at > :since"
+        if (versionSince != null) conditions += "version > :since"
         if (includeDeleted != true) conditions += "deleted_at IS NULL"
         if (regionId != null) conditions += "region_id = :regionId"
         val where = if (conditions.isEmpty()) "" else " WHERE ${conditions.joinToString(" AND ")}"
         val sql = """
             SELECT user_id AS "userId", region_id AS "regionId",
-                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
+                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt",
+                   version AS "version"
             FROM ASOP_USER_REGIONS$where
-            ORDER BY updated_at ASC
+            ORDER BY version ASC
             LIMIT :limit
         """.trimIndent()
         var spec = db.sql(sql)
-        if (updatedAtSince != null) spec = spec.bind("since", updatedAtSince)
+        if (versionSince != null) spec = spec.bind("since", versionSince)
         if (regionId != null) spec = spec.bind("regionId", regionId)
         return spec.bind("limit", limit).fetch().all()
     }

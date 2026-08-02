@@ -7,5 +7,11 @@ data class CardRegisterRequest(
     @field:NotNull
     val cardTypeId: UUID,
 
-    val userId: UUID? = null
+    val userId: UUID? = null,
+
+    val regionId: UUID? = null,
+
+    val carrierId: UUID? = null,
+
+    val timezone: String? = null
 )

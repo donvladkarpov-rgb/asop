@@ -25,6 +25,11 @@ class SessionCommandService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    private fun ProducerRecord<String, Any>.addContext(regionId: UUID?, timezone: String?) {
+        headers().add("X-Region-Id", regionId?.toString()?.encodeToByteArray())
+        headers().add("X-Timezone", timezone?.encodeToByteArray())
+    }
+
     fun openSession(request: SessionOpenRequest, principal: Principal?): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
@@ -50,6 +55,7 @@ class SessionCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
                 .then(kafkaTemplate.send(record))
@@ -88,6 +94,7 @@ class SessionCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
                 .then(kafkaTemplate.send(record))

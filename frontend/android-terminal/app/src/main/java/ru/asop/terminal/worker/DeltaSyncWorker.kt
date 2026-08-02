@@ -41,10 +41,12 @@ class DeltaSyncWorker @AssistedInject constructor(
         if (deltaSyncJobDao.getPending().isNotEmpty()) return Result.success()
 
         try {
-            val lastUpdatedAt = syncMetaDao.getAll()
-                .associate { it.tableName to (it.lastUpdatedAt ?: "") }
-                .filterValues { it.isNotBlank() }
-            val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastUpdatedAt))
+            val lastVersion = syncMetaDao.get()?.lastVersion
+            val carrierId = syncPreferences.carrierId.first()
+            val regionId = syncPreferences.regionId.first()
+            val response = gatewayApi.deltaSync(
+                DeltaSyncRequest(terminalId, carrierId, regionId, lastVersion)
+            )
 
             if (!response.isSuccessful) {
                 Log.w(TAG, "DeltaSync rejected: HTTP ${response.code()}")
@@ -58,7 +60,7 @@ class DeltaSyncWorker @AssistedInject constructor(
                     requestedAt = System.currentTimeMillis()
                 )
             )
-            Log.d(TAG, "Delta requested: eventId=$eventId, tables=${lastUpdatedAt.size}")
+            Log.d(TAG, "Delta requested: eventId=$eventId, lastVersion=$lastVersion")
             return Result.success()
         } catch (e: Exception) {
             Log.w(TAG, "Delta request failed: ${e.message}")

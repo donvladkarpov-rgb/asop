@@ -16,7 +16,6 @@ import ru.asop.carrier.config.DeltaSupport
 import ru.asop.carrier.model.CarrierEntity
 import ru.asop.carrier.service.CarrierService
 import java.security.Principal
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -56,7 +55,7 @@ class CarrierController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
@@ -64,9 +63,9 @@ class CarrierController(
         val extra = mutableListOf<Criteria>()
         regionId?.let { extra += Criteria.where("region_id").`is`(it) }
         val query = if (extra.isEmpty()) {
-            DeltaSupport.query(updatedAtSince, includeDeleted, limit)
+            DeltaSupport.query(versionSince, includeDeleted, limit)
         } else {
-            DeltaSupport.query(updatedAtSince, includeDeleted, limit, Criteria.from(extra))
+            DeltaSupport.query(versionSince, includeDeleted, limit, Criteria.from(extra))
         }
         return template.select(CarrierEntity::class.java)
             .matching(query)

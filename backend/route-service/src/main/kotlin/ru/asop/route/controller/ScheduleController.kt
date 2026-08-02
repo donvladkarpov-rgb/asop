@@ -12,7 +12,6 @@ import ru.asop.api.route.dto.response.ScheduleResponse
 import ru.asop.route.repository.GenericRouteRepository
 import ru.asop.route.repository.RouteTableRegistry
 import ru.asop.route.service.ScheduleService
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -23,14 +22,14 @@ class ScheduleController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
         val info = RouteTableRegistry.resolve("schedule") ?: return Flux.empty()
-        return repository.findDelta(info, updatedAtSince, includeDeleted == true, regionId, carrierId, limit)
+        return repository.findDelta(info, versionSince, includeDeleted == true, regionId, carrierId, limit)
     }
 
 

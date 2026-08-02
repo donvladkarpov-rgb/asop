@@ -26,5 +26,6 @@ data class CardMifareEntity(
     val lastAuthTerminal: UUID? = null,
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now(),
-    val deletedAt: Instant? = null
+    val deletedAt: Instant? = null,
+    val version: Long? = null
 )

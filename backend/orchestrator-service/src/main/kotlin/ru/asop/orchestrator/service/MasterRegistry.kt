@@ -67,7 +67,9 @@ class MasterRegistry {
             "asop_transaction_types" to admin("transaction-types"),
             "asop_transaction_results" to admin("transaction-results"),
             "asop_vehicle_types" to route("vehicle-types"),
-            "asop_vehicle_models" to route("vehicle-models")
+            "asop_vehicle_models" to route("vehicle-models"),
+            // tariff-rates в card-service НЕ фильтруется по userIdsIn (SQL без фильтра)
+            "asop_tariff_rates" to card("tariff-rates")
         )
 
         // Пользовательские таблицы (user-service): фильтр по carrierId/regionId каскадом
@@ -82,8 +84,7 @@ class MasterRegistry {
             "asop_card_banks" to card("card-banks"),
             "asop_card_tariffs" to card("card-tariffs"),
             "asop_blacklists" to card("blacklists"),
-            "asop_user_benefits" to card("user-benefits"),
-            "asop_tariff_rates" to card("tariff-rates")
+            "asop_user_benefits" to card("user-benefits")
         )
 
         val ALL: Map<String, MasterEndpoint> = FILTERED_TABLES + GLOBAL_TABLES + USER_TABLES + CARD_TABLES

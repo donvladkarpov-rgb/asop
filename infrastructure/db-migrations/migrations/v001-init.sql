@@ -1591,9 +1591,16 @@ ON CONFLICT (ROLE_ID) DO NOTHING;
 --     в soft-delete (UPDATED_AT = DELETED_AT = now()).
 --     Полная выгрузка мастерами = запрос WITH DELETED_AT IS NULL.
 --     Purge-job переключает session_replication_role='replica'
---     (user asop поднят до SUPERUSER в postgres-superuser.sql) для
---     физического удаления.
+--     (asop — SUPERUSER) для физического удаления.
+--     Дельта-курсор — VERSION BIGINT из глобального sequence:
+--     триггер проставляет уникальное возрастающее значение
+--     на INSERT и UPDATE (даже в одном bulk-INSERT), что даёт
+--     корректную keyset-пагинацию. UPDATED_AT остаётся
+--     диагностическим полем.
 -- ============================================================
+
+-- Глобальный sequence для дельта-версионирования (курсор VERSION)
+CREATE SEQUENCE IF NOT EXISTS asop_delta_version_seq;
 
 DO $body$
 DECLARE
@@ -1615,6 +1622,12 @@ BEGIN
         EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW()', _t);
         EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW()', _t);
         EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS DELETED_AT TIMESTAMPTZ', _t);
+        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS VERSION BIGINT', _t);
+        -- Колонки могут существовать из базового CREATE TABLE без DEFAULT (например
+        -- ASOP_BENEFITS.CREATED_AT). Проставляем дефолт, чтобы seed-скрипты могли
+        -- не указывать CREATED_AT/UPDATED_AT (trg_touch_updated всё равно перезапишет).
+        EXECUTE format('ALTER TABLE %I ALTER COLUMN CREATED_AT SET DEFAULT NOW()', _t);
+        EXECUTE format('ALTER TABLE %I ALTER COLUMN UPDATED_AT SET DEFAULT NOW()', _t);
     END LOOP;
 END;
 $body$;
@@ -1763,7 +1776,43 @@ BEGIN
         'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
         'asop_tids'] LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS trg_touch_updated_%s ON %I', _t, _t);
-        EXECUTE format('CREATE TRIGGER trg_touch_updated_%s BEFORE UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated()',
+        EXECUTE format('CREATE TRIGGER trg_touch_updated_%s BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated()',
+                       _t, _t);
+    END LOOP;
+END;
+$body$;
+
+-- Generic VERSION trigger: INSERT/UPDATE → VERSION = nextval(sequence).
+-- Значение, переданное приложением, игнорируется. Уникальные возрастающие
+-- значения даже внутри одного bulk-INSERT — ключ для keyset-пагинации.
+CREATE OR REPLACE FUNCTION trg_fn_delta_version()
+RETURNS TRIGGER AS $body$
+BEGIN
+    NEW.version := nextval('asop_delta_version_seq');
+    RETURN NEW;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- VERSION-триггеры на все таблицы дельта-справочников (после touch-триггера)
+DO $body$
+DECLARE
+    _t TEXT;
+BEGIN
+    FOREACH _t IN ARRAY ARRAY[
+        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
+        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
+        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
+        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
+        'asop_cards_distributors',
+        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
+        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
+        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
+        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
+        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
+        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
+        'asop_tids'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS trg_delta_version_%s ON %I', _t, _t);
+        EXECUTE format('CREATE TRIGGER trg_delta_version_%s BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version()',
                        _t, _t);
     END LOOP;
 END;

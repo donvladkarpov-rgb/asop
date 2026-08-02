@@ -12,7 +12,7 @@ import androidx.room.Index
 @Entity(
     tableName = "reference_rows",
     primaryKeys = ["table_name", "row_id"],
-    indices = [Index("table_name"), Index("updated_at"), Index("deleted_at")]
+    indices = [Index("table_name"), Index("updated_at"), Index("deleted_at"), Index("version")]
 )
 data class ReferenceRowEntity(
     @ColumnInfo(name = "table_name")
@@ -24,5 +24,7 @@ data class ReferenceRowEntity(
     @ColumnInfo(name = "updated_at")
     val updatedAt: String? = null,
     @ColumnInfo(name = "deleted_at")
-    val deletedAt: String? = null
+    val deletedAt: String? = null,
+    @ColumnInfo(name = "version")
+    val version: Long? = null
 )

@@ -21,15 +21,15 @@ class DeltaCommandService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    fun publishDelta(request: DeltaSyncRequest, context: TerminalContext): Mono<UUID> {
+    fun publishDelta(request: DeltaSyncRequest): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val command = DeltaSyncCommand(
                 eventId = eventId,
                 terminalId = request.terminalId,
-                carrierId = context.carrierId,
-                regionId = context.regionId,
-                lastUpdatedAt = request.lastUpdatedAt
+                carrierId = request.carrierId,
+                regionId = request.regionId,
+                lastVersion = request.lastVersion
             )
             eventId to command
         }.flatMap { (eventId, command) ->
@@ -44,8 +44,8 @@ class DeltaCommandService(
                 .then(kafkaTemplate.send(record))
                 .doOnSuccess { result ->
                     log.info(
-                        "DeltaSyncCommand sent: eventId={}, terminalId={}, tables={}, partition={}, offset={}",
-                        eventId, request.terminalId, request.lastUpdatedAt.size,
+                        "DeltaSyncCommand sent: eventId={}, terminalId={}, lastVersion={}, partition={}, offset={}",
+                        eventId, request.terminalId, request.lastVersion,
                         result.recordMetadata().partition(), result.recordMetadata().offset()
                     )
                 }
@@ -57,14 +57,14 @@ class DeltaCommandService(
         }
     }
 
-    fun publishFull(request: FullSyncRequest, context: TerminalContext): Mono<UUID> {
+    fun publishFull(request: FullSyncRequest): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val command = FullSyncCommand(
                 eventId = eventId,
                 terminalId = request.terminalId,
-                carrierId = context.carrierId,
-                regionId = context.regionId
+                carrierId = request.carrierId,
+                regionId = request.regionId
             )
             eventId to command
         }.flatMap { (eventId, command) ->

@@ -6,7 +6,6 @@ import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import ru.asop.card.model.CardMifareEntity
 import ru.asop.card.repository.CardMifareRepository
-import java.time.Instant
 
 @RestController
 class CardMifareController(
@@ -16,8 +15,8 @@ class CardMifareController(
     @GetMapping("/api/v1/card-mifares/delta")
     fun listDelta(
         @RequestParam(required = false) userIdsIn: String?,
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false, defaultValue = "false") includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
-    ): Flux<CardMifareEntity> = repository.findDelta(userIdsIn, updatedAtSince, includeDeleted, limit)
+    ): Flux<CardMifareEntity> = repository.findDelta(userIdsIn, versionSince, includeDeleted, limit)
 }

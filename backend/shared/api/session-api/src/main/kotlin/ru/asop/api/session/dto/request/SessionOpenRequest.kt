@@ -13,5 +13,9 @@ data class SessionOpenRequest(
 
     val pathId: UUID? = null,
 
-    val vehicleId: UUID? = null
+    val vehicleId: UUID? = null,
+
+    val regionId: UUID? = null,
+
+    val timezone: String? = null
 )

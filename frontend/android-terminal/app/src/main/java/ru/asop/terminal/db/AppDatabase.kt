@@ -24,7 +24,7 @@ import ru.asop.terminal.db.entity.TransactionEntity
         DeltaSyncJobEntity::class,
         ReferenceRowEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -34,4 +34,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncMetaDao(): SyncMetaDao
     abstract fun deltaSyncJobDao(): DeltaSyncJobDao
     abstract fun referenceRowDao(): ReferenceRowDao
+
+    companion object {
+        @Volatile
+        var instance: AppDatabase? = null
+    }
 }

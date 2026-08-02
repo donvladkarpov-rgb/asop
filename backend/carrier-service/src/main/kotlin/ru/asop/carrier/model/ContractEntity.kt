@@ -20,5 +20,6 @@ data class ContractEntity(
     val attributes: String? = null,
     val createdAt: Instant,
     val updatedAt: Instant,
-    val deletedAt: Instant? = null
+    val deletedAt: Instant? = null,
+    val version: Long? = null
 )

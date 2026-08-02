@@ -9,6 +9,7 @@ data class TerminalRegisterRequest(
     @Json(name = "terminalNumber") val terminalNumber: String? = null,
     @Json(name = "terminalModel") val terminalModel: String? = null,
     @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "timezone") val timezone: String? = null,
     @Json(name = "terminalId") val terminalId: String? = null
 )

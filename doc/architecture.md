@@ -101,7 +101,7 @@ backend/shared/api/{name}-api/
 
 ## 3. Архитектура Gateway
 
-**Основной принцип:** Gateway не пишет в БД. Валидирует аутентификацию, пушит команды в Kafka, возвращает `202 Accepted`.
+**Основной принцип:** Gateway не пишет в БД. Выполняет только авторизацию/аутентификацию/проксирование — бизнес-логики в gateway нет. Терминал сам передаёт business context (`carrierId`, `regionId`, `timezone`) в теле запроса, gateway пробрасывает его в Kafka headers (`X-Carrier-Id`, `X-Region-Id`, `X-Timezone`) — по аналогии с `X-Event-Id`/`X-Keycloak-Id`.
 
 ### Паттерны маршрутизации
 
@@ -380,16 +380,20 @@ CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 
 ## 8.1. Delta Sync (инкрементальная дельта-синхронизация справочников)
 
-Оркестратор `orchestrator-service` (порт 8094) — новый микросервис: читает Kafka `asop.delta.commands` / `asop.delta.full.commands`, опрашивает мастер-сервисы через REST `/delta`, чанкует по 50 КБ (Protobuf `serializedSize`), пишет чанки в Redis, заливает ZIP в MinIO. `PurgeJob` физически удаляет soft-deleted строки старше 6 месяцев (раз в час, `SET session_replication_role='replica'`). Полный поток:
+Оркестратор `orchestrator-service` (порт 8094) — новый микросервис: читает Kafka `asop.delta.commands` / `asop.delta.full.commands`, опрашивает мастер-сервисы через REST `/delta` (keyset-пагинация по `versionSince`), чанкует по 50 КБ (Protobuf `serializedSize`), пишет чанки в Redis, заливает ZIP в MinIO. `PurgeJob` физически удаляет soft-deleted строки старше 6 месяцев (раз в час, `SET session_replication_role='replica'`). Полный поток:
 
 ```
-Android → POST /sync/references/delta → 202 + X-Event-Id
+Android → POST /sync/references/delta (body: terminalId, lastVersion) → 202 + X-Event-Id
        → Gateway → Kafka asop.delta.commands
-       → orchestrator → REST /delta к мастер-сервисам → Protobuf → чанки 50КБ → Redis
+       → orchestrator → REST /delta к мастер-сервисам (versionSince, keyset) → Protobuf → чанки 50КБ → Redis
        → EventService.complete(eventId, {totalChunks,totalBytes})
        → Android → GET /events/{eventId} → COMPLETED → GET /sync/references/{eventId}/chunks/{n}
        → ReferenceSyncStore.applyChunk → Room reference_rows (атомарно) + sync_meta watermark
 ```
+
+**VERSION-курсор**: все ~42 справочные таблицы имеют `VERSION BIGINT` — глобальный монотонный sequence `asop_delta_version_seq` (`trg_fn_assign_version()` присваивает `nextval(...)` на INSERT/UPDATE/DELETE). Дельта-фильтр — `VERSION > versionSince`, сортировка `ORDER BY VERSION ASC` (стабильная keyset-пагинация, не зависит от таймзоны/изменения часов, в отличие от `UPDATED_AT`). `UPDATED_AT` остаётся для аудита и soft-delete.
+
+`userIdsIn`-фильтр для user/card таблиц: URL ограничен ~4 КБ (Reactor Netty `max-initial-line-length`) → оркестратор шлёт userIds батчами по 80 (`USER_IDS_BATCH`) и объединяет результат.
 
 Soft-delete: все ~42 справочные таблицы имеют `DELETED_AT TIMESTAMPTZ` + `BEFORE DELETE` триггер (generic `trg_fn_soft_delete()` для single-PK, `trg_fn_soft_delete_2col()` для composite-PK). DELETE превращается в `UPDATE DELETED_AT = NOW(), UPDATED_AT = NOW()` и возвращает NULL. `trg_fn_touch_updated()` авто-pristine проставляет `UPDATED_AT` на UPDATE.
 
@@ -434,24 +438,25 @@ Soft-delete: все ~42 справочные таблицы имеют `DELETED_
 **Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
 
 **Компоненты:**
-- `AppDatabase` (Room): 3 сущности — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` + 3 DAOs
-- `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
+- `AppDatabase` (Room, version 3): 6 сущностей — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` (write-команды) + `SyncMetaEntity`, `DeltaSyncJobEntity`, `ReferenceRowEntity` (справочники). `ReferenceRowEntity` — generic-таблица `reference_rows` (tableName, rowId, payloadJson, updatedAt, deletedAt), composite PK `(table_name, row_id)`. `fallbackToDestructiveMigration()`.
+- `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime, lastVersion (VERSION-курсор)
 - `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
 - `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}` + `GET /api/v1/regions` + `GET /api/v1/carriers?regionId=...` (sync-proxy через gateway, `permitAll` для mTLS-терминала) + `PUT /api/v1/terminals/{id}/carrier`
 - `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
 - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
+- `DeltaSyncWorker`: дельта-запрос справочников (1 час periodic, one-shot) → `POST /sync/references/delta` (body: terminalId, lastVersion) → `DeltaSyncJobEntity` PENDING
+- `DeltaChunkPollWorker`: polling COMPLETED дельта-заданий (5 min periodic), качает чанки → `ReferenceSyncStore.applyChunk` (атомарный накат + MAX VERSION в sync_meta)
+- `FullDumpDownloadWorker`: полная выкачка (one-shot), поллит событие → ZIP по `s3Url` → `.pb` → `applyFile`
+- `ReferenceSyncStore`: парсинг protobuf (`ru.asop.proto.v1.*File`), `applyChunk`/`applyFile`, `db.withTransaction` + sync_meta
+- `WorkScheduler`: периодические DeltaSync 60м + DeltaChunkPoll 5м, one-shot delta, `enqueueFullDump`
 - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
 - `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
 - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store. `terminalSerial` = `Settings.Secure.ANDROID_ID`.
 - `MtlsManager.resetKeyAndCert()`: чистит alias AndroidKeyStore + SharedPreferences — для принудительного перевыпуска сертификата через drawer-меню "Сертификат".
 - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
-- `WorkScheduler`: schedulePeriodicSync вызывается из `AsopTerminalApp.onCreate`
+- `ContentProvider` (`ru.asop.terminal.provider`): экспортирует `reference_rows`/`sync_meta` наружу (permission `ru.asop.terminal.provider.READ`) — читается приложением `android-test` для сверки дельта-синка.
 
-**Drawer-меню (`ModalNavigationDrawer`)** — hamburger-иконка в TopAppBar, открывает панель со тремя пунктами: "Сертификат" (диалог перевыпуска), "Регистрация" (`RegistrationScreen`), "Привязать перевозчика" (`AssignCarrierScreen`). Все три экрана доступны перманентно; `TerminalNavHost` обёрнут в `ModalNavigationDrawer`+`Scaffold`, добавлен route `assign-carrier`.
-
-**Регистрация (RegistrationScreen)** — пользователь выбирает: регион (dropdown из `GET /api/v1/regions`) → перевозчика (dropdown из `GET /api/v1/carriers?regionId=...`, фильтр по региону) → timezone (read-only, `TimeZone.getDefault().id`) → модель (опц.) → инвентарный номер (обяз.). Запрос `TerminalRegisterRequest` содержит `terminalSerial` (ANDROID_ID), `carrierId`, `timezone`, `terminalId` (если уже зарегистрирован). Кнопка дизейблится пока не выбраны region/carrier/inventory.
-
-**Привязка перевозчика (AssignCarrierScreen)** — dropdown регион → dropdown перевозчик (filter по regionId, текущий пред-выбран) → кнопка "Сохранить" → `PUT /api/v1/terminals/{id}/carrier` (`TerminalCarrierAssignRequest { carrierId }`, null = отвязать). Отображает timezone устройства read-only.
+**Drawer-меню (`ModalNavigationDrawer`)** — hamburger-иконка в TopAppBar, открывает панель с пунктами: "Сертификат" (диалог перевыпуска), "Регистрация" (`RegistrationScreen`, доступна всегда), "Привязать перевозчика" (`AssignCarrierScreen`), "Загрузить справочники" (AlertDialog с числом строк в `reference_rows` и активных дельта-заданий, кнопки «Дельта сейчас» и «Полная выкачка»), stub-пункты (зарегистрировать карту водителя, открыть/закрыть смену, открыть/закрыть рейс — placeholder, TODO). `TerminalNavHost` обёрнут в `ModalNavigationDrawer`+`Scaffold`, добавлены routes `assign-carrier`, `provisioning`, `registration`, `main`.
 
 **Sync flow:**
 ```
@@ -459,7 +464,20 @@ Offline:  UI → Room (PendingEvent PENDING)
           GPS → Room (PendingEvent PENDING)
 Online:   NetworkCallback → SyncWorker → POST /sync/** → 202 + eventId → SENDING
           EventPollWorker → GET /events/{eventId} → 200 COMPLETED / 422 FAILED
+
+Delta:    DeltaSyncWorker (60m) → POST /sync/references/delta (lastVersion) → DeltaSyncJob PENDING
+          DeltaChunkPollWorker (5m) → GET .../{eventId}/meta + /chunks/{n} → applyChunk → reference_rows + sync_meta
+Full:     FullDumpDownloadWorker → GET /events/{eventId} (10с×60) → ZIP по s3Url → applyFile
 ```
+
+### Android Test (`frontend/android-test/`)
+- Отдельное Android-приложение (Kotlin + Jetpack Compose, подписано тем же debug-ключом), НЕ содержит mTLS/SyncApi — только проверка результата синка через ContentProvider `android-terminal`.
+- Ethalon JSON (SQL-generated): `assets/expected-1.json` (коммитится, ~746 КБ), `expected-2.json` (~40 МБ) и `expected-all.json` (~47 МБ) — **gitignored**, регенерируются через `infrastructure/docker/generate-ethalon.sh` после каждого дельта-состояния БД.
+- Кнопки: «Тест дельта инкремента 1/2» (сверка `reference_rows` с expected-{1,2}.json), «Получить все данные» (сверка с expected-all.json). Сравнение в `EthalonChecker`: все поля кроме `created_at`/`updated_at`, канонизация (camelCase→snake_case, timestamps→epoch, proto3-дефолты).
+
+**Регистрация (RegistrationScreen)** — пользователь выбирает: регион (dropdown из `GET /api/v1/regions`) → перевозчика (dropdown из `GET /api/v1/carriers?regionId=...`, фильтр по региону) → timezone (read-only, `TimeZone.getDefault().id`) → модель (опц.) → инвентарный номер (обяз.). Запрос `TerminalRegisterRequest` содержит `terminalSerial` (ANDROID_ID), `carrierId`, `timezone`, `terminalId` (если уже зарегистрирован). Кнопка дизейблится пока не выбраны region/carrier/inventory.
+
+**Привязка перевозчика (AssignCarrierScreen)** — dropdown регион → dropdown перевозчик (filter по regionId, текущий пред-выбран) → кнопка "Сохранить" → `PUT /api/v1/terminals/{id}/carrier` (`TerminalCarrierAssignRequest { carrierId }`, null = отвязать). Отображает timezone устройства read-only.
 
 **Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
 

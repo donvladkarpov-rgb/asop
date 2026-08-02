@@ -14,7 +14,6 @@ import ru.asop.api.carrier.dto.response.CardsDistributorResponse
 import ru.asop.carrier.config.DeltaSupport
 import ru.asop.carrier.model.CardsDistributorEntity
 import ru.asop.carrier.service.CardsDistributorService
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -39,12 +38,12 @@ class CardsDistributorController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<CardsDistributorEntity> {
         return template.select(CardsDistributorEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
             .all()
     }
 }

@@ -13,5 +13,11 @@ data class FiscalReceiptRequest(
     @field:Positive
     val amount: BigDecimal,
 
-    val description: String? = null
+    val description: String? = null,
+
+    val regionId: UUID? = null,
+
+    val carrierId: UUID? = null,
+
+    val timezone: String? = null
 )

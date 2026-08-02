@@ -50,14 +50,26 @@ class FullSyncService(
         return Mono.defer {
             // userIds каскад
             val usersEp = MasterRegistry.USER_TABLES["asop_users"]!!
-            masterWebClient.get().uri { u ->
-                val b = u.path("/api/v1/admin-users/delta")
-                    .queryParam("includeDeleted", true)
-                    .queryParam("limit", 10_000)
-                command.carrierId?.let { b.queryParam("carrierId", it.toString()) }
-                command.regionId?.let { b.queryParam("regionId", it.toString()) }
-                b.build()
-            }.retrieve().bodyToFlux(JsonNode::class.java)
+            val usersPage: (Long?) -> Mono<List<JsonNode>> = { cursor ->
+                masterWebClient.get().uri { u ->
+                    val b = u.scheme("https")
+                        .host(usersEp.serviceHost)
+                        .port(usersEp.port)
+                        .path("/api/v1/admin-users/delta")
+                        .queryParam("includeDeleted", true)
+                        .queryParam("limit", LIMIT)
+                    command.carrierId?.let { b.queryParam("carrierId", it.toString()) }
+                    command.regionId?.let { b.queryParam("regionId", it.toString()) }
+                    cursor?.let { b.queryParam("versionSince", it.toString()) }
+                    b.build()
+                }.retrieve().bodyToFlux(JsonNode::class.java)
+                    .collectList()
+                    .onErrorResume { err ->
+                        log.warn("Full users fetch failed: {}", err.message)
+                        Mono.just(emptyList())
+                    }
+            }
+            fetchAllPages(null, usersPage)
                 .map { it.get("userId")?.asText() ?: it.get("user_id")?.asText() }
                 .filter { it != null }.map { it!! }
                 .collectList()
@@ -66,30 +78,57 @@ class FullSyncService(
                     // все таблицы
                     val tableRows = MasterRegistry.ALL.entries.map { (table, ep) ->
                         val isUserCard = MasterRegistry.USER_TABLES.containsKey(table) || MasterRegistry.CARD_TABLES.containsKey(table)
-                        val spec = if (table == "asop_users" || !isUserCard) {
+                        val pageFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
                             masterWebClient.get().uri { u ->
-                                val b = u.path("/api/v1/{resource}/delta")
+                                val b = u.scheme("https")
+                                    .host(ep.serviceHost)
+                                    .port(ep.port)
+                                    .path("/api/v1/{resource}/delta")
                                     .queryParam("includeDeleted", true)
-                                    .queryParam("limit", 10_000)
-                                command.carrierId?.let { b.queryParam("carrierId", it.toString()) }
-                                command.regionId?.let { b.queryParam("regionId", it.toString()) }
+                                    .queryParam("limit", LIMIT)
+                                if (table == "asop_users" || !isUserCard) {
+                                    command.carrierId?.let { b.queryParam("carrierId", it.toString()) }
+                                    command.regionId?.let { b.queryParam("regionId", it.toString()) }
+                                } else if (userIds.isNotEmpty()) {
+                                    b.queryParam("userIdsIn", userIds.joinToString(","))
+                                }
+                                cursor?.let { b.queryParam("versionSince", it.toString()) }
                                 b.build(ep.resource)
-                            }
-                        } else {
-                            masterWebClient.get().uri { u ->
-                                val b = u.path("/api/v1/{resource}/delta")
-                                    .queryParam("includeDeleted", true)
-                                    .queryParam("limit", 10_000)
-                                if (userIds.isNotEmpty()) b.queryParam("userIdsIn", userIds.joinToString(","))
-                                b.build(ep.resource)
-                            }
+                            }.retrieve().bodyToFlux(JsonNode::class.java)
+                                .collectList()
+                                .onErrorResume { err ->
+                                    log.warn("Full fetch failed for {}: {}", table, err.message)
+                                    Mono.just(emptyList())
+                                }
                         }
-                        table to spec.retrieve().bodyToFlux(JsonNode::class.java)
+                        val rowFlux = if (isUserCard && userIds.size > USER_IDS_BATCH) {
+                            reactor.core.publisher.Flux.fromIterable(userIds.toList().chunked(USER_IDS_BATCH))
+                                .concatMap { batch ->
+                                    val batchFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
+                                        masterWebClient.get().uri { u ->
+                                            val b = u.scheme("https")
+                                                .host(ep.serviceHost)
+                                                .port(ep.port)
+                                                .path("/api/v1/{resource}/delta")
+                                                .queryParam("includeDeleted", true)
+                                                .queryParam("limit", LIMIT)
+                                                .queryParam("userIdsIn", batch.joinToString(","))
+                                            cursor?.let { b.queryParam("versionSince", it.toString()) }
+                                            b.build(ep.resource)
+                                        }.retrieve().bodyToFlux(JsonNode::class.java)
+                                            .collectList()
+                                            .onErrorResume { err ->
+                                                log.warn("Full fetch failed for {} (userIdsIn batch): {}", table, err.message)
+                                                Mono.just(emptyList())
+                                            }
+                                    }
+                                    fetchAllPages(null, batchFetcher)
+                                }
+                        } else {
+                            fetchAllPages(null, pageFetcher)
+                        }
+                        table to rowFlux
                             .map { protoRowMapper.buildRowMessage(table, it) }
-                            .onErrorResume { err ->
-                                log.warn("Full fetch failed for {}: {}", table, err.message)
-                                reactor.core.publisher.Flux.empty<Message>()
-                            }
                     }
                     val tables = tableRows.map { it.first }
                     val fluxes = tableRows.map { it.second }
@@ -103,6 +142,27 @@ class FullSyncService(
                     }.next()
                 }
         }
+    }
+
+    /**
+     * Keyset-пагинация по VERSION. Страница размера [LIMIT] считается полной —
+     * берётся курсор `version` последней строки и запрашивается следующая страница
+     * (version > курсор). Пустая/усечённая страница (в т.ч. ошибка) — конец цикла.
+     */
+    private fun fetchAllPages(
+        initialVersionSince: Long?,
+        pageFetcher: (Long?) -> Mono<List<JsonNode>>
+    ): reactor.core.publisher.Flux<JsonNode> {
+        return pageFetcher(initialVersionSince)
+            .expand { page ->
+                if (page.size >= LIMIT) {
+                    val cursor = page.last().get("version")?.asLong()
+                    if (cursor != null) pageFetcher(cursor) else reactor.core.publisher.Mono.empty()
+                } else {
+                    reactor.core.publisher.Mono.empty()
+                }
+            }
+            .flatMapIterable { it }
     }
 
     private fun buildZip(files: Map<String, List<Message>>): ByteArray {
@@ -144,5 +204,11 @@ class FullSyncService(
 
     private fun camel(table: String): String {
         return table.split("_").drop(1).joinToString("") { it.capitalize() }
+    }
+
+    private companion object {
+        const val LIMIT = 10_000
+        // 80 UUID (~2.9 КБ URL) — надёжно ниже 4 КБ лимита Reactor Netty
+        const val USER_IDS_BATCH = 80
     }
 }

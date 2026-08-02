@@ -30,17 +30,16 @@ class ChunkingService(
     fun chunkBySize(entries: List<Pair<String, Message>>, maxBytes: Int = MAX_CHUNK_BYTES): List<DeltaChunk> {
         val chunks = mutableListOf<DeltaChunk>()
         val buffer = mutableListOf<Pair<String, Message>>()
+        var bufferBytes = 0
         for (entry in entries) {
-            buffer.add(entry)
-            val draft = toChunk(buffer, 0, 0, "")
-            if (draft.serializedSize > maxBytes) {
-                buffer.removeAt(buffer.size - 1)
-                if (buffer.isNotEmpty()) {
-                    chunks.add(toChunk(buffer, 0, 0, ""))
-                    buffer.clear()
-                }
-                buffer.add(entry)
+            val entryBytes = entry.second.serializedSize + 16 // tag + length overhead
+            if (buffer.isNotEmpty() && bufferBytes + entryBytes > maxBytes) {
+                chunks.add(toChunk(buffer, 0, 0, ""))
+                buffer.clear()
+                bufferBytes = 0
             }
+            buffer.add(entry)
+            bufferBytes += entryBytes
         }
         if (buffer.isNotEmpty()) {
             chunks.add(toChunk(buffer, 0, 0, ""))

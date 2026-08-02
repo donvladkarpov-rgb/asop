@@ -4,17 +4,21 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 /**
- * Запрос дельта-синхронизации. lastUpdatedAt: таблица → ISO-8601.
+ * Запрос дельта-синхронизации. lastVersion: глобальный VERSION-курсор (sequence).
  */
 @JsonClass(generateAdapter = true)
 data class DeltaSyncRequest(
     @Json(name = "terminalId") val terminalId: String,
-    @Json(name = "lastUpdatedAt") val lastUpdatedAt: Map<String, String> = emptyMap()
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "lastVersion") val lastVersion: Long? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class FullSyncRequest(
-    @Json(name = "terminalId") val terminalId: String
+    @Json(name = "terminalId") val terminalId: String,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null
 )
 
 @JsonClass(generateAdapter = true)

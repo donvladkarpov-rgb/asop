@@ -137,6 +137,7 @@ object AppModule {
         Room.databaseBuilder(context, AppDatabase::class.java, "asop_terminal.db")
             .fallbackToDestructiveMigration()
             .build()
+            .also { AppDatabase.instance = it }
 
     @Provides
     @Singleton

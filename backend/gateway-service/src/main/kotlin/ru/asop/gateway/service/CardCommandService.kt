@@ -25,6 +25,12 @@ class CardCommandService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
+    private fun ProducerRecord<String, Any>.addContext(regionId: UUID?, carrierId: UUID?, timezone: String?) {
+        headers().add("X-Carrier-Id", carrierId?.toString()?.encodeToByteArray())
+        headers().add("X-Region-Id", regionId?.toString()?.encodeToByteArray())
+        headers().add("X-Timezone", timezone?.encodeToByteArray())
+    }
+
     fun register(request: CardRegisterRequest, principal: Principal?): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
@@ -48,6 +54,7 @@ class CardCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.carrierId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.CARD_COMMANDS)
                 .then(kafkaTemplate.send(record))
@@ -86,6 +93,7 @@ class CardCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
+            record.addContext(request.regionId, request.carrierId, request.timezone)
 
             eventService.createPending(eventId, KafkaTopic.CARD_COMMANDS)
                 .then(kafkaTemplate.send(record))

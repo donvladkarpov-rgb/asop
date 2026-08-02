@@ -20,9 +20,6 @@ interface ReferenceRowDao {
         upsertAll(rows)
     }
 
-    @Query("SELECT MAX(updated_at) FROM reference_rows WHERE table_name = :tableName")
-    suspend fun getMaxUpdatedAt(tableName: String): String?
-
     @Query("SELECT * FROM reference_rows WHERE table_name = :tableName AND deleted_at IS NULL ORDER BY updated_at")
     fun observeTable(tableName: String): Flow<List<ReferenceRowEntity>>
 

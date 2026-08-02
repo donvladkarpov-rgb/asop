@@ -10,7 +10,6 @@ import ru.asop.admin.repository.EventTypeRepository
 import ru.asop.api.reference.controller.EventTypeApi
 import ru.asop.api.reference.dto.request.EventTypeCreateRequest
 import ru.asop.api.reference.dto.response.EventTypeResponse
-import java.time.Instant
 import reactor.core.publisher.Flux
 import org.springframework.data.domain.Sort
 import org.springframework.data.relational.core.query.Criteria
@@ -55,12 +54,12 @@ class EventTypeController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<EventTypeEntity> {
         return template.select(EventTypeEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
             .all()
     }
 }

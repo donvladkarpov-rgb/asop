@@ -97,6 +97,9 @@ class TerminalViewModel @Inject constructor(
                 )
                 val terminal = registerResponse.terminal
                 syncPreferences.setTerminalId(terminal.id)
+                syncPreferences.setCarrierId(carrierId)
+                syncPreferences.setRegionId(regionId)
+                syncPreferences.setTimezone(timezone)
                 _terminalInfo.value = terminal
                 _state.value = UiState.Registered(terminal)
             } catch (e: Exception) {

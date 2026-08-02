@@ -38,6 +38,7 @@
 | 1 | ASOP_BENEFIT_STEPS | admin-service | benefit-steps |
 | 2 | ASOP_CARRIERS | carrier-service | carriers |
 | 2 | ASOP_CONTRACTS | carrier-service | contracts |
+| 2 | ASOP_CARDS_DISTRIBUTORS | carrier-service | cards-distributors |
 | 2 | ASOP_CONTRACT_ROUTES | **route-service** | contract-routes |
 | 2 | ASOP_VEHICLE_TYPES | **route-service** | vehicle-types |
 | 2 | ASOP_VEHICLE_MODELS | **route-service** | vehicle-models |
@@ -232,7 +233,7 @@ data class FullSyncRequest(
 - Новые ключи: `KEY_CARRIER_ID = stringPreferencesKey("carrier_id")`, `KEY_REGION_ID = stringPreferencesKey("region_id")`, `KEY_TIMEZONE = stringPreferencesKey("timezone")`.
 - Flows: `carrierId: Flow<String?>`, `regionId: Flow<String?>`, `timezone: Flow<String?>`.
 - Setters: `setCarrierId(String?)`, `setRegionId(String?)`, `setTimezone(String?)`.
-- Заполняются при регистрации (из `RegistrationScreen` / `TerminalViewModel.registerTerminal`).
+- Заполняются при регистрации (из `RegistrationScreen` / `TerminalViewModel.registerTerminal`). **Таймзона определяется автоматически** (`TimeZone.getDefault().id`), пользователь может изменить выбор через dropdown на экране регистрации.
 
 #### A.7.3. Room — `SyncMetaEntity` → single-row (глобальный watermark)
 
@@ -272,14 +273,22 @@ val carrierId = syncPreferences.carrierId.first()
 val regionId = syncPreferences.regionId.first()
 val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, carrierId, regionId, lastVersion))
 ```
+**ВАЖНО:** `carrierId`/`regionId` читаются из `SyncPreferences` (ключи добавлены в A.7.2). Если значение `null` (терминал ещё не привязан к перевозчику) — передавать как есть (мастер вернёт данные без фильтра или пусто — по контракту).
 
-#### A.7.7. `DeltaChunkPollWorker.kt` / `FullDumpDownloadWorker.kt`
+#### A.7.7. `DeltaChunkPollWorker.kt` / `FullDumpDownloadWorker.kt` / `ReferenceSyncViewModel.kt`
 Согласовать с новым `SyncMetaEntity` (single-row) и `ReferenceRowEntity.version`. `DeltaSyncJobDao` — не трогать.
+- `FullDumpDownloadWorker.kt` — при вызове `fullSync(FullSyncRequest(terminalId))` **дополнить `carrierId`/`regionId` из `SyncPreferences`** (те же `.first()`-чтения, что в A.7.6):
+  ```kotlin
+  val carrierId = syncPreferences.carrierId.first()
+  val regionId = syncPreferences.regionId.first()
+  val response = gatewayApi.fullSync(FullSyncRequest(terminalId, carrierId, regionId))
+  ```
+- `ReferenceSyncViewModel.fullSync` (кнопка «Полная выкачка» в UI) — тот же паттерн: читать `carrierId`/`regionId` из `SyncPreferences` перед `gatewayApi.fullSync(...)`.
 
 #### A.7.8. TerminalRegisterRequest — terminal-api + gateway-api
 
 - `backend/shared/api/terminal-api/.../request/TerminalRegisterRequest.kt` — добавить `val regionId: UUID? = null` (timezone и carrierId уже есть).
-- `backend/shared/api/gateway-api/.../request/TerminalRegisterRequest.kt` — добавить `val regionId: UUID? = null` и `val timezone: String? = null` (carrierId уже есть, ни regionId ни timezone нет).
+- `backend/shared/api/gateway-api/.../request/TerminalRegisterRequest.kt` — **УДАЛИТЬ файл целиком.** Это мёртвый код: gateway-api DTO нигде не импортируется (проверено grep), `ProxyController` не десериализует тело (`BodyInserters.fromDataBuffers(request.body)` — сырой passthrough). Регистрацию валидирует terminal-api DTO. Проверить после удаления: `grep -rn "gateway.dto.request.TerminalRegisterRequest" backend/` — пусто.
 - Android `TerminalModels.kt` — `TerminalRegisterRequest` уже имеет `timezone`, добавить `regionId: String? = null`.
 
 #### A.7.9. `TerminalViewModel.registerTerminal` — сохранять region/carrier/timezone
@@ -379,25 +388,46 @@ fetchPage(versionSince).collectList()
 
 Терминал сохраняет `regionId`, `carrierId`, `timezone` в `SyncPreferences` (уже добавлены в A.7.2). Добавить эти поля в **request DTO** всех 10 sync-командных эндпоинтов.
 
-### C.1. Android — `SyncModels.kt` и др.
-В `SessionOpenRequest`, `TransactionCompleteRequest`, `CardRegisterRequest`, `CardBlockRequest`, `DebtCreateRequest`, `FiscalReceiptRequest`, `AuditTaskCreateRequest`, `GpsPositionReport`, `SessionCloseRequest` — добавить:
+**Правило полей (общее для всех эндпоинтов):** добавлять **`regionId` и `timezone`** (nullable) **везде**. **`carrierId` — только там, где его ещё нет** (в `DebtCreateRequest` и `AuditTaskCreateRequest` он уже есть — не дублировать).
+
+### C.1. Backend — request DTO в доменных API-модулях
+
+DTO живут в **разных API-модулях** (не в gateway-api). Правки по каждому файлу:
+
+| Эндпоинт | DTO-файл | Модуль | Что добавить |
+|---|---|---|---|
+| `/sync/sessions/open` | `backend/shared/api/session-api/.../request/SessionOpenRequest.kt` | session-api | regionId, timezone |
+| `/sync/sessions/{id}/close` | `backend/shared/api/session-api/.../request/SessionCloseRequest.kt` | session-api | regionId, timezone |
+| `/sync/transactions` | `backend/shared/api/gateway-api/.../request/TransactionCompleteRequest.kt` | gateway-api | regionId, carrierId, timezone |
+| `/sync/cards/register` | `backend/shared/api/card-api/.../request/CardRegisterRequest.kt` | card-api | regionId, carrierId, timezone |
+| `/sync/cards/{id}/block` | `backend/shared/api/card-api/.../request/CardBlockRequest.kt` | card-api | regionId, carrierId, timezone |
+| `/sync/debts` | `backend/shared/api/debt-api/.../request/DebtCreateRequest.kt` | debt-api | regionId, timezone (**carrierId уже есть**) |
+| `/sync/debts/{id}/recover` | `backend/shared/api/debt-api/.../request/DebtRecoverRequest.kt` | debt-api | regionId, timezone (**carrierId уже есть**) |
+| `/sync/fiscal/receipts` | `backend/shared/api/fiscal-api/.../request/FiscalReceiptRequest.kt` | fiscal-api | regionId, carrierId, timezone |
+| `/sync/audit/tasks` | `backend/shared/api/audit-api/.../request/AuditTaskCreateRequest.kt` | audit-api | regionId, timezone (**carrierId уже есть**) |
+| `/sync/gps/positions` | `backend/shared/api/gateway-api/.../request/GpsPositionReport.kt` | gateway-api | regionId, carrierId, timezone |
+
+Все новые поля — nullable (`UUID?`/`String?`), чтобы старые/простые случаи не ломались. Проверить, что gateway-контроллеры этих эндпоинтов принимают именно эти DTO (см. `import` в `*CommandController.kt`).
+
+### C.2. Android — `SyncModels.kt` и др.
+В `SessionOpenRequest`, `SessionCloseRequest`, `TransactionCompleteRequest`, `CardRegisterRequest`, `CardBlockRequest`, `DebtCreateRequest`, `DebtRecoverRequest`, `FiscalReceiptRequest`, `AuditTaskCreateRequest`, `GpsPositionReport` — добавить:
 ```kotlin
 @Json(name = "regionId") val regionId: String? = null,
 @Json(name = "carrierId") val carrierId: String? = null,
 @Json(name = "timezone") val timezone: String? = null
 ```
-(nullable — старые случаи не ломаются).
+(nullable — старые случаи не ломаются; carrierId не дублировать там, где уже есть). Значения заполняются из `SyncPreferences` при формировании запроса в `SyncApi`/workers/UI.
 
-### C.2. Gateway command services
+### C.3. Gateway command services
 В `SessionCommandService`, `TransactionCommandService`, `CardCommandService`, `DebtCommandService`, `FiscalCommandService`, `AuditCommandService`, `GpsCommandService` — при отправке Kafka-сообщения **добавить headers**:
 ```kotlin
 record.headers().add("X-Carrier-Id", request.carrierId?.toString()?.encodeToByteArray())
 record.headers().add("X-Region-Id", request.regionId?.toString()?.encodeToByteArray())
 record.headers().add("X-Timezone", request.timezone?.encodeToByteArray())
 ```
-**Event DTOs** (`SessionOpenedEvent`, `TransactionCompletedEvent`, etc.) в `asop-kafka-contracts` — **НЕ менять**. Контекст передаётся в Kafka headers (как `X-Event-Id`, `X-Keycloak-Id`), консьюмеры могут читать или игнорировать.
+**Event DTOs** (`SessionOpenedEvent`, `TransactionCompletedEvent`, etc.) в `asop-kafka-contracts` — **НЕ менять**. Контекст передаётся в Kafka headers (как `X-Event-Id`, `X-Keycloak-Id`), консьюмеры могут читать (через `@Header`) или игнорировать.
 
-### C.3. Документация
+### C.4. Документация
 В `doc/architecture.md`, `doc/context.md`, `AGENTS.md` — зафиксировать: **gateway выполняет только авторизацию/аутентификацию/проксирование, бизнес-логики там нет**. Терминал сам передаёт business context (carrierId, regionId, timezone) во всех запросах.
 
 ---
@@ -467,19 +497,28 @@ class AsopContentProvider : ContentProvider() {
 **Ethalon JSON — генерируется SQL-запросом (не вручную!).** Для каждого среза:
 ```sql
 -- Для таблицы asop_benefits (FILTERED по regionId):
+-- Исключаем created_at/updated_at (timestamps недетерминированы при bulk-INSERT через generate_series — триггер ставит now(), точное значение неизвестно).
 SELECT json_agg(row_to_json(t)) FROM (
-  SELECT * FROM asop_benefits
+  SELECT version, deleted_at, benefit_id, benefit_code, benefit_name, region_id, description, is_active
+  FROM asop_benefits
   WHERE region_id = '00000000-0000-0000-0000-000000000103'
   ORDER BY version ASC
 ) t;
 
 -- Для GLOBAL-таблицы asop_roles:
 SELECT json_agg(row_to_json(t)) FROM (
-  SELECT * FROM asop_roles
+  SELECT version, deleted_at, role_id, role_name, role_code
+  FROM asop_roles
   WHERE deleted_at IS NULL
   ORDER BY version ASC
 ) t;
 ```
+**Сравнение в android-test:** полный набор полей, **КРОМЕ** `created_at`/`updated_at` (не включать их в эталон — либо не выбирать в SQL, либо `jq 'del(.created_at, .updated_at)'` при пост-обработке). Сравнивать:
+- `version` — да, точное совпадение (число из sequence, уникально);
+- `deleted_at` — да (null для активных; для удалённых — проверить `IS NOT NULL` без точного timestamp);
+- все business-поля (`name`, `type_id`, FK и т.д.) — точное совпадение;
+- `created_at`/`updated_at` — **исключить** из сравнения (или сравнивать только `IS NOT NULL`, без значения).
+
 Выгрузить через `psql -t -A` в `.json` файлы, зашить в `android-test/app/src/main/assets/`:
 - `expected-1.json` — данные из `seed-data.sql` + `seed-data-delta-1.sql` (отфильтрованные по carrier `...1403` / region `...0103`)
 - `expected-2.json` — из `seed-data.sql` + delta-1 + delta-2
@@ -488,12 +527,12 @@ SELECT json_agg(row_to_json(t)) FROM (
 Фильтрация из SQL-запросов повторяет логику мастер-сервисов: GLOBAL — все строки; FILTERED — по carrier/region; USER/CARD — по userIds (через JOIN user_carriers/user_regions на carrier `...1403` + region `...0103`).
 
 **Процесс тестирования:**
-1. Старт с чистого стека: `docker compose down -v && up -d --build`. Накатить `seed-data.sql`.
-2. Накатить `seed-data-delta-1.sql` → нажать "Тест дельта инкремента 1" → проверить через ContentProvider, что данные в `reference_rows` совпадают с `expected-1.json`.
-3. Накатить `seed-data-delta-2.sql` → нажать "Тест дельта инкремента 2" → сверить с `expected-2.json`.
-4. Накатить `seed-data-delta-3.sql` → в **android-terminal** запустить "Полная выкачка" → нажать "Получить все данные" в android-test → сверить с `expected-all.json`.
+1. Старт с чистого стека: `docker compose down -v && up -d --build`. Накатить `seed-data.sql`. Предусловие: терминал зарегистрирован и привязан к перевозчику `...1403` (даёт `terminalId` и `SyncPreferences` с регионом/перевозчиком/таймзоной).
+2. Накатить `seed-data-delta-1.sql` → в **android-terminal** запустить дельта-синк: drawer → «Загрузить справочники» → **«Дельта сейчас»** (запускает `DeltaSyncWorker`) → дождаться статуса **COMPLETED** в карточке синхронизации (поллинг события + качание чанков) → в **android-test** нажать «Тест дельта инкремента 1» → проверить через ContentProvider, что данные в `reference_rows` совпадают с `expected-1.json`.
+3. Накатить `seed-data-delta-2.sql` → в android-terminal снова «Дельта сейчас» → дождаться COMPLETED → в android-test нажать «Тест дельта инкремента 2» → сверить с `expected-2.json`.
+4. Накатить `seed-data-delta-3.sql` → в **android-terminal** запустить **«Полная выкачка»** (`enqueueFullDump`, drawer → «Загрузить справочники») → дождаться скачивания ZIP из MinIO (COMPLETED) → в android-test нажать **«Получить все данные»** → сверить с `expected-all.json`.
 
-**Предусловие:** терминал должен быть зарегистрирован и привязан к перевозчику `...1403` (это даёт `terminalId` и записанные в `SyncPreferences` регион/перевозчика).
+**ВАЖНО:** android-test **не может** инициировать mTLS-синк (сертификат и `SyncApi` — в android-terminal). Поэтому синк всегда запускается вручную в android-terminal («Дельта сейчас» / «Полная выкачка»), а кнопки в android-test только проверяют результат через ContentProvider.
 
 ### E.3. Проверка этапа E
 
@@ -517,7 +556,7 @@ SELECT json_agg(row_to_json(t)) FROM (
 | Android DTO | `DeltaModels.kt`, `TerminalModels.kt`, `SyncModels.kt` (10 sync DTOs) | lastVersion + carrierId/regionId/timezone |
 | Android Room | `AppDatabase` (v3→v4), `SyncMetaEntity` (single-row), `ReferenceRowEntity` (+version), `ReferenceSyncStore`, DAOs, workers | global watermark + version |
 | Android prefs | `SyncPreferences.kt` | + carrierId, regionId, timezone |
-| Android terminal-api | `TerminalRegisterRequest.kt` (terminal-api + gateway-api) | + regionId (terminal-api), + regionId + timezone (gateway-api) |
+| Android terminal-api | `TerminalRegisterRequest.kt` (terminal-api) + **удалить** gateway-api `TerminalRegisterRequest.kt` | + regionId (terminal-api); gateway-api DTO — мёртвый код, файл удалить целиком |
 | Android ContentProvider | new `AsopContentProvider.kt` + `AndroidManifest.xml` | signature-permission, 6 tables |
 | Gateway command services | 7× `*CommandService.kt` | Kafka headers X-Carrier-Id/X-Region-Id/X-Timezone |
 | Test | `seed-data-delta-1/2/3.sql`, new `frontend/android-test/` | bulk data + ethalon JSON (SQL-generated) + ContentProvider checker |

@@ -17,12 +17,16 @@ data class SessionOpenRequest(
     @Json(name = "parentSessionId") val parentSessionId: String? = null,
     @Json(name = "terminalId") val terminalId: String? = null,
     @Json(name = "pathId") val pathId: String? = null,
-    @Json(name = "vehicleId") val vehicleId: String? = null
+    @Json(name = "vehicleId") val vehicleId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class SessionCloseRequest(
-    @Json(name = "reason") val reason: String? = null
+    @Json(name = "reason") val reason: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -33,19 +37,28 @@ data class TransactionCompleteRequest(
     @Json(name = "amount") val amount: Double,
     @Json(name = "currency") val currency: String = "RUB",
     @Json(name = "cardId") val cardId: String? = null,
-    @Json(name = "metadata") val metadata: String? = null
+    @Json(name = "metadata") val metadata: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class CardRegisterRequest(
     @Json(name = "cardTypeId") val cardTypeId: String,
-    @Json(name = "userId") val userId: String? = null
+    @Json(name = "userId") val userId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class CardBlockRequest(
     @Json(name = "blockType") val blockType: String,
-    @Json(name = "reason") val reason: String? = null
+    @Json(name = "reason") val reason: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -54,14 +67,26 @@ data class DebtCreateRequest(
     @Json(name = "carrierId") val carrierId: String,
     @Json(name = "debtAmount") val debtAmount: Double,
     @Json(name = "terminalId") val terminalId: String? = null,
-    @Json(name = "sessionId") val sessionId: String? = null
+    @Json(name = "sessionId") val sessionId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class DebtRecoverRequest(
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class FiscalReceiptRequest(
     @Json(name = "transactionId") val transactionId: String,
     @Json(name = "amount") val amount: Double,
-    @Json(name = "description") val description: String? = null
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -69,7 +94,9 @@ data class AuditTaskCreateRequest(
     @Json(name = "taskNumber") val taskNumber: String,
     @Json(name = "organizerId") val organizerId: String? = null,
     @Json(name = "carrierId") val carrierId: String? = null,
-    @Json(name = "description") val description: String? = null
+    @Json(name = "description") val description: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -80,5 +107,8 @@ data class GpsPositionReport(
     @Json(name = "latitude") val latitude: Double,
     @Json(name = "longitude") val longitude: Double,
     @Json(name = "speedKmh") val speedKmh: Double? = null,
-    @Json(name = "recordedAt") val recordedAt: String
+    @Json(name = "recordedAt") val recordedAt: String,
+    @Json(name = "regionId") val regionId: String? = null,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "timezone") val timezone: String? = null
 )

@@ -25,7 +25,7 @@
 
 Gateway обрабатывает запросы двумя способами:
 
-1. **Async writes (POST/PUT/DELETE с явным контроллером)** — команда уходит в Kafka, gateway возвращает `202 Accepted` + `X-Event-Id`. Пример: `CarrierController` / `CarrierCommandService`. keycloakId передаётся в Kafka headers (`X-Keycloak-Id`).
+1. **Async writes (POST/PUT/DELETE с явным контроллером)** — команда уходит в Kafka, gateway возвращает `202 Accepted` + `X-Event-Id`. Пример: `CarrierController` / `CarrierCommandService`. keycloakId передаётся в Kafka headers (`X-Keycloak-Id`). **Gateway не содержит бизнес-логики** — только авторизация/аутентификация/проксирование. Терминал сам передаёт business context (`carrierId`, `regionId`, `timezone`) в теле sync-командных запросов, gateway пробрасывает их в Kafka headers `X-Carrier-Id`/`X-Region-Id`/`X-Timezone` (Event DTOs в `asop-kafka-contracts` не меняются — контекст идёт только в headers).
 
 2. **Sync proxy (GET + остальные запросы)** — `ProxyController` пересылает запросы в backend-сервисы через `WebClient`. Маппинг ресурсов (`users`, `carriers`, `cards`, etc.) → base URL сервиса определён в `ServiceRegistry`. Для local dev `ASOP_ENV=local` (default → `localhost`), для Docker `ASOP_ENV=docker` (→ Docker hostnames).
 
@@ -86,8 +86,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - `controller/AuditCommandController.kt` — create audit task → Kafka
 - `controller/GpsCommandController.kt` — report GPS position → Kafka
 - `controller/DeltaReferenceController.kt` — `POST /api/v1/sync/references/delta` + `/full` (async), `GET .../{eventId}/meta` + `.../chunks/{n}` + `.../download` (sync, Redis + MinIO-прокси)
-- `service/DeltaCommandService.kt` — producer `DeltaSyncCommand`/`FullSyncCommand` в `asop.delta.commands`/`asop.delta.full.commands`
-- `service/TerminalResolver.kt` — terminalId → carrierId (terminal-service) → regionId (carrier-service)
+- `service/DeltaCommandService.kt` — producer `DeltaSyncCommand`/`FullSyncCommand` в `asop.delta.commands`/`asop.delta.full.commands` (carrierId/regionId/lastVersion — из request терминала, без резолва на gateway)
 
 **Terminal command services** (gateway → Kafka producers):
 - `service/SessionCommandService.kt` — SessionOpenedEvent/SessionClosedEvent → `asop.session.commands`
@@ -173,7 +172,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
   **Компоненты:**
   - `AppDatabase` (Room, version 3): 6 сущностей — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` (write-команды) + `SyncMetaEntity`, `DeltaSyncJobEntity`, `ReferenceRowEntity` (справочники)
   - `ReferenceRowEntity` — **generic-таблица справочников** `reference_rows` (tableName, rowId, payloadJson, updatedAt, deletedAt), composite PK `(table_name, row_id)`. Вместо ~40 отдельных entities — одна таблица, JSON payload. Индексы: table_name, updated_at, deleted_at. `fallbackToDestructiveMigration()`.
-  - `SyncMetaEntity` — `sync_meta` (tableName PK, lastUpdatedAt, lastSyncAt) — lastUpdatedAt на терминале для дельта-запросов.
+  - `SyncMetaEntity` — `sync_meta` (id=0, lastVersion, lastSyncAt) — глобальный VERSION-водяной знак дельта-синка на терминале (lastVersion = обработанный `asop_delta_version_seq`).
   - `DeltaSyncJobEntity` — `delta_sync_jobs` (eventId PK, status PENDING/COMPLETED/FAILED, totalChunks, errorMessage, completedAt).
   - `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime
   - `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
@@ -206,6 +205,17 @@ API → asop-common dependency via `api(platform(...))` pattern.
             DeltaChunkPollWorker (5m) → GET .../{eventId}/meta + /chunks/{n} → applyChunk → reference_rows + sync_meta
   Full:     FullDumpDownloadWorker → GET /events/{eventId} (10с×60) → ZIP по s3Url → applyFile
   ```
+
+- **`frontend/android-test/`**: проверочное Android-приложение (Kotlin + Compose, тот же debug-ключ), НЕ содержит mTLS/SyncApi — только сверка `reference_rows` через ContentProvider `android-terminal` (permission `ru.asop.terminal.provider.READ`). Кнопки: «Тест дельта инкремента 1/2», «Получить все данные».
+  - **Ethalon JSON**: `assets/expected-1.json` (~746 КБ) — в git; `expected-2.json` (~40 МБ) и `expected-all.json` (~47 МБ) — **gitignored** (не пушить!).
+  - **Регенерация ethalon** (после каждого дельта-состояния БД):
+    ```bash
+    # ожидаемое состояние БД после seed-data.sql + seed-data-delta-1.sql:
+    docker exec -i -e PGPASSWORD=asop docker-postgres-1 bash < infrastructure/docker/generate-ethalon.sh \
+      > frontend/android-test/app/src/main/assets/expected-1.json
+    # после + seed-data-delta-2.sql → expected-2.json; после + seed-data-delta-3.sql → expected-all.json
+    ```
+  - Сборка: `cd frontend/android-test && ./gradlew :app:assembleDebug` (APK `app/build/outputs/apk/debug/app-debug.apk`). Чистый Kotlin-модуль — классы в `app/build/tmp/kotlin-classes/debug/`, директории `javac/` не будет.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
@@ -219,14 +229,14 @@ Pattern: `asop.{domain}.{commands|events}` — see `KafkaTopic` object in `asop-
 ### Delta sync flow (incremental reference data)
 
 ```
-Android → POST /api/v1/sync/references/delta (mTLS, body {terminalId, lastUpdatedAt}) → 202 + X-Event-Id
+Android → POST /api/v1/sync/references/delta (mTLS, body {terminalId, lastVersion}) → 202 + X-Event-Id
        ↓
 Gateway DeltaReferenceController → TerminalResolver (terminalId → carrierId → regionId)
                                  → DeltaCommandService → Kafka asop.delta.commands
        ↓
-orchestrator-service DeltaCommandConsumer → опрашивает мастер-сервисы GET /api/v1/{resource}/delta
-                                          → Protobuf rows (asop-proto) → чанки 50 КБ в Redis asop:event:{id}:chunk:{n} + meta
-                                          → EventService.complete(eventId, {totalChunks,totalBytes})
+orchestrator-service DeltaCommandConsumer → опрашивает мастер-сервисы GET /api/v1/{resource}/delta (keyset: versionSince)
+                                         → Protobuf rows (asop-proto) → чанки 50 КБ в Redis asop:event:{id}:chunk:{n} + meta
+                                         → EventService.complete(eventId, {totalChunks,totalBytes})
        ↓
 Android поллит GET /api/v1/events/{eventId} → 200 → GET /api/v1/sync/references/{eventId}/meta (totalChunks)
        → GET /api/v1/sync/references/{eventId}/chunks/{n} (application/x-protobuf) → атомарный накат в Room
@@ -235,7 +245,7 @@ Full: POST /api/v1/sync/references/full → asop.delta.full.commands → orchest
       → MinIO asop-sync bucket (anonymous download) → complete({s3Url}) → Android качает ZIP по s3Url.
 ```
 
-**Master-service `/delta` endpoint'ы** (sync GET, поддерживают `updatedAtSince`, `includeDeleted`, `limit`, фильтры `carrierId`/`regionId`/`userIdsIn`):
+**Master-service `/delta` endpoint'ы** (sync GET, поддерживают `versionSince`, `includeDeleted`, `limit`, фильтры `carrierId`/`regionId`/`userIdsIn`):
 - admin-service (8091): regions, territories, organizers, organizer-territories, roles, card-types, tariff-types, session-types, event-types, transaction-types, transaction-results, services, benefits, benefit-steps (через `DeltaSupport` + `R2dbcEntityTemplate`)
 - carrier-service (8087): carriers, tids, contracts, cards-distributors (`DeltaSupport`)
 - route-service (8092): 13 ресурсов через `GenericRouteRepository.findDelta`

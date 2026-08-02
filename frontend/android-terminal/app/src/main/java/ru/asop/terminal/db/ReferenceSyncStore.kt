@@ -16,6 +16,7 @@ import javax.inject.Singleton
  * Атомарный накат дельта-чанков / полной выгрузки в Room.
  * Generic-хранение: каждая строка справочника — JSON (payloadJson),
  * ключ (tableName, rowId). rowId — значение PK (для составных — "id1|id2").
+ * sync_meta — single-row глобальный VERSION-водяной знак.
  */
 @Singleton
 class ReferenceSyncStore @Inject constructor(
@@ -64,17 +65,13 @@ class ReferenceSyncStore @Inject constructor(
         if (rows.isEmpty()) return
         db.withTransaction {
             referenceRowDao.applyBatch(rows)
-            // Обновляем sync_meta: MAX(updated_at) по каждой затронутой таблице
-            val byTable = rows.groupBy { it.tableName }
-            val now = System.currentTimeMillis()
-            syncMetaDao.upsertAll(
-                byTable.map { (table, tableRows) ->
-                    SyncMetaEntity(
-                        tableName = table,
-                        lastUpdatedAt = tableRows.mapNotNull { it.updatedAt }.maxOrNull(),
-                        lastSyncAt = now
-                    )
-                }
+            val maxVersion = rows.mapNotNull { it.version }.maxOrNull() ?: return@withTransaction
+            syncMetaDao.upsert(
+                SyncMetaEntity(
+                    id = 0,
+                    lastVersion = maxVersion,
+                    lastSyncAt = System.currentTimeMillis()
+                )
             )
         }
     }
@@ -91,12 +88,14 @@ class ReferenceSyncStore @Inject constructor(
         }
         val updatedAt = stringField(row, desc, "updated_at")
         val deletedAt = stringField(row, desc, "deleted_at")
+        val version = longField(row, desc, "version")
         return ReferenceRowEntity(
             tableName = table,
             rowId = rowId,
             payloadJson = JsonFormat.printer().print(row),
             updatedAt = updatedAt,
-            deletedAt = deletedAt
+            deletedAt = deletedAt,
+            version = version
         )
     }
 
@@ -105,6 +104,12 @@ class ReferenceSyncStore @Inject constructor(
         if (field.javaType != FieldDescriptor.JavaType.STRING) return null
         val value = row.getField(field)?.toString() ?: return null
         return value.ifEmpty { null }
+    }
+
+    private fun longField(row: Message, desc: com.google.protobuf.Descriptors.Descriptor, name: String): Long? {
+        val field = desc.findFieldByName(name) ?: return null
+        if (field.javaType != FieldDescriptor.JavaType.LONG) return null
+        return (row.getField(field) as? Number)?.toLong()
     }
 
     private fun camel(table: String): String {

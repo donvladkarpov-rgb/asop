@@ -96,23 +96,27 @@ class GenericRouteRepository(
 
     fun findDelta(
         info: ResourceInfo,
-        updatedAtSince: Instant?,
+        versionSince: Long?,
         includeDeleted: Boolean,
         regionId: UUID?,
         carrierId: UUID?,
         limit: Int
     ): Flux<Map<String, Any?>> {
         val baseSelect = info.selectColumns ?: "*"
-        val selectClause = if (info.selectColumns != null) "$baseSelect, created_at, updated_at, deleted_at" else baseSelect
+        val selectClause = if (info.selectColumns != null) {
+            val cols = LinkedHashSet(baseSelect.split(",").map { it.trim() }.filter { it.isNotEmpty() })
+            listOf("created_at", "updated_at", "deleted_at", "version").forEach { if (it !in cols) cols.add(it) }
+            cols.joinToString(", ")
+        } else baseSelect
         val conditions = mutableListOf<String>()
-        updatedAtSince?.let { conditions += "updated_at > :since" }
+        versionSince?.let { conditions += "version > :since" }
         if (!includeDeleted) conditions += "deleted_at IS NULL"
         if (regionId != null && info.tableName in REGION_ID_TABLES) conditions += "region_id = :regionId"
         if (carrierId != null && info.tableName in CARRIER_ID_TABLES) conditions += "carrier_id = :carrierId"
         val whereClause = if (conditions.isEmpty()) "" else conditions.joinToString(" AND ", prefix = " WHERE ")
-        val sql = "SELECT $selectClause FROM ${info.tableName}$whereClause ORDER BY updated_at ASC LIMIT :limit"
+        val sql = "SELECT $selectClause FROM ${info.tableName}$whereClause ORDER BY version ASC LIMIT :limit"
         var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql).bind("limit", limit)
-        updatedAtSince?.let { spec = spec.bind("since", it) }
+        versionSince?.let { spec = spec.bind("since", it) }
         if (regionId != null && info.tableName in REGION_ID_TABLES) spec = spec.bind("regionId", regionId)
         if (carrierId != null && info.tableName in CARRIER_ID_TABLES) spec = spec.bind("carrierId", carrierId)
         return spec.fetch().all()

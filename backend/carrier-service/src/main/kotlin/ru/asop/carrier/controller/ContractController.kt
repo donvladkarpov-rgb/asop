@@ -16,7 +16,6 @@ import ru.asop.carrier.config.DeltaSupport
 import ru.asop.carrier.model.ContractEntity
 import ru.asop.carrier.service.ContractService
 import java.security.Principal
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -48,7 +47,7 @@ class ContractController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false) cardsDistributorId: UUID?,
@@ -58,9 +57,9 @@ class ContractController(
         carrierId?.let { extra += Criteria.where("carrier_id").`is`(it) }
         cardsDistributorId?.let { extra += Criteria.where("cards_distributor_id").`is`(it) }
         val query = if (extra.isEmpty()) {
-            DeltaSupport.query(updatedAtSince, includeDeleted, limit)
+            DeltaSupport.query(versionSince, includeDeleted, limit)
         } else {
-            DeltaSupport.query(updatedAtSince, includeDeleted, limit, Criteria.from(extra))
+            DeltaSupport.query(versionSince, includeDeleted, limit, Criteria.from(extra))
         }
         return template.select(ContractEntity::class.java)
             .matching(query)

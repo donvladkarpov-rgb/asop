@@ -6,7 +6,6 @@ import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import ru.asop.admin.model.OrganizerTerritoryEntity
 import ru.asop.admin.repository.OrganizerTerritoryRepository
-import java.time.Instant
 
 /**
  * Отдельный top-level ресурс дельта-синхронизации для связки
@@ -20,8 +19,8 @@ class OrganizerTerritoryController(
 
     @GetMapping("/api/v1/organizer-territories/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false, defaultValue = "false") includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
-    ): Flux<OrganizerTerritoryEntity> = repository.findDelta(updatedAtSince, includeDeleted, limit)
+    ): Flux<OrganizerTerritoryEntity> = repository.findDelta(versionSince, includeDeleted, limit)
 }

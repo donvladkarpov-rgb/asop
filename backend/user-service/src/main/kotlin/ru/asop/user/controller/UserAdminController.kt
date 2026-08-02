@@ -11,7 +11,6 @@ import ru.asop.api.user.controller.UserAdminApi
 import ru.asop.api.user.dto.request.UserCreateRequest
 import ru.asop.api.user.dto.response.UserResponse
 import ru.asop.user.service.UserAdminService
-import java.time.Instant
 import java.util.UUID
 
 @RestController
@@ -46,14 +45,14 @@ class UserAdminController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean?,
         @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
         val conditions = mutableListOf<String>()
-        if (updatedAtSince != null) conditions += "updated_at > :since"
+        if (versionSince != null) conditions += "version > :since"
         if (includeDeleted != true) conditions += "deleted_at IS NULL"
         val unions = mutableListOf<String>()
         if (carrierId != null) unions += "SELECT user_id FROM ASOP_USER_CARRIERS WHERE carrier_id = :carrierId"
@@ -63,13 +62,14 @@ class UserAdminController(
         val sql = """
             SELECT user_id AS "userId", first_name AS "firstName", last_name_initial AS "lastNameInitial",
                    patronymic_initial AS "patronymicInitial", phone, keycloak_id AS "keycloakId",
-                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt"
+                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt",
+                   version AS "version"
             FROM ASOP_USERS$where
-            ORDER BY updated_at ASC
+            ORDER BY version ASC
             LIMIT :limit
         """.trimIndent()
         var spec = db.sql(sql)
-        if (updatedAtSince != null) spec = spec.bind("since", updatedAtSince)
+        if (versionSince != null) spec = spec.bind("since", versionSince)
         if (carrierId != null) spec = spec.bind("carrierId", carrierId)
         if (regionId != null) spec = spec.bind("regionId", regionId)
         return spec.bind("limit", limit).fetch().all()

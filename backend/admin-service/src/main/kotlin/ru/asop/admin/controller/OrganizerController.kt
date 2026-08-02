@@ -19,7 +19,6 @@ import ru.asop.api.reference.dto.response.OrganizerResponse
 import ru.asop.api.reference.dto.response.OrganizerTerritoryResponse
 import ru.asop.common.util.UuidUtils
 import java.util.UUID
-import java.time.Instant
 import reactor.core.publisher.Flux
 import org.springframework.data.domain.Sort
 import org.springframework.data.relational.core.query.Criteria
@@ -129,12 +128,12 @@ class OrganizerController(
 
     @GetMapping("/delta")
     fun listDelta(
-        @RequestParam(required = false) updatedAtSince: Instant?,
+        @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<OrganizerEntity> {
         return template.select(OrganizerEntity::class.java)
-            .matching(DeltaSupport.query(updatedAtSince, includeDeleted, limit))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
             .all()
     }
 }

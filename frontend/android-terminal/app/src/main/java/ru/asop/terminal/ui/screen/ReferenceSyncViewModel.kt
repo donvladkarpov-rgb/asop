@@ -47,7 +47,9 @@ class ReferenceSyncViewModel @Inject constructor(
             val terminalId = syncPreferences.terminalId.first() ?: return@launch
             if (terminalId.isBlank()) return@launch
             try {
-                val response = gatewayApi.fullSync(FullSyncRequest(terminalId))
+                val carrierId = syncPreferences.carrierId.first()
+                val regionId = syncPreferences.regionId.first()
+                val response = gatewayApi.fullSync(FullSyncRequest(terminalId, carrierId, regionId))
                 val eventId = response.body()?.eventId ?: return@launch
                 workScheduler.enqueueFullDump(eventId)
             } catch (_: Exception) {

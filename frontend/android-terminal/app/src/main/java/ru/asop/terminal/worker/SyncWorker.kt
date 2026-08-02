@@ -8,7 +8,9 @@ import androidx.work.WorkerParameters
 import com.squareup.moshi.Moshi
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.flow.first
 import retrofit2.Response
+import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.entity.PendingEventEntity
@@ -22,7 +24,8 @@ class SyncWorker @AssistedInject constructor(
     private val pendingEventDao: PendingEventDao,
     private val sessionDao: SessionDao,
     private val syncApi: SyncApi,
-    private val moshi: Moshi
+    private val moshi: Moshi,
+    private val syncPreferences: SyncPreferences
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -56,40 +59,95 @@ class SyncWorker @AssistedInject constructor(
     private suspend fun sendEvent(event: PendingEventEntity): String {
         val payload = event.payload
         val pathId = event.pathParam
+        val carrierId = syncPreferences.carrierId.first()
+        val regionId = syncPreferences.regionId.first()
+        val timezone = syncPreferences.timezone.first()
         return when (event.eventType) {
             EventTypes.SESSION_OPEN -> {
-                syncApi.openSession(deserialize(payload)).toEventId()
+                syncApi.openSession(
+                    deserialize<SessionOpenRequest>(payload).copy(
+                        regionId = regionId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.SESSION_CLOSE -> {
                 val req = if (payload.isNotEmpty()) deserialize<SessionCloseRequest>(payload)
                     else SessionCloseRequest()
-                syncApi.closeSession(pathId ?: "", req).toEventId()
+                syncApi.closeSession(
+                    pathId ?: "",
+                    req.copy(regionId = regionId, timezone = timezone)
+                ).toEventId()
             }
             EventTypes.TRANSACTION_COMPLETE -> {
-                syncApi.completeTransaction(deserialize(payload)).toEventId()
+                syncApi.completeTransaction(
+                    deserialize<TransactionCompleteRequest>(payload).copy(
+                        regionId = regionId,
+                        carrierId = carrierId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.CARD_REGISTER -> {
-                syncApi.registerCard(deserialize(payload)).toEventId()
+                syncApi.registerCard(
+                    deserialize<CardRegisterRequest>(payload).copy(
+                        regionId = regionId,
+                        carrierId = carrierId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.CARD_BLOCK -> {
                 val req = if (payload.isNotEmpty()) deserialize<CardBlockRequest>(payload)
                     else CardBlockRequest(blockType = "TERMINAL")
-                syncApi.blockCard(pathId ?: "", req).toEventId()
+                syncApi.blockCard(
+                    pathId ?: "",
+                    req.copy(regionId = regionId, carrierId = carrierId, timezone = timezone)
+                ).toEventId()
             }
             EventTypes.DEBT_CREATE -> {
-                syncApi.createDebt(deserialize(payload)).toEventId()
+                syncApi.createDebt(
+                    deserialize<DebtCreateRequest>(payload).copy(
+                        regionId = regionId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.DEBT_RECOVER -> {
-                syncApi.recoverDebt(pathId ?: "").toEventId()
+                syncApi.recoverDebt(
+                    pathId ?: "",
+                    DebtRecoverRequest(
+                        carrierId = carrierId,
+                        regionId = regionId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.FISCAL_RECEIPT -> {
-                syncApi.requestFiscalReceipt(deserialize(payload)).toEventId()
+                syncApi.requestFiscalReceipt(
+                    deserialize<FiscalReceiptRequest>(payload).copy(
+                        regionId = regionId,
+                        carrierId = carrierId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.AUDIT_TASK -> {
-                syncApi.createAuditTask(deserialize(payload)).toEventId()
+                syncApi.createAuditTask(
+                    deserialize<AuditTaskCreateRequest>(payload).copy(
+                        regionId = regionId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             EventTypes.GPS_POSITION -> {
-                syncApi.reportGpsPosition(deserialize(payload)).toEventId()
+                syncApi.reportGpsPosition(
+                    deserialize<GpsPositionReport>(payload).copy(
+                        regionId = regionId,
+                        carrierId = carrierId,
+                        timezone = timezone
+                    )
+                ).toEventId()
             }
             else -> throw IllegalArgumentException("Unknown event type: ${event.eventType}")
         }

@@ -36,7 +36,10 @@ interface SyncApi {
     suspend fun createDebt(@Body request: DebtCreateRequest): Response<AcceptedResponse>
 
     @PUT("api/v1/sync/debts/{id}/recover")
-    suspend fun recoverDebt(@Path("id") id: String): Response<AcceptedResponse>
+    suspend fun recoverDebt(
+        @Path("id") id: String,
+        @Body request: DebtRecoverRequest
+    ): Response<AcceptedResponse>
 
     @POST("api/v1/sync/fiscal/receipts")
     suspend fun requestFiscalReceipt(
