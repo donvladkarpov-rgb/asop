@@ -30,7 +30,7 @@
 
 ## Этап 1: БД — править `infrastructure/db-migrations/asop_schema.sql`, затем пересоздать миграцию
 
-**Все DDL-изменения вносим ТОЛЬКО в `asop_schema.sql`.** После правок — пересоздать миграцию (см. Этап 1.7). Номера строк ниже относятся к текущему `asop_schema.sql` (он почти идентичен старому `v001-init.sql`, различия в комментариях ±1 строка).
+**Все DDL-изменения вносим ТОЛЬКО в `asop_schema.sql`.** После правок — пересоздать миграцию (см. Этап 1.8). Номера строк ниже относятся к текущему `asop_schema.sql` (он почти идентичен старому `v001-init.sql`, различия в комментариях ±1 строка).
 
 ### 1.1. Глобальный sequence
 ```sql
@@ -63,14 +63,18 @@ EXECUTE format('CREATE TRIGGER trg_delta_version_%s BEFORE INSERT OR UPDATE ON %
 ### 1.4. Soft-delete
 `trg_fn_soft_delete` (строки ~1647-1658): сейчас делает `UPDATE ... SET updated_at = now(), deleted_at = now()`. Обновление пройдёт через `trg_delta_version_*` (BEFORE UPDATE) — version забампается автоматически. Ничего дополнительно делать не нужно, но **убедиться**, что soft-delete-таблицы покрыты version-триггером (все 41 в списке).
 
-### 1.5. CREATED_AT / UPDATED_AT — оставить
+### 1.5. Триггер UPDATED_AT — распространить на INSERT
+Существующий touch-триггер `trg_fn_touch_updated()` (функция ставит `NEW.updated_at := now()`, игнорируя переданное значение) навешивается сейчас **только на `BEFORE UPDATE`** (DO-блок «Touch-триггеры UPDATED_AT», строки ~1763-1766: `CREATE TRIGGER trg_touch_updated_%s BEFORE UPDATE`). Нужно, чтобы поле автоматически заполнялось и при INSERT.
+Изменить в DO-блоке: `BEFORE UPDATE` → **`BEFORE INSERT OR UPDATE`**. Функция менять не нужно — она уже перезаписывает `NEW.updated_at := now()` независимо от того, что передано. Это требование п.2 промпта prompt_003.md.
+
+### 1.6. CREATED_AT / UPDATED_AT — оставить
 Они не мешают, остаются для диагностики/человеческого чтения. Дельта-курсор переключается на VERSION, но колонки удалять не надо.
 
-### 1.6. Комментарий DO-блока «DELTA SYNC SUPPORT»
+### 1.7. Комментарий DO-блока «DELTA SYNC SUPPORT»
 Обновить (строки ~1587-1596): описать, что дельта теперь по VERSION из sequence.
 
-### 1.7. Пересоздать миграцию `infrastructure/db-migrations/migrations/` с нуля
-После того как `asop_schema.sql` изменён (этапы 1.1–1.6):
+### 1.8. Пересоздать миграцию `infrastructure/db-migrations/migrations/` с нуля
+После того как `asop_schema.sql` изменён (этапы 1.1–1.7):
 
 1. **Удалить старую миграцию целиком**: `rm -rf infrastructure/db-migrations/migrations` (удалить и `v001-init.sql`, и `v001-init.yaml` — всё).
 2. **Создать каталог заново**: `mkdir infrastructure/db-migrations/migrations`.
@@ -205,19 +209,18 @@ val lastVersion: Long? = null   // глобальный watermark (sequence)
 - `fetchTable(table, ep, command, userIds)`: выбирает `fetchDelta` или `fetchDeltaWithUserIds`.
 - `fetchDelta(ep, carrierId, regionId, updatedAtSince)` и `fetchDeltaWithUserIds(ep, userIds, updatedAtSince)`: делают **один** HTTP-запрос с `updatedAtSince` и `limit=10_000`.
 
-**Изменения:**
+**Изменения (только переключение курсора — keyset-пагинацию выполняет отдельный промпт `prompt_003_01.md`, строго после этого):**
 1. Везде `command.lastUpdatedAt[table]` → `command.lastVersion`. Тип `Instant?` → `Long?`.
 2. Параметр запроса к мастеру: `updatedAtSince` → `versionSince` (значение `Long`).
-3. **Добавить keyset-пагинацию** (это критично для 100-200к строк): зациклить fetch, пока мастер возвращает полную страницу (`== limit`, 10_000). Курсор для следующей страницы — `version` последней строки ответа. JSON-ключ: `node.get("version")?.asLong()`. Если у строки нет `version` — прервать цикл (защита от зацикливания).
-4. Реализация — строго реактивная (`Mono`/`Flux`), без `.block()`. Идиома: материализовать страницу в `List` через `.collectList()`, проверить `size >= limit`, рекурсивно продолжить с новым курсором, вернуть `Flux.fromIterable(все страницы)`.
-5. Сортировка и так `version ASC` на мастерах — не ре-сортить.
-6. `onErrorResume` на каждой странице: warn + `Flux.empty()` (как сейчас), при ошибке прерывать цикл.
-7. `fetchUserIds` — использовать то же новое поле `versionSince=command.lastVersion`; он тоже должен ходить через общий метод с пагинацией (для пользователей лимит скорее всего не превысится, но единообразие желательно).
+3. JSON-ключ курсора в ответах мастеров — `node.get("version")?.asLong()` (мастера уже отдают `version`).
+4. `fetchUserIds` — использовать то же новое поле `versionSince=command.lastVersion`.
+
+**НЕ реализовывать здесь keyset-пагинацию** (зацикливание по страницам при `== limit`) — это делает `prompt_003_01.md` (он же добавит пагинацию и в `FullSyncService`). Здесь достаточно одного запроса с `versionSince`, чтобы 003_02 не пересекался с 003_01 по одним и тем же файлам.
 
 ### 4.3. `backend/orchestrator-service/src/main/kotlin/ru/asop/orchestrator/service/FullSyncService.kt`
-Полная выгрузка — **не менять логику курсора** (её нет), но:
-- проверить, что `protoRowMapper.buildRowMessage` корректно обрабатывает новое proto-поле `version` (int64) — см. этап 4.5;
-- `limit=10_000` здесь тоже есть, но **это отдельная задача** (пагинация full-выгрузки) — в рамках этой задачи не трогать.
+Полная выгрузка — **не менять** в рамках этой задачи (курсора нет):
+- `limit=10_000` здесь тоже есть, но **keyset-пагинация full-выгрузки добавляется в `prompt_003_01.md`** (отдельная задача, не пересекаться по файлу здесь).
+- проверить, что `protoRowMapper.buildRowMessage` корректно обрабатывает новое proto-поле `version` (int64) — см. этап 4.5.
 
 ### 4.4. `backend/orchestrator-service/src/main/kotlin/ru/asop/orchestrator/kafka/DeltaCommandConsumer.kt`
 Логирует `command.lastUpdatedAt.size` (строка ~21) — заменить на что-то вроде `command.lastVersion`.
@@ -232,20 +235,38 @@ val lastVersion: Long? = null   // глобальный watermark (sequence)
 
 ## Этап 5: Gateway-service
 
+**Важно:** в рамках этой задачи gateway **перестаёт резолвить carrierId/regionId** (п.4 промпта prompt_003.md — «терминал передаёт регион и перевозчика во всех запросах»). Терминал теперь сам шлёт `carrierId`/`regionId` в теле запроса, `TerminalResolver` больше не используется.
+
 ### 5.1. DTO — `backend/shared/api/gateway-api/src/main/kotlin/ru/asop/api/gateway/dto/request/DeltaSyncRequest.kt`
 ```kotlin
 data class DeltaSyncRequest(
     val terminalId: UUID,
+    val carrierId: UUID? = null,
+    val regionId: UUID? = null,
     val lastVersion: Long? = null
 )
 ```
 (вместо `lastUpdatedAt: Map<String, Instant>`).
 
+### 5.1a. DTO — `backend/shared/api/gateway-api/src/main/kotlin/ru/asop/api/gateway/dto/request/FullSyncRequest.kt`
+```kotlin
+data class FullSyncRequest(
+    val terminalId: UUID,
+    val carrierId: UUID? = null,
+    val regionId: UUID? = null
+)
+```
+(сейчас только `terminalId`; `carrierId`/`regionId` добавляются из п.4 — терминал шлёт их сам).
+
 ### 5.2. `backend/gateway-service/src/main/kotlin/ru/asop/gateway/service/DeltaCommandService.kt`
-В `publishDelta` (строки ~24-58): строит `DeltaSyncCommand(eventId, terminalId, carrierId, regionId, lastUpdatedAt = request.lastUpdatedAt)` → заменить на `lastVersion = request.lastVersion`. Логи `request.lastUpdatedAt.size` → `request.lastVersion`.
+В `publishDelta` (строки ~24-58): строит `DeltaSyncCommand(eventId, terminalId, carrierId, regionId, lastUpdatedAt = request.lastUpdatedAt)` → заменить на `carrierId = request.carrierId`, `regionId = request.regionId`, `lastVersion = request.lastVersion`. Логи `request.lastUpdatedAt.size` → `request.lastVersion`.
+В `publishFull` (строки ~60-93): `FullSyncCommand(eventId, terminalId, carrierId = request.carrierId, regionId = request.regionId)`.
 
 ### 5.3. `backend/gateway-service/src/main/kotlin/ru/asop/gateway/controller/DeltaReferenceController.kt`
-Строка ~50: `request.lastUpdatedAt.size` → `request.lastVersion`.
+Строка ~50: `request.lastUpdatedAt.size` → `request.lastVersion`. Строки ~51-54 и ~72-74: убрать вызов `terminalResolver.resolve(request.terminalId)` — publishDelta/publishFull теперь принимают request напрямую (без `TerminalContext`). Конструктор: убрать `terminalResolver` из инъекции.
+
+### 5.4. `backend/gateway-service/src/main/kotlin/ru/asop/gateway/service/TerminalResolver.kt`
+Файл вместе с `data class TerminalContext` удалить целиком — больше нигде не используется (проверить grep по `TerminalResolver`/`TerminalContext` в gateway-service).
 
 ---
 
@@ -255,10 +276,18 @@ data class DeltaSyncRequest(
 ```kotlin
 data class DeltaSyncRequest(
     @Json(name = "terminalId") val terminalId: String,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "lastVersion") val lastVersion: Long? = null
 )
+
+data class FullSyncRequest(
+    @Json(name = "terminalId") val terminalId: String,
+    @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "regionId") val regionId: String? = null
+)
 ```
-`FullSyncRequest`/`DeltaMetaResponse` — не трогать.
+`DeltaMetaResponse` — не трогать.
 
 ### 6.2. Room-сущность — `.../db/entity/SyncMetaEntity.kt`
 Сейчас: `lastUpdatedAt: String?` (по-табличная метка). Заменить на глобальный watermark:
@@ -306,8 +335,9 @@ val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastUpdatedAt))
 →
 ```kotlin
 val lastVersion = syncMetaDao.get().first()?.lastVersion
-val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastVersion))
+val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastVersion = lastVersion))
 ```
+(остальные поля — `carrierId`/`regionId` — заполняются из `SyncPreferences`, но сами ключи в `SyncPreferences` добавляются в **п.4 промпта prompt_003.md**, который выполняется после этого промпта; на этом шаге их можно передавать как `null` или не передавать — DTO позволяет).
 
 ### 6.7. `.../worker/DeltaChunkPollWorker.kt` и `.../worker/FullDumpDownloadWorker.kt`
 Проверить, как читают/пишут `sync_meta` и `ReferenceRowEntity` — согласовать с новым полем `version` (Long) и новым `SyncMetaEntity` (одиночная строка). Поле `updatedAt` продолжает существовать, но не используется как курсор. `DeltaSyncJobDao` — не трогать (статусы заданий).
@@ -340,23 +370,25 @@ val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastVersion))
    SELECT column_name FROM information_schema.columns WHERE table_name='asop_regions' AND column_name='version';
    SELECT last_value FROM asop_delta_version_seq;
    ```
-   При дельта-запросе в логах orchestrator-service — несколько последовательных страниц для таблицы с >10000 строк, итог без потерь.
+   Проверить триггер UPDATED_AT на INSERT: `INSERT INTO asop_regions (...) VALUES (...)` без `updated_at` → `updated_at` заполнился `now()`, `version` получил значение из sequence.
+   Примечание: многостраничность при дельта-запросе (несколько страниц по 10к) проверить **после** выполнения `prompt_003_01.md`, т.к. пагинация — его задача.
 6. Проверить SQL-уровень: вставка 200к строк в одну таблицу через `generate_series` → `SELECT count(DISTINCT version) FROM t` = 200к (все уникальны).
 
 ## Важно: НЕ трогать
 
-- `ChunkingService`, `MasterRegistry`, `FullSyncService` (кроме проверки ProtoRowMapper-совместимости).
-- Логику фильтрации `carrierId/regionId/userIdsIn` (это отдельная тема).
+- `ChunkingService`, `MasterRegistry` — не менять.
+- Логику фильтрации `carrierId/regionId/userIdsIn` (это отдельная тема) — в мастерах не менять; в gateway она просто берётся из запроса терминала.
 - `DeltaChunk`/`XxxFile`/`DeltaChunkMeta` proto-сообщения (только в `Row`-сообщениях **добавляется** новое поле `version`; `updated_at` не трогать).
-- Полную выгрузку (`FullSync`, ZIP/MinIO) — не менять механизм.
+- Полную выгрузку (`FullSync`, ZIP/MinIO) — не менять механизм в рамках этой задачи (пагинацию full добавляет `prompt_003_01.md`).
+- **Keyset-пагинацию здесь не делать** — это задача `prompt_003_01.md` (не пересекаться по `DeltaSyncService.kt`/`FullSyncService.kt`).
 - Не добавлять лишние комментарии в код (стиль проекта — краткие KDoc).
 
 ## Справка: текущие файлы, которые изменятся
 
 | Файл | Что меняется |
 |------|--------------|
-| `infrastructure/db-migrations/asop_schema.sql` | **источник DDL**: sequence + колонка VERSION + триггер (этапы 1.1–1.6) |
-| `infrastructure/db-migrations/migrations/` | **удаляется целиком**, пересоздаётся: `v001-init.sql` = копия `asop_schema.sql`, новый `v001-init.yaml` (этап 1.7) |
+| `infrastructure/db-migrations/asop_schema.sql` | **источник DDL**: sequence + колонка VERSION + version-триггер + UPDATED_AT триггер на INSERT (этапы 1.1–1.7) |
+| `infrastructure/db-migrations/migrations/` | **удаляется целиком**, пересоздаётся: `v001-init.sql` = копия `asop_schema.sql`, новый `v001-init.yaml` (этап 1.8) |
 | `infrastructure/db-migrations/db.changelog-master.yaml` | не менять (уже включает `migrations/v001-init.yaml`) |
 | `infrastructure/db-migrations/asop_schema.md` (+html/puml/svg) | справка — отразить sequence/VERSION/триггер |
 | `backend/shared/asop-proto/src/main/proto/schema.proto` | 41× **добавить** поле `int64 version = <deleted_at+1>` (updated_at не трогать) |
@@ -367,9 +399,11 @@ val response = gatewayApi.deltaSync(DeltaSyncRequest(terminalId, lastVersion))
 | user-service: 4 контроллера | то же |
 | card-service: 7 контроллеров + `config/DeltaSupport.kt` + 7 репозиториев (@Query) | то же |
 | `DeltaEvents.kt` (asop-kafka-contracts) | `lastUpdatedAt: Map<String, Instant>` → `lastVersion: Long?` |
-| `DeltaSyncService.kt` (orchestrator) | versionSince + keyset-пагинация |
+| `DeltaSyncService.kt` (orchestrator) | курсор → versionSince/lastVersion (пагинацию добавит 003_01) |
 | `DeltaCommandConsumer.kt` (orchestrator) | лог |
-| `DeltaSyncRequest.kt` (gateway-api) | `lastVersion: Long?` |
-| `DeltaCommandService.kt`, `DeltaReferenceController.kt` (gateway) | передача lastVersion |
-| Android: `DeltaModels.kt`, `SyncMetaEntity`, `ReferenceRowEntity`, `ReferenceSyncStore`, `SyncMetaDao`, `ReferenceRowDao`, `DeltaSyncWorker`, `DeltaChunkPollWorker`, `FullDumpDownloadWorker`, `AppDatabase` | новый курсор + Room v4 |
+| `DeltaSyncRequest.kt` (gateway-api) | `carrierId`/`regionId`/`lastVersion` |
+| `FullSyncRequest.kt` (gateway-api) | `carrierId`/`regionId` |
+| `DeltaCommandService.kt`, `DeltaReferenceController.kt` (gateway) | lastVersion + carrierId/regionId из запроса, без TerminalResolver |
+| `TerminalResolver.kt` (gateway) | **удалить целиком** (вместе с `TerminalContext`) |
+| Android: `DeltaModels.kt`, `SyncMetaEntity`, `ReferenceRowEntity`, `ReferenceSyncStore`, `SyncMetaDao`, `ReferenceRowDao`, `DeltaSyncWorker`, `DeltaChunkPollWorker`, `FullDumpDownloadWorker`, `AppDatabase` | новый курсор + Room v4 + carrierId/regionId в delta/full |
 | `seed-data.sql`, `AGENTS.md`, `doc/context.md` | комментарии/документация |

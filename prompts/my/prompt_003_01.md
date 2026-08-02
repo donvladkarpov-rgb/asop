@@ -1,98 +1,127 @@
-# Задача: добавить keyset-пагинацию в дельта-синхронизацию orchestrator-service
+# Задача: keyset-пагинация по VERSION в DeltaSyncService и FullSyncService (orchestrator-service)
 
 ## Контекст проекта
 
 Проект **ASOP** — платформа оплаты проезда. Монорепо в `/home/vlad/IdeaProjects/asop`. Backend — Kotlin 2.0.21 + Spring Boot 3.3.5 (WebFlux, R2DBC), Kafka, Redis, MinIO, PostgreSQL.
 
-Схема данных — в `infrastructure/db-migrations/migrations/v001-init.sql` (таблицы `ASOP_*`, к 41 справочнику добавлены колонки `CREATED_AT/UPDATED_AT/DELETED_AT` через DO-блок). Сборка: `./gradlew :backend:orchestrator-service:build` (проверить после правки). Тестов в репозитории нет.
+**Важно: этот промпт выполняется строго ПОСЛЕ `prompt_003_02.md`.** К этому моменту:
+- в БД у всех 41 дельта-таблиц есть колонка `VERSION BIGINT` из глобального sequence `asop_delta_version_seq` (уникальные возрастающие значения, триггер `trg_delta_version_*` на INSERT/UPDATE);
+- мастера (admin 8091, carrier 8087, route 8092, user 8082, card 8086) принимают `versionSince: Long?` вместо `updatedAtSince` и сортируют `version ASC`;
+- `DeltaSyncCommand` содержит `lastVersion: Long?` (единый глобальный watermark) вместо `lastUpdatedAt: Map<String, Instant>`;
+- в JSON ответов мастеров у каждой строки присутствует ключ `version` (число).
+
+Схема данных — в `infrastructure/db-migrations/asop_schema.sql` (источник DDL). Сборка: `./gradlew :backend:orchestrator-service:build` (проверить после правки). Тестов в репозитории нет.
 
 ## Что делает дельта-синхронизация
 
-**Поток:** Android-терминал → `POST /api/v1/sync/references/delta` → gateway кладёт `DeltaSyncCommand` в Kafka `asop.delta.commands` → **orchestrator-service** (это тот сервис, который ты правишь) опрашивает мастер-сервисы по `GET /api/v1/{resource}/delta`, сериализует записи в Protobuf, режет на чанки по 50 КБ, пишет в Redis, помечает событие COMPLETED. Терминал потом скачивает чанки.
+**Поток:** Android-терминал → `POST /api/v1/sync/references/delta` → gateway кладёт `DeltaSyncCommand` в Kafka `asop.delta.commands` → **orchestrator-service** (этот сервис) опрашивает мастер-сервисы по `GET /api/v1/{resource}/delta`, сериализует записи в Protobuf, режет на чанки по 50 КБ в Redis, помечает событие COMPLETED. Терминал скачивает чанки и накатывает в Room.
 
-**Команда** (`backend/shared/asop-kafka-contracts/.../DeltaEvents.kt`):
+**Команда** (`backend/shared/asop-kafka-contracts/.../DeltaEvents.kt`, уже изменена 003_02):
 ```kotlin
 data class DeltaSyncCommand(
     val eventId: UUID,
     val terminalId: UUID,
     val carrierId: UUID? = null,
     val regionId: UUID? = null,
-    val lastUpdatedAt: Map<String, Instant> // tableName → lastUpdatedAt
+    val lastVersion: Long? = null   // единый watermark по sequence
 )
 ```
 
-**Мастер-сервисы** (admin 8091, carrier 8087, route 8092, user 8082, card 8086) имеют endpoint'ы вида:
+**Мастер-сервисы** имеют endpoint'ы вида:
 ```
-GET /api/v1/{resource}/delta?updatedAtSince=...&includeDeleted=true&limit=10000&carrierId=...&regionId=...&userIdsIn=...
+GET /api/v1/{resource}/delta?versionSince=...&includeDeleted=true&limit=10000&carrierId=...&regionId=...&userIdsIn=...
 ```
-Отвечают **списком JSON-объектов**, отсортированным **по `updated_at` ASC**. Параметры:
-- `updatedAtSince` (optional) — вернуть только записи с `updated_at > since` (строго больше);
+Отвечают **списком JSON-объектов**, отсортированным **по `version` ASC**. Параметры:
+- `versionSince` (optional, Long) — вернуть только записи с `version > versionSince` (строго больше);
 - `includeDeleted` — если true, включить soft-deleted;
 - `limit` — максимум строк в ответе (дефолт 10000);
 - `carrierId`/`regionId` — фильтр (не все ресурсы поддерживают);
 - `userIdsIn` — фильтр по пользователям (card/user таблицы).
 
 **Ключевые детали возвращаемых JSON:**
-- **admin-service** (регионы, организаторы, роли, benefits и т.д.) — возвращает сущности R2DBC, JSON-ключи **camelCase**: `updatedAt`, `benefitId` и т.п.
-- **route-service** (fare-zones, routes, paths, vehicles и т.д.) — возвращает `Map<String, Any?>` напрямую из SQL, JSON-ключи **snake_case**: `updated_at`, `vehicle_id` и т.п.
-- **user-service / card-service** — смешанно; в коде уже есть обработка `node.get("userId") ?: node.get("user_id")`, т.е. ключи могут быть в обоих регистрах.
+- admin-service — сущности R2DBC, JSON-ключи **camelCase** (`updatedAt`, `benefitId` и т.п.); курсор — `version`.
+- route-service — `Map<String, Any?>` напрямую из SQL, JSON-ключи **snake_case**; курсор — `version`.
+- user-service / card-service — смешанно; в коде уже есть обработка `node.get("userId") ?: node.get("user_id")`.
+- **Курсор для пагинации во всех случаях**: `node.get("version")?.asLong()` (ключ `version` единый, без регистровых различий).
 
-## Файл, который править
+## Файлы, которые править
 
-`backend/orchestrator-service/src/main/kotlin/ru/asop/orchestrator/service/DeltaSyncService.kt` (весь файл приложен ниже). Три метода HTTP-запросов:
-- `fetchDelta(ep, carrierId, regionId, updatedAtSince)` — для обычных таблиц;
-- `fetchDeltaWithUserIds(ep, userIds, updatedAtSince)` — для USER_TABLES/CARD_TABLES (параметр `userIdsIn` вместо carrier/region);
-- `fetchUserIds(command)` — первый запрос за списком user-ов, он использует `fetchDelta` с дефолтным `limit=10_000` (здесь лимит почти неважен, но цикл не нужен — users обычно немного; трогать можно только если не сломаешь).
-
-`fetchTable(table, ep, command, userIds)` выбирает нужный метод по типу таблицы.
+1. `backend/orchestrator-service/src/main/kotlin/ru/asop/orchestrator/service/DeltaSyncService.kt` — пагинация дельты.
+2. `backend/orchestrator-service/src/main/kotlin/ru/asop/orchestrator/service/FullSyncService.kt` — пагинация полной выгрузки.
 
 ## Проблема
 
-`limit=10_000` жёстко зашит в обоих fetch-методах (`DeltaSyncService.kt:87` и `:107`). Если в таблице >10000 строк (нужно для тестовых данных 100–200к записей на таблицу), мастер вернёт только первые 10000, остальные **молча теряются** — пагинации нет, `fetchTable` делает ровно один запрос на таблицу.
+`limit=10_000` жёстко зашит и в `DeltaSyncService` (`:87`, `:107`), и в `FullSyncService` (`:56`, `:73`, `:82`). Пагинации нет — `fetchTable`/`fetchAll` делают ровно один запрос на таблицу. Для тестовых данных 100–200к записей на таблицу (см. `seed-data-delta-2.sql`) мастер вернёт только первые 10000 строк, остальные **молча потеряются**. Это критично и для дельты, и для полной выгрузки («выкачка всего сразу» в prompt_003.md).
+
+Курсор `version` из sequence уникален и строго возрастает даже внутри одного bulk-INSERT (в отличие от `updated_at`, который был бы одинаковым в одной транзакции), поэтому keyset-пагинация по `version` работает без потерь и зацикливаний.
 
 ## Что нужно сделать
 
-Реализовать **keyset-пагинацию** по `updated_at` в обоих методах (`fetchDelta` и `fetchDeltaWithUserIds`), чтобы выкачивались **все** строки таблицы за несколько последовательных запросов:
+Реализовать **keyset-пагинацию по `version`** в обоих сервисах, чтобы выкачивались **все** строки таблицы за несколько последовательных запросов:
 
-1. Сделать первый запрос с `updatedAtSince` из команды (как сейчас).
-2. Если мастер вернул **ровно `limit`** строк (страница полная) — сделать ещё один запрос, передав в `updatedAtSince` значение `updated_at` **последней** (максимальной) строки предыдущего ответа.
+### 1. `DeltaSyncService.kt`
+
+Методы `fetchDelta(ep, carrierId, regionId, versionSince)` и `fetchDeltaWithUserIds(ep, userIds, versionSince)` (после 003_02 они принимают `Long?` и шлют `versionSince`):
+
+1. Сделать первый запрос с `versionSince` из команды (`command.lastVersion`).
+2. Если мастер вернул **ровно `limit`** строк (страница полная) — сделать ещё один запрос, передав в `versionSince` значение `version` **последней** (максимальной) строки предыдущего ответа.
 3. Повторять, пока не придёт страница **меньше `limit`** (значит это последняя) или не закончатся данные.
 4. Объединить все страницы в один `Flux<JsonNode>` (вернуть, например, `Flux.concat` страниц).
 
 **Требования к реализации:**
-
-- **Порядок сохранения**: мастера уже сортируют `updated_at ASC`, поэтому не ре-сортируй.
-- **Определение `updated_at` последней строки**: парси ключ осторожно — он может быть `updatedAt` (camelCase, admin) или `updated_at` (snake_case, route). Значение — `Instant`. Хэлпер: `node.get("updatedAt") ?: node.get("updated_at")`. Если у строки нет `updated_at` — считать страницу последней (прервать цикл), чтобы не зациклиться.
-- **Строгая граница**: повторный запрос должен использовать `>` к значению, поэтому передай ровно значение последней строки в `updatedAtSince`. Не прибавляй к нему ничего (никаких `+1ns`, чтобы не пропустить строки).
-- **Цикл на Kotlin**: обычный `while`/рекурсия внутри `Flux`-цепи не сработает напрямую из-за реактивности. Используй идиому: метод `fetchPage(...)` возвращает `Flux<JsonNode>`, и `fetchDelta` строит `Flux.defer { fetchPage(...).concatWith(if (pageWasFull) fetchDeltaWithCursor(...) else Flux.empty()) }` — либо `Flux.defer` + `.repeat`/`.expand`, либо рекурсию через `flatMap`. Как удобнее, главное — без блокировок, строго реактивно (`Mono`/`Flux`), без `.block()`.
+- **Порядок сохранения**: мастера уже сортируют `version ASC`, поэтому не ре-сортируй.
+- **Определение курсора**: `node.get("version")?.asLong()`. Если у строки нет `version` — считать страницу последней (прервать цикл), чтобы не зациклиться.
+- **Строгая граница**: повторный запрос должен использовать `version > курсор`, поэтому передай ровно `version` последней строки в `versionSince`. Ничего не прибавляй.
+- **Реактивность**: без `.block()`, строго `Mono`/`Flux`. Идиома: `Flux.defer { fetchPage(...).concatWith(if (pageWasFull) fetchPageWithCursor(...) else Flux.empty()) }`, либо материализовать страницу в `List` через `.collectList()`, проверить `size >= limit` и рекурсивно продолжить; вернуть `Flux.fromIterable(все строки)`.
 - **`limit`**: оставь 10000 в запросах (это и есть размер страницы). Не увеличивай.
-- **Фильтры сохранить**: carrierId/regionId/userIdsIn/updatedAtSince должны прокидываться в каждую страницу (кроме `updatedAtSince`, который меняется на курсор).
-- **Смягчение ошибок**: текущий `onErrorResume` на каждой странице логирует warn и возвращает `Flux.empty()`. Сохрани это поведение для каждой страницы, но если страница упала — прерывай цикл (не продолжай с пустым курсором).
-- **`fetchUserIds`** (`:52`) — не обязателен к изменению, но убедись, что твоя правка не меняет его семантику (он возвращает все userIds; лимит 10000 на users в тестах вряд ли будет превышен, но если сделаешь пагинацию и там — тоже нормально).
+- **Фильтры сохранить**: carrierId/regionId/userIdsIn/versionSince должны прокидываться в каждую страницу (кроме `versionSince`, который меняется на курсор).
+- **Смягчение ошибок**: текущий `onErrorResume` на каждой странице логирует warn и возвращает `Flux.empty()`. Сохрани для каждой страницы, но если страница упала — прерывай цикл (не продолжай с пустым курсором).
+- **`fetchUserIds`** (`:52`) — использует `fetchDelta`, пагинация достанется ему автоматически (для пользователей лимит вряд ли превысится, но единообразие желательно).
+
+### 2. `FullSyncService.kt`
+
+`fetchAll(command)` делает **один запрос на таблицу** в трёх местах:
+- `:53-60` — `asop_users` (через `/admin-users/delta`);
+- `:70-77` — обычные таблицы (по `carrierId`/`regionId`);
+- `:79-85` — USER/CARD таблицы (по `userIdsIn`).
+
+Во всех трёх `limit=10_000` без цикла. Добавить keyset-пагинацию по `version` по той же логике, что и для дельты:
+1. Вынести запрос страницы в отдельную функцию (например `fetchPage(uriBuilder, rowsMapper)`: строит URI с `includeDeleted=true`, `limit=10000`, `versionSince=<курсор>`, `carrierId/regionId` или `userIdsIn`, возвращает `Flux<JsonNode>` или `Mono<List<JsonNode>>`).
+2. Зациклить: первый запрос без курсора (все строки полной выгрузки), при полной странице (`size >= limit`) повторить с `versionSince = version` последней строки.
+3. Собрать все страницы в `List<Message>` через `buildRowMessage` (как сейчас), объединить.
+4. `onErrorResume` на каждой странице: warn + `Flux.empty()` (как сейчас), при ошибке прерывать цикл.
+5. Остальную логику (сборка ZIP, MinIO, pre-signed URL, `eventService.complete/fail`) — **не менять**.
+
+**Требования:**
+- Реактивность, без `.block()`.
+- Сортировка уже `version ASC` на мастерах — не ре-сортить.
+- Курсор: `node.get("version")?.asLong()`; отсутствие `version` у строки → страница последняя.
+- **Не менять**: `ChunkingService`, `MasterRegistry`, `ProtoRowMapper`, контракты `DeltaSyncCommand`/`FullSyncCommand`, механизм ZIP/MinIO.
 
 ## Пример ожидаемого поведения
 
 Таблица `asop_benefits` (admin-service), 25 000 записей, `limit=10000`:
-- запрос 1: `updatedAtSince=null` → 10000 строк, курсор = `updated_at` 10000-й;
-- запрос 2: `updatedAtSince=<курсор>` → 10000 строк, новый курсор;
-- запрос 3: `updatedAtSince=<курсор>` → 5000 строк (< limit) → стоп.
+- запрос 1: `versionSince=null` → 10000 строк, курсор = `version` 10000-й;
+- запрос 2: `versionSince=<курсор>` → 10000 строк, новый курсор;
+- запрос 3: `versionSince=<курсор>` → 5000 строк (< limit) → стоп.
 Итого 25000 строк, ни одна не потеряна и не задвоена.
 
 ## Проверка
 
 1. `./gradlew :backend:orchestrator-service:build -x test` — должно собраться.
-2. Опционально: поднять стек через `docker compose -f infrastructure/docker/docker-compose.yml up -d --build` и проверить логи orchestrator-service при дельта-запросе на таблице с >10000 строк (в консоли должно появиться несколько последовательных логов запросов / итоговое число строк).
+2. Опционально: поднять стек через `docker compose -f infrastructure/docker/docker-compose.yml up -d --build`, залить `seed-data-delta-2.sql` (100–200к строк), запустить дельта-синк и полную выгрузку — в логах orchestrator-service несколько последовательных страниц на таблицу, итог без потерь (все строки доехали до терминала).
 
 ## Важно: не трогать
-- `ChunkingService` (чанкование в Redis) — не менять.
+- `ChunkingService` — не менять.
 - `MasterRegistry` — не менять.
 - `ProtoRowMapper` — не менять.
-- Контракт `DeltaSyncCommand` — не менять.
-- Не добавлять комментарии в код (в проекте их минимум, стиль — краткие KDoc на классе/методе).
+- Контракты `DeltaSyncCommand`/`FullSyncCommand` — не менять.
+- Механизм ZIP/MinIO в `FullSyncService` — не менять (только добавить цикл пагинации в `fetchAll`).
+- Не добавлять комментарии в код (стиль проекта — краткие KDoc).
 
 ---
 
-Файл `DeltaSyncService.kt` (текущий):
+Файл `DeltaSyncService.kt` (ожидаемое состояние после 003_02; курсор уже переведён на `version`):
 
 ```kotlin
 package ru.asop.orchestrator.service
@@ -105,7 +134,6 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.common.event.EventService
 import ru.asop.kafka.events.delta.DeltaSyncCommand
-import java.time.Instant
 import java.util.UUID
 
 @Service
@@ -144,7 +172,7 @@ class DeltaSyncService(
 
     private fun fetchUserIds(command: DeltaSyncCommand): Mono<Set<String>> {
         val ep = MasterRegistry.USER_TABLES["asop_users"]!!
-        return fetchDelta(ep, command.carrierId, command.regionId, command.lastUpdatedAt["asop_users"])
+        return fetchDelta(ep, command.carrierId, command.regionId, command.lastVersion)
             .map { node -> node.get("userId")?.asText() ?: node.get("user_id")?.asText() }
             .filter { it != null }
             .map { it!! }
@@ -160,19 +188,19 @@ class DeltaSyncService(
         userIds: Set<String>
     ): Flux<JsonNode> {
         if (table == "asop_users") {
-            return fetchDelta(ep, command.carrierId, command.regionId, command.lastUpdatedAt[table])
+            return fetchDelta(ep, command.carrierId, command.regionId, command.lastVersion)
         }
         if (MasterRegistry.USER_TABLES.containsKey(table) || MasterRegistry.CARD_TABLES.containsKey(table)) {
-            return fetchDeltaWithUserIds(ep, userIds, command.lastUpdatedAt[table])
+            return fetchDeltaWithUserIds(ep, userIds, command.lastVersion)
         }
-        return fetchDelta(ep, command.carrierId, command.regionId, command.lastUpdatedAt[table])
+        return fetchDelta(ep, command.carrierId, command.regionId, command.lastVersion)
     }
 
     private fun fetchDelta(
         ep: MasterEndpoint,
         carrierId: UUID?,
         regionId: UUID?,
-        updatedAtSince: Instant?
+        versionSince: Long?
     ): Flux<JsonNode> {
         return masterWebClient.get().uri { u ->
             val builder = u.path("/api/v1/{resource}/delta")
@@ -180,7 +208,7 @@ class DeltaSyncService(
                 .queryParam("limit", 10_000)
             carrierId?.let { builder.queryParam("carrierId", it.toString()) }
             regionId?.let { builder.queryParam("regionId", it.toString()) }
-            updatedAtSince?.let { builder.queryParam("updatedAtSince", it.toString()) }
+            versionSince?.let { builder.queryParam("versionSince", it.toString()) }
             builder.build(ep.resource)
         }.retrieve().bodyToFlux(JsonNode::class.java)
             .onErrorResume { err ->
@@ -192,14 +220,14 @@ class DeltaSyncService(
     private fun fetchDeltaWithUserIds(
         ep: MasterEndpoint,
         userIds: Set<String>,
-        updatedAtSince: Instant?
+        versionSince: Long?
     ): Flux<JsonNode> {
         return masterWebClient.get().uri { u ->
             val builder = u.path("/api/v1/{resource}/delta")
                 .queryParam("includeDeleted", true)
                 .queryParam("limit", 10_000)
             if (userIds.isNotEmpty()) builder.queryParam("userIdsIn", userIds.joinToString(","))
-            updatedAtSince?.let { builder.queryParam("updatedAtSince", it.toString()) }
+            versionSince?.let { builder.queryParam("versionSince", it.toString()) }
             builder.build(ep.resource)
         }.retrieve().bodyToFlux(JsonNode::class.java)
             .onErrorResume { err ->
@@ -212,5 +240,6 @@ class DeltaSyncService(
 
 ## Дополнительные указания
 
-- Сигнатуры `fetchDelta`/`fetchDeltaWithUserIds` используются ещё и в `fetchUserIds`, поэтому меняй их аккуратно (можно оставить как есть, добавив внутренний цикл).
-- Подсказка по реактивной пагинации: `Flux.defer { first().concatWith(Flux.defer { rest() }) }`, где `rest()` рекурсивно проверяет полноту страницы по счётчику элементов — но аккуратно со `bodyToFlux`: ты получаешь `Flux<JsonNode>`, а полноту страницы надо знать до/после материализации. Практичный подход: материализовать страницу в `List` через `.collectList()`, затем проверить `size >= limit` и рекурсивно продолжить; вернуть `Flux.fromIterable(list)`.
+- Сигнатуры `fetchDelta`/`fetchDeltaWithUserIds` используются ещё и в `fetchUserIds`, поэтому меняй их аккуратно (можно оставить сигнатуры, добавив внутренний цикл).
+- Практичный подход для реактивной пагинации: материализовать страницу в `List` через `.collectList()`, проверить `size >= limit` и рекурсивно продолжить с новым курсором; в конце вернуть `Flux.fromIterable(все строки)`. Можно через `Flux.defer { ... .concatWith(...) }` или `expand` — как удобнее, главное без блокировок.
+- В `FullSyncService.kt` переиспользуй ту же идиому для трёх видов запросов (users / обычные / user-card). Общий хелпер-функция `fetchPage` с параметром `versionSince` уберёт дублирование.
