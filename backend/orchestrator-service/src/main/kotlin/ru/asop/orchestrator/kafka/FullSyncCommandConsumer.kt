@@ -1,5 +1,6 @@
 package ru.asop.orchestrator.kafka
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.messaging.handler.annotation.Header
@@ -10,17 +11,23 @@ import java.util.UUID
 
 @Component
 class FullSyncCommandConsumer(
-    private val fullSyncService: FullSyncService
+    private val fullSyncService: FullSyncService,
+    private val objectMapper: ObjectMapper
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     @KafkaListener(topics = ["\${asop.kafka.topics.delta-full-commands}"], groupId = "orchestrator-delta-full")
-    fun onCommand(command: FullSyncCommand, @Header("X-Event-Id") eventId: String?) {
-        val resolvedEventId = eventId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: command.eventId
-        log.debug("Full sync command received: eventId={}, terminal={}", resolvedEventId, command.terminalId)
-        fullSyncService.process(command.copy(eventId = resolvedEventId)).subscribe(
-            { log.info("Full sync processed for event {}", resolvedEventId) },
-            { err -> log.error("Full sync processing failed for event {}", resolvedEventId, err) }
-        )
+    fun onCommand(payload: String, @Header("X-Event-Id") eventId: String?) {
+        try {
+            val command = objectMapper.readValue(payload, FullSyncCommand::class.java)
+            val resolvedEventId = eventId?.let { runCatching { UUID.fromString(it) }.getOrNull() } ?: command.eventId
+            log.debug("Full sync command received: eventId={}, terminal={}", resolvedEventId, command.terminalId)
+            fullSyncService.process(command.copy(eventId = resolvedEventId)).subscribe(
+                { log.info("Full sync processed for event {}", resolvedEventId) },
+                { err -> log.error("Full sync processing failed for event {}", resolvedEventId, err) }
+            )
+        } catch (e: Exception) {
+            log.error("Failed to parse full sync command: {}", e.message, e)
+        }
     }
 }

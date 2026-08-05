@@ -101,7 +101,7 @@ class FullSyncService(
                                     Mono.just(emptyList())
                                 }
                         }
-                        val rowFlux = if (isUserCard && userIds.size > USER_IDS_BATCH) {
+                        val rowFlux = if (isUserCard && table != "asop_users" && userIds.size > USER_IDS_BATCH) {
                             reactor.core.publisher.Flux.fromIterable(userIds.toList().chunked(USER_IDS_BATCH))
                                 .concatMap { batch ->
                                     val batchFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
@@ -129,6 +129,7 @@ class FullSyncService(
                         }
                         table to rowFlux
                             .map { protoRowMapper.buildRowMessage(table, it) }
+                            .collectList()
                     }
                     val tables = tableRows.map { it.first }
                     val fluxes = tableRows.map { it.second }

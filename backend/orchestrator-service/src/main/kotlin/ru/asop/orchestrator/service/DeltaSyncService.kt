@@ -32,8 +32,8 @@ class DeltaSyncService(
                     .concatMap { (table, ep) -> fetchTable(table, ep, command, userIds).map { table to it } }
                     .collectList()
                     .flatMap { tableRows ->
-                        val entries = tableRows.flatMap { (table, rows) ->
-                            rows.map { table to protoRowMapper.buildRowMessage(table, it) }
+                        val entries = tableRows.map { (table, row) ->
+                            table to protoRowMapper.buildRowMessage(table, row)
                         }
                         chunkingService.storeChunks(eventId, chunkingService.chunkBySize(entries))
                     }

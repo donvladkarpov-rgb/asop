@@ -3,8 +3,8 @@ x-jvm-opts: &jvm-opts
     -Djavax.net.ssl.trustStore=/tmp/certs/truststore.p12
     -Djavax.net.ssl.trustStorePassword=changeit
     -Djavax.net.ssl.trustStoreType=PKCS12
-    -Dspring.redis.host=redis
-    -Dspring.redis.port=6379
+    -Dspring.data.redis.host=redis
+    -Dspring.data.redis.port=6379
     -XX:+UseContainerSupport
     -XX:MaxRAMPercentage=75.0
     -Dfile.encoding=UTF-8

@@ -3,7 +3,6 @@ package ru.asop.orchestrator.service
 import com.fasterxml.jackson.databind.JsonNode
 import com.google.protobuf.Descriptors
 import com.google.protobuf.Message
-import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 
 /**
@@ -13,8 +12,6 @@ import org.springframework.stereotype.Component
  */
 @Component
 class ProtoRowMapper {
-
-    private val log = LoggerFactory.getLogger(javaClass)
 
     fun buildRowMessage(table: String, node: JsonNode): Message {
         val clsName = "ru.asop.proto.v1.${camel(table)}Row"

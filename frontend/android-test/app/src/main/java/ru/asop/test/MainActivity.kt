@@ -168,19 +168,16 @@ private fun TestMenu(
                         }
                         Text(
                             text = "  room=${t.roomCount} ethalon=${t.ethalonCount} " +
-                                "missing=${t.missingInRoom.size} extra=${t.extraInRoom.size} diff=${t.diffs.size}",
+                                "missing=${t.missingInRoomCount} extra=${t.extraInRoomCount} diff=${t.diffs.size}",
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp
                         )
-                        t.missingInRoom.take(5).forEach {
-                            Text("  MISSING version=$it", fontSize = 11.sp)
-                        }
-                        t.extraInRoom.take(5).forEach {
-                            Text("  EXTRA version=$it", fontSize = 11.sp)
-                        }
                         t.diffs.take(3).forEach {
-                            Text("  DIFF v=${it.version}\n    room: ${it.room}\n    eth:  ${it.ethalon}", fontSize = 10.sp)
+                            Text(
+                                "  DIFF\n    room: ${it.room}\n    eth:  ${it.ethalon}",
+                                fontSize = 10.sp
+                            )
                         }
                     }
                 }

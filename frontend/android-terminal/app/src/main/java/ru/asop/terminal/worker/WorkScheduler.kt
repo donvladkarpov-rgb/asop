@@ -77,6 +77,46 @@ class WorkScheduler @Inject constructor(
         )
     }
 
+    /** Отменяет периодические delta-джобы. Текущее in-flight задание завершится, новые не начнутся. */
+    fun stopDeltaJobs() {
+        val wm = WorkManager.getInstance(context)
+        wm.cancelUniqueWork(DELTA_WORK_NAME)
+        wm.cancelUniqueWork(DELTA_POLL_WORK_NAME)
+    }
+
+    /** Перезапускает периодические delta-джобы после stopDeltaJobs(). */
+    fun startDeltaJobs() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val deltaRequest = PeriodicWorkRequestBuilder<DeltaSyncWorker>(
+            60, TimeUnit.MINUTES
+        )
+            .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
+            .build()
+
+        val deltaPollRequest = PeriodicWorkRequestBuilder<DeltaChunkPollWorker>(
+            5, TimeUnit.MINUTES
+        )
+            .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+
+        val wm = WorkManager.getInstance(context)
+        wm.enqueueUniquePeriodicWork(
+            DELTA_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            deltaRequest
+        )
+        wm.enqueueUniquePeriodicWork(
+            DELTA_POLL_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            deltaPollRequest
+        )
+    }
+
     fun enqueueOneShotSync() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -89,17 +129,49 @@ class WorkScheduler @Inject constructor(
         WorkManager.getInstance(context).enqueue(request)
     }
 
-    /** Ручной delta-запрос (debug/fallback). */
-    fun enqueueOneShotDelta() {
+    /** Ручной delta-запрос (debug/fallback). Идёт всегда, независимо от включения периодических джоб. */
+    fun enqueueOneShotDelta(
+        terminalId: String? = null,
+        carrierId: String? = null,
+        regionId: String? = null,
+        lastVersion: Long? = null
+    ) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        val data = DeltaSyncWorker.buildForcedData(
+            terminalId = terminalId ?: "",
+            carrierId = carrierId,
+            regionId = regionId,
+            lastVersion = lastVersion
+        )
+
         val request = OneTimeWorkRequestBuilder<DeltaSyncWorker>()
             .setConstraints(constraints)
+            .setInputData(data)
             .build()
 
         WorkManager.getInstance(context).enqueue(request)
+    }
+
+    /** Принудительный чанк-поллить (после «Дельта сейчас»), независим от deltaJobsEnabled. */
+    fun enqueueForcedDeltaChunkPoll() {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val request = OneTimeWorkRequestBuilder<DeltaChunkPollWorker>()
+            .setConstraints(constraints)
+            .setInputData(DeltaChunkPollWorker.buildForcedData())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "forced_delta_chunk_poll",
+            ExistingWorkPolicy.REPLACE,
+            request
+        )
     }
 
     /** Полная выкачка: запрос + download worker. */

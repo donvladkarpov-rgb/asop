@@ -29,6 +29,9 @@ interface ReferenceRowDao {
     @Query("SELECT COUNT(*) FROM reference_rows WHERE deleted_at IS NULL")
     fun observeActiveCount(): Flow<Int>
 
+    @Query("SELECT MAX(version) FROM reference_rows")
+    suspend fun maxVersion(): Long?
+
     @Query("DELETE FROM reference_rows WHERE table_name = :tableName")
     suspend fun deleteByTable(tableName: String)
 }

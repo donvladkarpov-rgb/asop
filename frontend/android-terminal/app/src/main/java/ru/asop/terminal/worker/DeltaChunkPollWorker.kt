@@ -4,11 +4,14 @@ import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.flow.first
 import ru.asop.terminal.db.ReferenceSyncStore
 import ru.asop.terminal.db.dao.DeltaSyncJobDao
+import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.network.GatewayApi
 import ru.asop.proto.v1.DeltaChunk
 
@@ -23,18 +26,26 @@ class DeltaChunkPollWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val deltaSyncJobDao: DeltaSyncJobDao,
     private val referenceSyncStore: ReferenceSyncStore,
-    private val gatewayApi: GatewayApi
+    private val gatewayApi: GatewayApi,
+    private val syncPreferences: SyncPreferences
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
         private const val TAG = "DeltaChunkPollWorker"
         private const val JOB_TTL_MS = 24L * 60 * 60 * 1000
+
+        const val KEY_FORCED = "forced"
+
+        fun buildForcedData(): Data = Data.Builder().putBoolean(KEY_FORCED, true).build()
     }
 
     override suspend fun doWork(): Result {
+        val forced = inputData.getBoolean(KEY_FORCED, false)
+        if (!forced && !syncPreferences.deltaJobsEnabled.first()) return Result.success()
         val pending = deltaSyncJobDao.getPending()
         if (pending.isEmpty()) return Result.success()
 
+        var anyStillPending = false
         for (job in pending) {
             val eventId = job.eventId
             if (System.currentTimeMillis() - job.requestedAt > JOB_TTL_MS) {
@@ -45,14 +56,20 @@ class DeltaChunkPollWorker @AssistedInject constructor(
             try {
                 if (!process(job.eventId)) {
                     // событие ещё в полёте / не готово — оставляем, дождёмся следующего цикла
+                    anyStillPending = true
                     continue
                 }
             } catch (e: Exception) {
-                // Локальная ошибка (чанк не пришёл, протокол) — забываем eventId целиком
-                Log.w(TAG, "Forgetting delta event $eventId: ${e.message}")
-                deltaSyncJobDao.delete(eventId)
+                // Локальная ошибка (чанк не пришёл, таймаут) — НЕ удаляем задание:
+                // скачанные чанки уже накатаны идемпотентно (upsert по PK), поэтому
+                // следующий цикл просто продолжит с того же места и докачает остальные.
+                Log.w(TAG, "Delta chunk error for $eventId, will retry: ${e.message}")
+                anyStillPending = true
             }
         }
+        // Принудительный поллер: если остались незавершённые PENDING-задачи — повторить
+        // (оркестратор может ещё собирать чанки), иначе задача замрёт навсегда.
+        if (forced && anyStillPending) return Result.retry()
         return Result.success()
     }
 
@@ -93,6 +110,7 @@ class DeltaChunkPollWorker @AssistedInject constructor(
                     val chunk = DeltaChunk.parseFrom(bytes)
                     referenceSyncStore.applyChunk(chunk)
                 }
+                referenceSyncStore.updateGlobalWatermark()
                 deltaSyncJobDao.markCompleted(eventId, totalChunks, System.currentTimeMillis())
                 Log.d(TAG, "Delta applied: $eventId, chunks=$totalChunks")
                 true

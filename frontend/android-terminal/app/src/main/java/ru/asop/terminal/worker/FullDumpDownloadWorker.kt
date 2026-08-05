@@ -18,6 +18,8 @@ import java.util.zip.ZipInputStream
  * One-shot полная выкачка: поллит event до COMPLETED, качает ZIP
  * (full_{eventId}.zip) через gateway-proxy MinIO, распаковывает .pb-файлы
  * и атомарно накатывает справочники в Room.
+ *
+ * Пользовательский one-shot: выполняется независимо от флага deltaJobsEnabled.
  */
 @HiltWorker
 class FullDumpDownloadWorker @AssistedInject constructor(
@@ -71,6 +73,8 @@ class FullDumpDownloadWorker @AssistedInject constructor(
                     entry = zip.nextEntry
                 }
             }
+
+            referenceSyncStore.updateGlobalWatermark()
 
             deltaSyncJobDao.markCompleted(eventId, 0, System.currentTimeMillis())
             Log.d(TAG, "Full dump applied: $eventId")

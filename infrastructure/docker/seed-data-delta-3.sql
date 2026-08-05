@@ -24,7 +24,7 @@ ON CONFLICT (ROLE_ID) DO NOTHING;
 INSERT INTO ASOP_TRANSPORT_STOPS (STOP_ID, FARE_ZONE_ID, REGION_ID, STOP_CODE, STOP_NAME, STOP_ADDRESS, IS_ACTIVE)
 SELECT
     md5('d3:stop:' || n)::uuid,
-    md5('d2:zone:' || (n % 5000 + 1))::uuid,
+    md5('d2:zone:' || (n % 2500 + 1))::uuid,
     '00000000-0000-0000-0000-000000000103',
     'D3S' || lpad(n::text, 8, '0'),
     'Остановка delta-3 #' || n,
@@ -37,7 +37,7 @@ ON CONFLICT DO NOTHING;
 INSERT INTO ASOP_SCHEDULE (SCHEDULE_ID, PATH_ID, STOP_ID, DAY_MASK, ARRIVAL_TIME, DWELL_TIME_SEC, REGION_ID, IS_ACTIVE)
 SELECT
     md5('d3:sched:' || n)::uuid,
-    md5('d2:path:' || (n % 5000 + 1))::uuid,
+    md5('d2:path:' || (n % 2500 + 1))::uuid,
     md5('d3:stop:' || (n % 3000 + 1))::uuid,
     127,
     ('09:00:00'::time + (n % 720) * interval '1 minute'),

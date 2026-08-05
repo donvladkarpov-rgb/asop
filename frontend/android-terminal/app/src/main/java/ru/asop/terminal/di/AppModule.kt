@@ -1,6 +1,7 @@
 package ru.asop.terminal.di
 
 import android.content.Context
+import android.nfc.NfcAdapter
 import androidx.room.Room
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
@@ -176,6 +177,13 @@ object AppModule {
     @Singleton
     fun provideFusedLocationProviderClient(@ApplicationContext context: Context): FusedLocationProviderClient =
         LocationServices.getFusedLocationProviderClient(context)
+
+    // --- NFC ---
+
+    @Provides
+    @Singleton
+    fun provideNfcAdapter(@ApplicationContext context: Context): NfcAdapter? =
+        NfcAdapter.getDefaultAdapter(context)
 
     private fun trustAllTrustManager(): X509TrustManager = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}

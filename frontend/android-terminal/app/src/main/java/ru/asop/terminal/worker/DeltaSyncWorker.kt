@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -16,8 +17,12 @@ import ru.asop.terminal.network.GatewayApi
 import ru.asop.terminal.network.models.DeltaSyncRequest
 
 /**
- * Раз в час: шлёт delta-запрос (202 + eventId) на gateway, сохраняет
- * задание в Room. Скачивание чанков делает DeltaChunkPollWorker.
+ * Раз в час (или вручную): шлёт delta-запрос (202 + eventId) на gateway,
+ * сохраняет задание в Room. Скачивание чанков делает DeltaChunkPollWorker.
+ *
+ * Для периодического запуска (КЕЕП, без флага forced) уважает
+ * deltaJobsEnabled. Принудительный (forced, one-shot, «Дельта сейчас»)
+ * работает всегда, независимо от флага.
  */
 @HiltWorker
 class DeltaSyncWorker @AssistedInject constructor(
@@ -31,21 +36,62 @@ class DeltaSyncWorker @AssistedInject constructor(
 
     companion object {
         private const val TAG = "DeltaSyncWorker"
+
+        const val KEY_FORCED = "forced"
+        const val KEY_TERMINAL_ID = "terminal_id"
+        const val KEY_CARRIER_ID = "carrier_id"
+        const val KEY_REGION_ID = "region_id"
+        const val KEY_LAST_VERSION = "last_version"
+
+        fun buildForcedData(
+            terminalId: String,
+            carrierId: String?,
+            regionId: String?,
+            lastVersion: Long?
+        ): Data = Data.Builder()
+            .putBoolean(KEY_FORCED, true)
+            .putString(KEY_TERMINAL_ID, terminalId)
+            .putString(KEY_CARRIER_ID, carrierId)
+            .putString(KEY_REGION_ID, regionId)
+            .putLong(KEY_LAST_VERSION, lastVersion ?: 0L)
+            .build()
     }
 
     override suspend fun doWork(): Result {
-        val terminalId = syncPreferences.terminalId.first() ?: return Result.success()
-        if (terminalId.isBlank()) return Result.success()
+        val forced = inputData.getBoolean(KEY_FORCED, false)
+        val terminalId: String? = if (forced) {
+            inputData.getString(KEY_TERMINAL_ID)
+        } else {
+            syncPreferences.terminalId.first()
+        }
+        if (terminalId.isNullOrBlank()) return Result.failure()
+        val tid: String = terminalId
+
+        if (!forced && !syncPreferences.deltaJobsEnabled.first()) return Result.success()
 
         // Одно in-flight задание за раз
         if (deltaSyncJobDao.getPending().isNotEmpty()) return Result.success()
 
         try {
-            val lastVersion = syncMetaDao.get()?.lastVersion
-            val carrierId = syncPreferences.carrierId.first()
-            val regionId = syncPreferences.regionId.first()
+            val lastVersion = if (forced) {
+                val v = inputData.getLong(KEY_LAST_VERSION, 0L)
+                if (v > 0L) v else null
+            } else {
+                syncMetaDao.get()?.lastVersion
+            }
+            val carrierId = if (forced) {
+                inputData.getString(KEY_CARRIER_ID)
+            } else {
+                syncPreferences.carrierId.first()
+            }
+            val regionId = if (forced) {
+                inputData.getString(KEY_REGION_ID)
+            } else {
+                syncPreferences.regionId.first()
+            }
+
             val response = gatewayApi.deltaSync(
-                DeltaSyncRequest(terminalId, carrierId, regionId, lastVersion)
+                DeltaSyncRequest(tid, carrierId, regionId, lastVersion)
             )
 
             if (!response.isSuccessful) {
@@ -60,10 +106,10 @@ class DeltaSyncWorker @AssistedInject constructor(
                     requestedAt = System.currentTimeMillis()
                 )
             )
-            Log.d(TAG, "Delta requested: eventId=$eventId, lastVersion=$lastVersion")
+            Log.d(TAG, "Delta requested: eventId=$eventId, lastVersion=$lastVersion, forced=$forced")
             return Result.success()
         } catch (e: Exception) {
-            Log.w(TAG, "Delta request failed: ${e.message}")
+            Log.w(TAG, "Delta request failed: ${e.message}, forced=$forced")
             return Result.retry()
         }
     }

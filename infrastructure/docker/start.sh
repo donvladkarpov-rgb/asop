@@ -18,7 +18,7 @@ fi
 # Проверка что собирали JAR'ы
 check_jars() {
   local missing=0
-  for svc in gateway-service crypto-service user-service terminal-service session-service card-service carrier-service debt-service audit-service fiscal-service admin-service route-service; do
+  for svc in gateway-service crypto-service user-service terminal-service session-service card-service carrier-service debt-service audit-service fiscal-service admin-service route-service orchestrator-service; do
     jar_path="$SCRIPT_DIR/../../backend/$svc/build/libs/$svc-*.jar"
     if ! ls $jar_path >/dev/null 2>&1; then
       warn "JAR не найден: $svc (нужен ./gradlew bootJar)"
@@ -55,27 +55,32 @@ $COMPOSE up -d kafka
 info "Ожидание 60 сек для Kafka..."
 sleep 60
 
-info "=== Wave 5: Keycloak ==="
+info "=== Wave 5: Хранилища (Redis, MinIO S3) ==="
+$COMPOSE up -d redis minio minio-init
+info "Ожидание 30 сек для Redis/MinIO..."
+sleep 30
+
+info "=== Wave 6: Keycloak ==="
 $COMPOSE up -d keycloak
 info "Ожидание 60 сек для Keycloak..."
 sleep 60
 
-info "=== Wave 6: Приложения (группа A) ==="
+info "=== Wave 7: Приложения (группа A) ==="
 $COMPOSE up -d --no-deps gateway-service user-service admin-service
 info "Ожидание 30 сек..."
 sleep 30
 
-info "=== Wave 7: Приложения (группа B) ==="
+info "=== Wave 8: Приложения (группа B) ==="
 $COMPOSE up -d --no-deps carrier-service terminal-service card-service route-service
 info "Ожидание 30 сек..."
 sleep 30
 
-info "=== Wave 8: Приложения (группа C) ==="
-$COMPOSE up -d --no-deps session-service debt-service audit-service fiscal-service
+info "=== Wave 9: Приложения (группа C) + оркестратор ==="
+$COMPOSE up -d --no-deps session-service debt-service audit-service fiscal-service orchestrator-service
 info "Ожидание 30 сек..."
 sleep 30
 
-info "=== Wave 9: Фронтенд ==="
+info "=== Wave 10: Фронтенд ==="
 $COMPOSE up -d --no-deps web-admin
 
 info ""

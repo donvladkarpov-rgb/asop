@@ -16,9 +16,10 @@ spring:
     name: orchestrator-service
 
   # Redis (reactive) — chunk store + shared EventService (asop-common)
-  redis:
-    host: ${REDIS_HOST:localhost}
-    port: ${REDIS_PORT:6379}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
 
   # Jackson
   jackson:
@@ -41,12 +42,9 @@ spring:
       ssl.endpoint.identification.algorithm: ""
     consumer:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       group-id: orchestrator
       auto-offset-reset: earliest
-      properties:
-        spring.json.trusted.packages: "*"
-        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JsonDeserializer
 
   # R2DBC — только для purge-job (physical delete soft-deleted rows)
   r2dbc:

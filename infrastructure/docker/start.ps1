@@ -33,7 +33,8 @@ try { docker info *>$null } catch {
 $Services = @(
   'gateway-service','crypto-service','user-service','terminal-service',
   'session-service','card-service','carrier-service','debt-service',
-  'audit-service','fiscal-service','admin-service','route-service'
+  'audit-service','fiscal-service','admin-service','route-service',
+  'orchestrator-service'
 )
 $missing = $false
 foreach ($svc in $Services) {
@@ -93,24 +94,28 @@ Invoke-Wave "Wave 3: Сертификаты" `
 Invoke-Wave "Wave 4: Брокер сообщений (Kafka)" `
   -Services @("kafka") -WaitSec 60
 
-# Wave 5: Keycloak
-Invoke-Wave "Wave 5: Keycloak" `
+# Wave 5: Хранилища (Redis, MinIO S3)
+Invoke-Wave "Wave 5: Хранилища (Redis, MinIO S3)" `
+  -Services @("redis","minio","minio-init") -WaitSec 30
+
+# Wave 6: Keycloak
+Invoke-Wave "Wave 6: Keycloak" `
   -Services @("keycloak") -WaitSec 60
 
-# Wave 6: Приложения (группа A)
-Invoke-Wave "Wave 6: Приложения (группа A)" `
+# Wave 7: Приложения (группа A)
+Invoke-Wave "Wave 7: Приложения (группа A)" `
   -Services @("gateway-service","user-service","admin-service") -WaitSec 30 -Build -NoDeps
 
-# Wave 7: Приложения (группа B)
-Invoke-Wave "Wave 7: Приложения (группа B)" `
+# Wave 8: Приложения (группа B)
+Invoke-Wave "Wave 8: Приложения (группа B)" `
   -Services @("carrier-service","terminal-service","card-service","route-service") -WaitSec 30 -Build -NoDeps
 
-# Wave 8: Приложения (группа C)
-Invoke-Wave "Wave 8: Приложения (группа C)" `
-  -Services @("session-service","debt-service","audit-service","fiscal-service") -WaitSec 30 -Build -NoDeps
+# Wave 9: Приложения (группа C) + оркестратор
+Invoke-Wave "Wave 9: Приложения (группа C) + оркестратор" `
+  -Services @("session-service","debt-service","audit-service","fiscal-service","orchestrator-service") -WaitSec 30 -Build -NoDeps
 
-# Wave 9: Фронтенд
-Invoke-Wave "Wave 9: Фронтенд" `
+# Wave 10: Фронтенд
+Invoke-Wave "Wave 10: Фронтенд" `
   -Services @("web-admin") -WaitSec 0 -Build -NoDeps
 
 # Статус

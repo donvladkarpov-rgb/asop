@@ -21,6 +21,7 @@ class SyncPreferences(private val context: Context) {
         private val KEY_CARRIER_ID = stringPreferencesKey("carrier_id")
         private val KEY_REGION_ID = stringPreferencesKey("region_id")
         private val KEY_TIMEZONE = stringPreferencesKey("timezone")
+        private val KEY_DELTA_JOBS_ENABLED = booleanPreferencesKey("delta_jobs_enabled")
     }
 
     val lastSyncTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
@@ -33,6 +34,11 @@ class SyncPreferences(private val context: Context) {
 
     val syncEnabled: Flow<Boolean> = context.syncDataStore.data.map { prefs ->
         prefs[KEY_SYNC_ENABLED] ?: true
+    }
+
+    /** Выполняются ли дельта/full-dump джобы (WorkManager) сейчас. Default: true. */
+    val deltaJobsEnabled: Flow<Boolean> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_DELTA_JOBS_ENABLED] ?: true
     }
 
     val terminalId: Flow<String?> = context.syncDataStore.data.map { prefs ->
@@ -67,6 +73,12 @@ class SyncPreferences(private val context: Context) {
     suspend fun setSyncEnabled(enabled: Boolean) {
         context.syncDataStore.edit { prefs ->
             prefs[KEY_SYNC_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setDeltaJobsEnabled(enabled: Boolean) {
+        context.syncDataStore.edit { prefs ->
+            prefs[KEY_DELTA_JOBS_ENABLED] = enabled
         }
     }
 

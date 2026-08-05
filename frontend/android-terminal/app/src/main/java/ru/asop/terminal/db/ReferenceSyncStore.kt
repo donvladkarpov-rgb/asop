@@ -38,6 +38,7 @@ class ReferenceSyncStore @Inject constructor(
         val rows = mutableListOf<ReferenceRowEntity>()
         val descriptor = DeltaChunk.getDescriptor()
         for (field in descriptor.fields) {
+            if (!field.isRepeated) continue
             val table = field.name
             val count = chunk.getRepeatedFieldCount(field)
             for (i in 0 until count) {
@@ -65,15 +66,28 @@ class ReferenceSyncStore @Inject constructor(
         if (rows.isEmpty()) return
         db.withTransaction {
             referenceRowDao.applyBatch(rows)
-            val maxVersion = rows.mapNotNull { it.version }.maxOrNull() ?: return@withTransaction
-            syncMetaDao.upsert(
-                SyncMetaEntity(
-                    id = 0,
-                    lastVersion = maxVersion,
-                    lastSyncAt = System.currentTimeMillis()
-                )
-            )
         }
+    }
+
+    /**
+     * Полная выкачка/дельта завершены: поднимаем watermark до глобального MAX(version).
+     * Единственная точка продвижения watermark — per-chunk/per-file продвижение
+     * намеренно убрано: границы чанков/файлов по байтам, а не по версиям, и при
+     * частичном сбое (задание забыто по TTL/404 после того, как часть чанков уже
+     * накатана) ранний watermark навсегда «прощёлкивал» бы непрокаченные строки
+     * (следующая дельта шла бы с versionSince > их версий). С оставлением watermark
+     * на прежнем значении следующая дельта перезапросит всё выше него (upsert
+     * идемпотентен) — самозалечивание.
+     */
+    suspend fun updateGlobalWatermark() {
+        val maxVersion = referenceRowDao.maxVersion() ?: return
+        syncMetaDao.upsert(
+            SyncMetaEntity(
+                id = 0,
+                lastVersion = maxVersion,
+                lastSyncAt = System.currentTimeMillis()
+            )
+        )
     }
 
     private fun toReferenceRow(table: String, row: Message): ReferenceRowEntity {

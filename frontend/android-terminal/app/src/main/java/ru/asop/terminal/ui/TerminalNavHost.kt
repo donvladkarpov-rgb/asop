@@ -36,6 +36,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import ru.asop.terminal.ui.screen.AssignCarrierScreen
+import ru.asop.terminal.ui.screen.CardReadScreen
 import ru.asop.terminal.ui.screen.MainScreen
 import ru.asop.terminal.ui.screen.ProvisioningScreen
 import ru.asop.terminal.ui.screen.ReferenceSyncViewModel
@@ -56,6 +57,7 @@ fun TerminalNavHost() {
     val referenceSyncViewModel: ReferenceSyncViewModel = hiltViewModel()
     val pendingDeltaCount by referenceSyncViewModel.pendingDeltaCount.collectAsState()
     val activeReferenceCount by referenceSyncViewModel.activeReferenceCount.collectAsState()
+    val deltaJobsEnabled by referenceSyncViewModel.deltaJobsEnabled.collectAsState()
 
     var showCertDialog by remember { mutableStateOf(false) }
     var showReferencesDialog by remember { mutableStateOf(false) }
@@ -186,6 +188,22 @@ fun TerminalNavHost() {
                     }
                 )
                 NavigationDrawerItem(
+                    label = { Text(if (deltaJobsEnabled) "Остановить дельта-выкачку" else "Запустить дельта-выкачку") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        referenceSyncViewModel.toggleDeltaJobs()
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Прочитать карту") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-read")
+                    }
+                )
+                NavigationDrawerItem(
                     label = { Text("Зарегистрировать карту водителя") },
                     selected = false,
                     onClick = { scope.launch { drawerState.close() } }
@@ -246,6 +264,11 @@ fun TerminalNavHost() {
                 composable("assign-carrier") {
                     AssignCarrierScreen(
                         onSaved = { navController.popBackStack() }
+                    )
+                }
+                composable("card-read") {
+                    CardReadScreen(
+                        onBack = { navController.popBackStack() }
                     )
                 }
             }
