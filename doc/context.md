@@ -447,6 +447,34 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Роли смарт-карт
 `PASSENGER_ANONYMOUS`, `PASSENGER_BENEFIT`, `DRIVER`, `CONTROLLER`, `DISPATCHER`, `CARRIER_ADMIN`, `REGION_ADMIN`, `SUPER_ADMIN`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_TERMINAL`, `SERVICE`
 
+### 3DES-ключи карт (промпт 004)
+
+**Доставка — вариант Б** (по mTLS в составе дельты/полной выкачки, БЕЗ ECIES). ECIES отклонён из-за непортативности `PURPOSE_AGREE` между OEM-реализациями Android Keystore. Plaintext 24 байта 3DES-ключа приходит на терминал по mTLS, терминал перешифровывает его локальным Keystore-AES-ключом.
+
+**Серверный ключ шифрования** (`crypto-service`):
+- RSA-2048 PKCS12 (`./data/server-key.p12`), отдельный от CA/TLS
+- `POST /api/v1/keys/decrypt` (cipher → plaintext base64), `POST /api/v1/keys/generate` (keyId+cipher), `GET /api/v1/keys/public`
+- RSA/ECB/OAEPWithSHA-256AndMGF1Padding
+- **Dev-режим**: `asop.crypto.server-key.dev-mode-enabled` (env `DEV_3DES_KEY_MODE_ENABLED`) + фиксированный dev-ключ `DEV_3DES_KEY_BASE64` (base64 `AAECAwQFBgcICQoLDA0ODxAREhMUFRYX`)
+
+**Таблицы:**
+- `ASOP_3DES_KEYS` — глобальный пул ротируемых 3DES-ключей (admin-service). `KEY_ID UUIDv7`, `KEY_MATERIAL TEXT` (24 байта, зашифрован публичным ключом сервера). Soft-delete only, `PurgeJob` исключает из purge.
+- `ASOP_CONFIG_PARAMS` — иерархия перекрытия параметров: base (scope=NULL) → region → organizer → carrier → distributor → krs. `PARAMS JSONB`. Серверная, на терминалы НЕ синкается.
+
+**Оркестратор:**
+- `MasterRegistry.GLOBAL_TABLES["asop_3des_keys"]` → admin `three-des-keys`
+- `ThreeDesKeyService` — decrypt-трансформ + серверный фильтр «N лет» (default 5)
+- `KeyRotationScheduler` — `SchedulingConfigurer` + динамический CronTrigger, timeout 10 сек на чтение base-конфига, fallback на дефолтный cron
+
+**Android:**
+- `TerminalKeyEntity` в `AppDatabase` v5, таблица `terminal_keys` (не `reference_rows`)
+- `TerminalKeyCryptor` — AndroidKeyStore AES-GCM, неэкспортируемый
+- Записи с DELETED_AT физически удаляются, порядок KEY_ID DESC
+
+**web-admin:**
+- Страницы `ThreeDesKeys` (`/three-des-keys`) и `ConfigParams` (`/config-params`)
+- Раздел «Ключи и параметры» в Sidebar
+
 ---
 
 ## 8. База данных

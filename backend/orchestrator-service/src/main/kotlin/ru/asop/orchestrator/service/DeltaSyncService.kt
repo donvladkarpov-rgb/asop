@@ -20,6 +20,7 @@ class DeltaSyncService(
     private val protoRowMapper: ProtoRowMapper,
     private val chunkingService: ChunkingService,
     private val eventService: EventService,
+    private val threeDesKeyService: ThreeDesKeyService,
     private val masterWebClient: WebClient
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -28,24 +29,37 @@ class DeltaSyncService(
         val eventId = command.eventId
         return Mono.defer {
             fetchUserIds(command).flatMap { userIds ->
-                Flux.fromIterable(MasterRegistry.ALL.entries)
-                    .concatMap { (table, ep) -> fetchTable(table, ep, command, userIds).map { table to it } }
-                    .collectList()
-                    .flatMap { tableRows ->
-                        val entries = tableRows.map { (table, row) ->
-                            table to protoRowMapper.buildRowMessage(table, row)
+                threeDesKeyService.readBaseConfig().flatMap { baseConfig ->
+                    val retentionYears = threeDesKeyService.retentionYears(baseConfig)
+                    Flux.fromIterable(MasterRegistry.ALL.entries)
+                        .concatMap { (table, ep) ->
+                            fetchTable(table, ep, command, userIds)
+                                .concatMap { row ->
+                                    toRowMessage(table, row, retentionYears)
+                                }
+                                .map { table to it }
                         }
-                        chunkingService.storeChunks(eventId, chunkingService.chunkBySize(entries))
-                    }
-                    .flatMap { meta ->
-                        val resultData = "{\"totalChunks\":${meta.totalChunks},\"totalBytes\":${meta.totalBytes}}"
-                        eventService.complete(eventId, resultData)
-                    }
+                        .collectList()
+                        .flatMap { tableRows ->
+                            chunkingService.storeChunks(eventId, chunkingService.chunkBySize(tableRows))
+                        }
+                        .flatMap { meta ->
+                            val resultData = "{\"totalChunks\":${meta.totalChunks},\"totalBytes\":${meta.totalBytes}}"
+                            eventService.complete(eventId, resultData)
+                        }
+                }
             }
         }.onErrorResume { err ->
             log.error("Delta sync failed for event {}", command.eventId, err)
             eventService.fail(command.eventId, err.message ?: "delta sync failed").then(Mono.error(err))
         }
+    }
+
+    private fun toRowMessage(table: String, row: JsonNode, retentionYears: Int): Mono<com.google.protobuf.Message> {
+        if (table == ThreeDesKeyService.TABLE) {
+            return threeDesKeyService.buildKeyRow(row, retentionYears)
+        }
+        return Mono.just(protoRowMapper.buildRowMessage(table, row))
     }
 
     private fun fetchUserIds(command: DeltaSyncCommand): Mono<Set<String>> {

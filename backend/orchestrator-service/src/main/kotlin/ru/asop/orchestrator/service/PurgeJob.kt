@@ -43,7 +43,7 @@ class PurgeJob(
         val cutoff = LocalDateTime.now().minusMonths(props.purge.retentionMonths.toLong())
             .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
         return setRole(conn, "replica")
-            .thenMany(Flux.fromIterable(MasterRegistry.ALL.keys))
+            .thenMany(Flux.fromIterable(MasterRegistry.ALL.keys.filter { it != ThreeDesKeyService.TABLE }))
             .concatMap { table -> deleteTable(conn, table, cutoff) }
             .collectList()
             .flatMap { counts ->

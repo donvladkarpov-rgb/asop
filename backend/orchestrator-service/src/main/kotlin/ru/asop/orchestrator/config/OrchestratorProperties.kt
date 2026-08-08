@@ -6,7 +6,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 data class OrchestratorProperties(
     val kafka: Kafka = Kafka(),
     val s3: S3 = S3(),
-    val purge: Purge = Purge()
+    val purge: Purge = Purge(),
+    val threeDesKeys: ThreeDesKeys = ThreeDesKeys()
 ) {
     data class Kafka(
         val topics: Topics = Topics()
@@ -28,5 +29,11 @@ data class OrchestratorProperties(
         val enabled: Boolean = true,
         val intervalMs: Long = 3_600_000,
         val retentionMonths: Int = 6
+    )
+
+    data class ThreeDesKeys(
+        val retentionYears: Int = 5,
+        val rotationEnabled: Boolean = true,
+        val rotationCron: String = "0 0 3 * * *"
     )
 }

@@ -45,6 +45,11 @@ const refItems = [
   { to: '/benefit-steps', label: 'Шаги льгот', icon: '📐' }
 ];
 
+const keyItems = [
+  { to: '/three-des-keys', label: '3DES-ключи', icon: '🔐' },
+  { to: '/config-params', label: 'Параметры АСОП', icon: '⚙️' },
+];
+
 const transportItems = [
   { to: '/vehicle-types', label: 'Типы ТС', icon: '🚗' },
   { to: '/vehicle-models', label: 'Модели ТС', icon: '🚙' },
@@ -186,6 +191,22 @@ export function Sidebar() {
       <CollapsibleSection label="Маршруты и Пути">
         <nav className="sidebar-nav">
           {routeItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                cn('nav-link', isActive && 'active')
+              }
+            >
+              <span className="nav-icon">{item.icon}</span>
+              <span className="nav-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      </CollapsibleSection>
+      <CollapsibleSection label="Ключи и параметры">
+        <nav className="sidebar-nav">
+          {keyItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

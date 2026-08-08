@@ -27,6 +27,7 @@ class FullSyncService(
     private val eventService: EventService,
     private val props: OrchestratorProperties,
     private val s3Client: S3Client,
+    private val threeDesKeyService: ThreeDesKeyService,
     private val masterWebClient: WebClient
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -75,74 +76,93 @@ class FullSyncService(
                 .collectList()
                 .flatMap { userIdList ->
                     val userIds = userIdList.toSet()
-                    // все таблицы
-                    val tableRows = MasterRegistry.ALL.entries.map { (table, ep) ->
-                        val isUserCard = MasterRegistry.USER_TABLES.containsKey(table) || MasterRegistry.CARD_TABLES.containsKey(table)
-                        val pageFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
-                            masterWebClient.get().uri { u ->
-                                val b = u.scheme("https")
-                                    .host(ep.serviceHost)
-                                    .port(ep.port)
-                                    .path("/api/v1/{resource}/delta")
-                                    .queryParam("includeDeleted", true)
-                                    .queryParam("limit", LIMIT)
-                                if (table == "asop_users" || !isUserCard) {
-                                    command.carrierId?.let { b.queryParam("carrierId", it.toString()) }
-                                    command.regionId?.let { b.queryParam("regionId", it.toString()) }
-                                } else if (userIds.isNotEmpty()) {
-                                    b.queryParam("userIdsIn", userIds.joinToString(","))
-                                }
-                                cursor?.let { b.queryParam("versionSince", it.toString()) }
-                                b.build(ep.resource)
-                            }.retrieve().bodyToFlux(JsonNode::class.java)
-                                .collectList()
-                                .onErrorResume { err ->
-                                    log.warn("Full fetch failed for {}: {}", table, err.message)
-                                    Mono.just(emptyList())
-                                }
-                        }
-                        val rowFlux = if (isUserCard && table != "asop_users" && userIds.size > USER_IDS_BATCH) {
-                            reactor.core.publisher.Flux.fromIterable(userIds.toList().chunked(USER_IDS_BATCH))
-                                .concatMap { batch ->
-                                    val batchFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
-                                        masterWebClient.get().uri { u ->
-                                            val b = u.scheme("https")
-                                                .host(ep.serviceHost)
-                                                .port(ep.port)
-                                                .path("/api/v1/{resource}/delta")
-                                                .queryParam("includeDeleted", true)
-                                                .queryParam("limit", LIMIT)
-                                                .queryParam("userIdsIn", batch.joinToString(","))
-                                            cursor?.let { b.queryParam("versionSince", it.toString()) }
-                                            b.build(ep.resource)
-                                        }.retrieve().bodyToFlux(JsonNode::class.java)
-                                            .collectList()
-                                            .onErrorResume { err ->
-                                                log.warn("Full fetch failed for {} (userIdsIn batch): {}", table, err.message)
-                                                Mono.just(emptyList())
-                                            }
-                                    }
-                                    fetchAllPages(null, batchFetcher)
-                                }
-                        } else {
-                            fetchAllPages(null, pageFetcher)
-                        }
-                        table to rowFlux
-                            .map { protoRowMapper.buildRowMessage(table, it) }
-                            .collectList()
+                    threeDesKeyService.readBaseConfig().flatMap { baseConfig ->
+                        val retentionYears = threeDesKeyService.retentionYears(baseConfig)
+                        lazyTableRows(command, userIds, retentionYears)
                     }
-                    val tables = tableRows.map { it.first }
-                    val fluxes = tableRows.map { it.second }
-                    reactor.core.publisher.Flux.combineLatest(fluxes) { arrays ->
-                        val map = LinkedHashMap<String, List<Message>>()
-                        for (i in tables.indices) {
-                            @Suppress("UNCHECKED_CAST")
-                            map[tables[i]] = (arrays[i] as? List<*>)?.mapNotNull { it as? Message } ?: emptyList()
-                        }
-                        map
-                    }.next()
                 }
         }
+    }
+
+    private fun lazyTableRows(
+        command: FullSyncCommand,
+        userIds: Set<String>,
+        retentionYears: Int
+    ): Mono<Map<String, List<Message>>> {
+        return Mono.defer {
+            val tableRows = MasterRegistry.ALL.entries.map { (table, ep) ->
+                val isUserCard = MasterRegistry.USER_TABLES.containsKey(table) || MasterRegistry.CARD_TABLES.containsKey(table)
+                val pageFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
+                    masterWebClient.get().uri { u ->
+                        val b = u.scheme("https")
+                            .host(ep.serviceHost)
+                            .port(ep.port)
+                            .path("/api/v1/{resource}/delta")
+                            .queryParam("includeDeleted", true)
+                            .queryParam("limit", LIMIT)
+                        if (table == "asop_users" || !isUserCard) {
+                            command.carrierId?.let { b.queryParam("carrierId", it.toString()) }
+                            command.regionId?.let { b.queryParam("regionId", it.toString()) }
+                        } else if (userIds.isNotEmpty()) {
+                            b.queryParam("userIdsIn", userIds.joinToString(","))
+                        }
+                        cursor?.let { b.queryParam("versionSince", it.toString()) }
+                        b.build(ep.resource)
+                    }.retrieve().bodyToFlux(JsonNode::class.java)
+                        .collectList()
+                        .onErrorResume { err ->
+                            log.warn("Full fetch failed for {}: {}", table, err.message)
+                            Mono.just(emptyList())
+                        }
+                }
+                val rowFlux = if (isUserCard && table != "asop_users" && userIds.size > USER_IDS_BATCH) {
+                    reactor.core.publisher.Flux.fromIterable(userIds.toList().chunked(USER_IDS_BATCH))
+                        .concatMap { batch ->
+                            val batchFetcher: (Long?) -> Mono<List<JsonNode>> = { cursor ->
+                                masterWebClient.get().uri { u ->
+                                    val b = u.scheme("https")
+                                        .host(ep.serviceHost)
+                                        .port(ep.port)
+                                        .path("/api/v1/{resource}/delta")
+                                        .queryParam("includeDeleted", true)
+                                        .queryParam("limit", LIMIT)
+                                        .queryParam("userIdsIn", batch.joinToString(","))
+                                    cursor?.let { b.queryParam("versionSince", it.toString()) }
+                                    b.build(ep.resource)
+                                }.retrieve().bodyToFlux(JsonNode::class.java)
+                                    .collectList()
+                                    .onErrorResume { err ->
+                                        log.warn("Full fetch failed for {} (userIdsIn batch): {}", table, err.message)
+                                        Mono.just(emptyList())
+                                    }
+                            }
+                            fetchAllPages(null, batchFetcher)
+                        }
+                } else {
+                    fetchAllPages(null, pageFetcher)
+                }
+                table to rowFlux
+                    .concatMap { row -> toRowMessage(table, row, retentionYears) }
+                    .collectList()
+            }
+            val tables = tableRows.map { it.first }
+            val fluxes = tableRows.map { it.second }
+            reactor.core.publisher.Flux.combineLatest(fluxes) { arrays ->
+                val map = LinkedHashMap<String, List<Message>>()
+                for (i in tables.indices) {
+                    @Suppress("UNCHECKED_CAST")
+                    map[tables[i]] = (arrays[i] as? List<*>)?.mapNotNull { it as? Message } ?: emptyList()
+                }
+                map
+            }.next()
+        }
+    }
+
+    private fun toRowMessage(table: String, row: JsonNode, retentionYears: Int): Mono<Message> {
+        if (table == ThreeDesKeyService.TABLE) {
+            return threeDesKeyService.buildKeyRow(row, retentionYears)
+        }
+        return Mono.just(protoRowMapper.buildRowMessage(table, row))
     }
 
     /**
@@ -170,7 +190,7 @@ class FullSyncService(
         val baos = ByteArrayOutputStream()
         ZipOutputStream(baos).use { zip ->
             for ((table, rows) in files) {
-                val clsName = "ru.asop.proto.v1.${camel(table)}File"
+                val clsName = "ru.asop.proto.v1.${protoClassName(table)}"
                 val builderClass = Class.forName(clsName)
                 val builder = builderClass.getMethod("newBuilder").invoke(null) as Message.Builder
                 val fileDescriptor = builder.descriptorForType
@@ -185,6 +205,12 @@ class FullSyncService(
             }
         }
         return baos.toByteArray()
+    }
+
+    private fun protoClassName(table: String): String {
+        // глобальный пул 3DES-ключей назван в proto c префиксом Asop
+        if (table == ThreeDesKeyService.TABLE) return "Asop3desKeysFile"
+        return "${camel(table)}File"
     }
 
     private fun uploadAndPresign(eventId: UUID, zipBytes: ByteArray): Mono<String> {

@@ -6,8 +6,11 @@ import com.google.protobuf.Message
 import com.google.protobuf.util.JsonFormat
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.SyncMetaDao
+import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.entity.ReferenceRowEntity
 import ru.asop.terminal.db.entity.SyncMetaEntity
+import ru.asop.terminal.db.entity.TerminalKeyEntity
+import ru.asop.proto.v1.Asop3desKeysFile
 import ru.asop.proto.v1.DeltaChunk
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,12 +20,16 @@ import javax.inject.Singleton
  * Generic-хранение: каждая строка справочника — JSON (payloadJson),
  * ключ (tableName, rowId). rowId — значение PK (для составных — "id1|id2").
  * sync_meta — single-row глобальный VERSION-водяной знак.
+ * 3DES-ключи (asop_3des_keys) хранятся отдельно в terminal_keys, зашифрованными
+ * локальным Keystore-AES-ключом (НЕ в reference_rows — иначе ломается водяной знак).
  */
 @Singleton
 class ReferenceSyncStore @Inject constructor(
     private val db: AppDatabase,
     private val referenceRowDao: ReferenceRowDao,
-    private val syncMetaDao: SyncMetaDao
+    private val syncMetaDao: SyncMetaDao,
+    private val terminalKeyDao: TerminalKeyDao,
+    private val terminalKeyCryptor: TerminalKeyCryptor
 ) {
 
     companion object {
@@ -31,25 +38,39 @@ class ReferenceSyncStore @Inject constructor(
             "asop_organizer_territories", "asop_contract_routes",
             "asop_user_roles", "asop_user_carriers", "asop_user_regions"
         )
+        const val THREE_DES_TABLE = "asop_3des_keys"
     }
 
     /** Применяет один DeltaChunk (все таблицы в нём). */
     suspend fun applyChunk(chunk: DeltaChunk) {
-        val rows = mutableListOf<ReferenceRowEntity>()
+        val refRows = mutableListOf<ReferenceRowEntity>()
+        val keyRows = mutableListOf<TerminalKeyEntity>()
         val descriptor = DeltaChunk.getDescriptor()
         for (field in descriptor.fields) {
             if (!field.isRepeated) continue
             val table = field.name
             val count = chunk.getRepeatedFieldCount(field)
             for (i in 0 until count) {
-                rows += toReferenceRow(table, chunk.getRepeatedField(field, i) as Message)
+                val msg = chunk.getRepeatedField(field, i) as Message
+                if (table == THREE_DES_TABLE) {
+                    keyRows += toTerminalKeyRow(msg)
+                } else {
+                    refRows += toReferenceRow(table, msg)
+                }
             }
         }
-        applyRows(rows)
+        applyRows(refRows, keyRows)
     }
 
     /** Применяет файл `{table}.pb` из ZIP полной выгрузки (XxxFile message). */
     suspend fun applyFile(table: String, bytes: ByteArray) {
+        if (table == THREE_DES_TABLE) {
+            val builder = Asop3desKeysFile.newBuilder()
+            val msg = builder.mergeFrom(bytes).build()
+            val keyRows = msg.rowsList.map { toTerminalKeyRow(it) }
+            applyRows(emptyList(), keyRows)
+            return
+        }
         val clsName = "ru.asop.proto.v1.${camel(table)}File"
         val builder = Class.forName(clsName).getMethod("newBuilder").invoke(null) as Message.Builder
         val msg = builder.mergeFrom(bytes).build()
@@ -59,25 +80,21 @@ class ReferenceSyncStore @Inject constructor(
         for (i in 0 until msg.getRepeatedFieldCount(rowsField)) {
             rows += toReferenceRow(table, msg.getRepeatedField(rowsField, i) as Message)
         }
-        applyRows(rows)
+        applyRows(rows, emptyList())
     }
 
-    private suspend fun applyRows(rows: List<ReferenceRowEntity>) {
-        if (rows.isEmpty()) return
+    private suspend fun applyRows(refRows: List<ReferenceRowEntity>, keyRows: List<TerminalKeyEntity>) {
+        if (refRows.isEmpty() && keyRows.isEmpty()) return
         db.withTransaction {
-            referenceRowDao.applyBatch(rows)
+            if (refRows.isNotEmpty()) referenceRowDao.applyBatch(refRows)
+            if (keyRows.isNotEmpty()) terminalKeyDao.applyBatch(keyRows)
         }
     }
 
     /**
      * Полная выкачка/дельта завершены: поднимаем watermark до глобального MAX(version).
-     * Единственная точка продвижения watermark — per-chunk/per-file продвижение
-     * намеренно убрано: границы чанков/файлов по байтам, а не по версиям, и при
-     * частичном сбое (задание забыто по TTL/404 после того, как часть чанков уже
-     * накатана) ранний watermark навсегда «прощёлкивал» бы непрокаченные строки
-     * (следующая дельта шла бы с versionSince > их версий). С оставлением watermark
-     * на прежнем значении следующая дельта перезапросит всё выше него (upsert
-     * идемпотентен) — самозалечивание.
+     * Водяной знак учитывает только reference_rows; 3DES-ключи (terminal_keys)
+     * не участвуют в watermark — они накатываются на каждый дельта независимо.
      */
     suspend fun updateGlobalWatermark() {
         val maxVersion = referenceRowDao.maxVersion() ?: return
@@ -110,6 +127,20 @@ class ReferenceSyncStore @Inject constructor(
             updatedAt = updatedAt,
             deletedAt = deletedAt,
             version = version
+        )
+    }
+
+    /** 3DES-ключ: перешифровываем plaintext локальным Keystore-AES-ключом at-rest. */
+    private fun toTerminalKeyRow(msg: Message): TerminalKeyEntity {
+        val desc = msg.descriptorForType
+        val keyMaterial = (msg.getField(desc.findFieldByName("key_material")) as? com.google.protobuf.ByteString)
+            ?.toByteArray() ?: ByteArray(0)
+        return TerminalKeyEntity(
+            keyId = msg.getField(desc.findFieldByName("key_id"))?.toString() ?: "",
+            keyMaterialEnc = terminalKeyCryptor.encrypt(keyMaterial),
+            createdAt = (msg.getField(desc.findFieldByName("created_at")) as? Number)?.toLong() ?: 0L,
+            deletedAt = (msg.getField(desc.findFieldByName("deleted_at")) as? Number)?.toLong() ?: 0L,
+            version = (msg.getField(desc.findFieldByName("version")) as? Number)?.toLong() ?: 0L
         )
     }
 

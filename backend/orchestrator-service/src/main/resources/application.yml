@@ -67,6 +67,10 @@ asop:
     enabled: ${PURGE_ENABLED:true}
     interval-ms: ${PURGE_INTERVAL_MS:3600000}
     retention-months: ${PURGE_RETENTION_MONTHS:6}
+  three-des-keys:
+    retention-years: ${THREE_DES_RETENTION_YEARS:5}
+    rotation-enabled: ${THREE_DES_ROTATION_ENABLED:true}
+    rotation-cron: ${THREE_DES_ROTATION_CRON:0 0 3 * * *}
 
 # Logging
 logging:

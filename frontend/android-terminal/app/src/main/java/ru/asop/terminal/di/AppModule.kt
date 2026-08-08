@@ -27,6 +27,7 @@ import ru.asop.terminal.db.dao.TransactionDao
 import ru.asop.terminal.db.dao.SyncMetaDao
 import ru.asop.terminal.db.dao.DeltaSyncJobDao
 import ru.asop.terminal.db.dao.ReferenceRowDao
+import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.BuildConfig
 import ru.asop.terminal.network.CertSignApi
 import ru.asop.terminal.network.GatewayApi
@@ -163,6 +164,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideReferenceRowDao(db: AppDatabase): ReferenceRowDao = db.referenceRowDao()
+
+    @Provides
+    @Singleton
+    fun provideTerminalKeyDao(db: AppDatabase): TerminalKeyDao = db.terminalKeyDao()
 
     // --- DataStore ---
 

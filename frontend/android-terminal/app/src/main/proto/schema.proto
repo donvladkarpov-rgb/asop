@@ -4,7 +4,7 @@ package asop.v1;
 option java_package = "ru.asop.proto.v1";
 option java_multiple_files = true;
 
-// Generated from the ASOP database schema (42 delta-sync reference tables).
+// Generated from the ASOP database schema (43 delta-sync reference tables).
 // Timestamps are RFC3339 strings; UUIDs are canonical string form.
 
 message RegionsRow {
@@ -545,6 +545,14 @@ message TidsRow {
   int64 version = 11;
 }
 
+message Asop3desKeysRow {
+  string key_id = 1;          // UUIDv7
+  bytes  key_material = 2;    // plaintext 24 байта (после decrypt сервером)
+  int64  created_at = 3;      // epoch millis
+  int64  deleted_at = 4;      // epoch millis, 0 если не удалён
+  int64  version = 5;         // delta watermark
+}
+
 // Один дельта-чанк: записи из разных таблиц + метаданные чанка.
 message DeltaChunk {
   repeated RegionsRow asop_regions = 1;
@@ -589,6 +597,7 @@ message DeltaChunk {
   repeated TariffRatesRow asop_tariff_rates = 40;
   repeated TidsRow asop_tids = 41;
   repeated CardsDistributorsRow asop_cards_distributors = 42;
+  repeated Asop3desKeysRow asop_3des_keys = 43;
   int32 chunk_index = 90;
   int32 total_chunks = 91;
   string event_id = 92;
@@ -637,4 +646,5 @@ message BlacklistsFile { repeated BlacklistsRow rows = 1; }
 message UserBenefitsFile { repeated UserBenefitsRow rows = 1; }
 message TariffRatesFile { repeated TariffRatesRow rows = 1; }
 message TidsFile { repeated TidsRow rows = 1; }
+message Asop3desKeysFile { repeated Asop3desKeysRow rows = 1; }
 

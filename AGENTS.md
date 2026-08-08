@@ -120,6 +120,19 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 
 TID-стек (новый `tid-api` + реализация в `carrier-service` — `TidEntity/TidRepository/TidService/TidController`): sync-CRUD для пулов TID перевозчиков; `GET /api/v1/tids?carrierId=UUID` для фильтра. Без Kafka — только R2DBC. Gateway `ServiceRegistry` маппит `tids` → carrier-service:8087 (sync-proxy).
 
+### 3DES-ключи карт и параметры АСОП (промпт 004)
+
+**Доставка ключей — вариант Б** (по mTLS в составе дельты/полной выкачки, БЕЗ ECIES). Терминальный EC-ключ `PURPOSE_SIGN|VERIFY` неэкспортируемый, Android Keystore не гарантирует ECDH (TEE/StrongBox OEM-реализации) — ECIES отклонён. Plaintext 24 байта 3DES-ключа приходит на терминал по mTLS, терминал перешифровывает его локальным Keystore-AES-ключом (`terminal_keys`, ТОЛЬКО зашифрованное значение).
+
+- **`ASOP_3DES_KEYS`** (глобальный пул ротируемых 3DES-ключей, admin-service): `KEY_ID UUIDv7`, `KEY_MATERIAL TEXT` = 24 байта (3K3DES), зашифрован публичным ключом сервера (base64). Физически НЕ удаляется — только soft-delete (DELETED_AT). Триггеры/индексы в v001. `PurgeJob` исключает `asop_3des_keys` из purge.
+- **crypto-service server-key**: RSA-2048 PKCS12 (`./data/server-key.p12`), `POST /api/v1/keys/decrypt` (cipher → plaintext base64), `POST /api/v1/keys/generate` (возвращает keyId+cipher), `GET /api/v1/keys/public`. Encrypt/decrypt RSA/ECB/OAEPWithSHA-256AndMGF1Padding. **Dev-режим**: `asop.crypto.server-key.dev-mode-enabled` (env `DEV_3DES_KEY_MODE_ENABLED`) + фиксированный dev-ключ `DEV_3DES_KEY_BASE64` (24 байта hex `000102...171617`, base64 `AAECAwQFBgcICQoLDA0ODxAREhMUFRYX`) — в dev-режиме `generate` всегда возвращает фиксированный ключ.
+- **admin-service endpoints** (через gateway proxy, sync): `GET/POST/DELETE /api/v1/three-des-keys` (POST = generate через crypto + insert; DELETE = soft), `GET /api/v1/three-des-keys/delta` (DeltaSupport), `GET/POST/PUT/DELETE /api/v1/config-params`, `GET /api/v1/config-params/base` (base-строка scope=NULL), `GET /api/v1/config-params/resolved`.
+- **`ASOP_CONFIG_PARAMS`** — иерархия перекрытия: base (все scope NULL) → region → organizer → carrier → distributor → krs. `params` JSONB (в модели `String`, сериализуется ObjectMapper). Серверная, на терминалы НЕ синкается. Base-строка задаёт параметры ротации/фильтра 3DES-ключей для orchestrator.
+- **orchestrator**: `MasterRegistry.GLOBAL_TABLES["asop_3des_keys"]` → admin `three-des-keys`. `ThreeDesKeyService` — decrypt-трансформ (blob → crypto decrypt → plaintext 24 байта в proto `key_material`), серверный фильтр «5 лет» (CREATED_AT >= now - N, N из base-конфига `threeDesKeys.retentionYears`, default 5). `KeyRotationScheduler` (`SchedulingConfigurer` + динамический CronTrigger): периодически `POST /api/v1/three-des-keys` (admin) для ротации, cron/enabled из base-конфига (`threeDesKeys.rotationCron`/`rotationEnabled`), default cron `0 0 3 * * *`. Trigger читает base-конфиг с **timeout 10 сек** (`.block(Duration.ofSeconds(10))`) — при недоступности admin-service fallback на дефолтный cron из `application.yml` (не null — иначе шедулер умрёт). `rotationCron` и `rotationEnabled` независимы (cron не зависит от enabled).
+- **proto ×2** (`backend/shared/asop-proto` + `android-terminal/app/src/main/proto`, идентичны): `Asop3desKeysRow { key_id, key_material(bytes), created_at(int64 epoch), deleted_at(int64, 0 если активен), version }`, `Asop3desKeysFile { repeated Asop3desKeysRow rows }`, поле `asop_3des_keys` в `DeltaChunk` (номер 43). `Asop3desKeysFile` кладётся в ZIP полной выкачки вместо generic camel (`protoClassName` в `FullSyncService`).
+- **Android**: `TerminalKeyEntity` (KEY_ID PK, KEY_MATERIAL_ENC, CREATED_AT, DELETED_AT, VERSION) в `AppDatabase` **v5**. В `ReferenceSyncStore.applyChunk/applyFile` ветка `tableName == "asop_3des_keys"` → сохраняется в `terminal_keys`, перешифрованный локальным Keystore-AES-ключом (`TerminalKeyCryptor`, AndroidKeyStore AES-GCM, PURPOSE_ENCRYPT|DECRYPT, неэкспортируемый). НЕ в `reference_rows` (иначе ломается watermark `maxVersion()`). Записи c DELETED_AT физически удаляются. Порядок KEY_ID DESC (UUIDv7, свежие первыми). Применение к MIFARE-картам — последующим промптом.
+- **web-admin**: страницы `ThreeDesKeys` (`/three-des-keys`) и `ConfigParams` (`/config-params`), раздел «Ключи и параметры» в Sidebar, api `threeDesKeys.ts`/`configParams.ts`, типы в `types/reference.ts`.
+
 Service → API dependency: `implementation(project(":backend:shared:api:{domain}-api"))`.
 API → asop-common dependency via `api(platform(...))` pattern.
 
@@ -275,7 +288,7 @@ Full: POST /api/v1/sync/references/full → asop.delta.full.commands → orchest
 - **API modules** contain only interfaces + DTOs, no implementation. Package: `ru.asop.api.{domain}`.
 - **Service packages**: `ru.asop.{domain}` (e.g. `ru.asop.gateway`, `ru.asop.crypto`)
 - **Liquibase migrations**: единый changelog в `infrastructure/db-migrations/` → `migrations/v001-init.yaml` → `v001-init.sql` (67 таблиц + функции + seed roles). Выполняется отдельным Docker-контейнером `liquibase:4.27` после `postgres:healthy`. Сервисы НЕ содержат Liquibase/DataSource/JDBC (только R2DBC).
-- **asop_schema.sql** — справочная копия v001-init.sql, не монтируется в init скрипты.
+- **asop_schema.sql** — первичный источник DDL, из него копируется `v001-init.sql` (исполняемый Liquibase changeset). Не монтируется в init скрипты.
 - **idempotent FK**: `ALTER TABLE ... ADD CONSTRAINT IF NOT EXISTS ... DEFERRABLE INITIALLY DEFERRED`.
 - **Liquibase quirks**: `$$` → `$body$` (dollar quoting), `splitStatements: false` для sqlFile (JDBC сам разбивает), `relativeToChangelogFile: true` во всех include.
 - **v002-terminal-certs влит в v001**: DDL для ASOP_TERMINAL_CERTS перенесён из v002 в v001-init.sql.

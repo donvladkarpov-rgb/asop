@@ -7,10 +7,19 @@ data class RootCaProperties(
     val rootCa: RootCaConfig,
     val intermediateCa: IntermediateCaConfig,
     val serverCert: ServerCertConfig = ServerCertConfig(),
+    val serverKey: ServerKeyConfig = ServerKeyConfig(),
     val terminalCert: TerminalCertConfig,
     val driverCert: DriverCertConfig,
     val smartCardCert: SmartCardCertConfig,
     val crl: CrlConfig
+)
+
+data class ServerKeyConfig(
+    val keystorePath: String = "./data/server-key.p12",
+    val keystorePassword: String = "changeit",
+    val keyAlias: String = "asop-server-key",
+    val devKeyBase64: String = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX",
+    val devModeEnabled: Boolean = false
 )
 
 data class ServerCertConfig(

@@ -151,3 +151,26 @@ export interface BenefitStep {
   discountShare: number;
   periodType: string;
 }
+
+export interface ThreeDesKey {
+  keyId: string;
+  keyMaterial: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+  version?: number;
+}
+
+export interface ConfigParam {
+  paramId: string;
+  regionId?: string | null;
+  organizerId?: string | null;
+  carrierId?: string | null;
+  cardsDistributorId?: string | null;
+  krsId?: string | null;
+  params: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  version?: number;
+}

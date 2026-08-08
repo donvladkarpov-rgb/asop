@@ -16,6 +16,10 @@
 --           - ИСПРАВЛЕНО: CHECK для COMMISSION_PERCENT и PERIOD_TYPE
 --           - ИСПРАВЛЕНО: UUIDv7 вместо UUIDv4 (gen_random_uuid)
 --           - ДОБАВЛЕНО: Поля PKI и ролей в ASOP_CARD_MIFARES
+--           - РЕФАКТОРИНГ: Явный DDL вместо DO/FOREACH/EXECUTE-циклов
+--             Дельта-колонки (CREATED_AT/UPDATED_AT/DELETED_AT/VERSION) объявлены
+--             прямо в CREATE TABLE; триггеры и индексы — в конце файла.
+--             Функции/триггеры дельта-синка (soft-delete, touch, version) сохранены.
 -- ============================================================
 CREATE EXTENSION IF NOT EXISTS postgis;
 
@@ -66,6 +70,10 @@ CREATE TABLE IF NOT EXISTS ASOP_REGIONS
     FIAS_ID            VARCHAR(36),
     REGISTRY_RECORD_ID VARCHAR(30),
     TIMEZONE           VARCHAR(50) NOT NULL DEFAULT 'UTC',
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_regions PRIMARY KEY (REGION_ID),
     CONSTRAINT uq_regions_fias UNIQUE (FIAS_ID)
 );
@@ -86,6 +94,10 @@ CREATE TABLE IF NOT EXISTS ASOP_TERRITORIES
     FIAS_ID            VARCHAR(36),
     REGISTRY_RECORD_ID VARCHAR(30),
     GEO_POLYGON        GEOGRAPHY(POLYGON, 4326),
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_territories PRIMARY KEY (TERRITORY_ID),
     CONSTRAINT fk_territory_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID),
     CONSTRAINT uq_territories_fias UNIQUE (FIAS_ID)
@@ -97,6 +109,10 @@ CREATE TABLE IF NOT EXISTS ASOP_ORGANIZERS
 (
     ORGANIZER_ID   UUID         NOT NULL,  -- UUIDv7
     ORGANIZER_NAME VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_organizers PRIMARY KEY (ORGANIZER_ID)
 );
 COMMENT ON TABLE ASOP_ORGANIZERS IS 'Организаторы перевозок.';
@@ -105,6 +121,10 @@ CREATE TABLE IF NOT EXISTS ASOP_ORGANIZER_TERRITORIES
 (
     ORGANIZER_ID UUID NOT NULL,
     TERRITORY_ID UUID NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_organizer_territories PRIMARY KEY (ORGANIZER_ID, TERRITORY_ID),
     CONSTRAINT fk_ot_organizer FOREIGN KEY (ORGANIZER_ID) REFERENCES ASOP_ORGANIZERS (ORGANIZER_ID),
     CONSTRAINT fk_ot_territory FOREIGN KEY (TERRITORY_ID) REFERENCES ASOP_TERRITORIES (TERRITORY_ID)
@@ -118,6 +138,10 @@ CREATE TABLE ASOP_ROLES
 (
     ROLE_ID   UUID         NOT NULL,  -- UUIDv7
     ROLE_NAME VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_roles PRIMARY KEY (ROLE_ID)
 );
 
@@ -125,6 +149,10 @@ CREATE TABLE ASOP_CARD_TYPES
 (
     CARD_TYPE_ID   UUID         NOT NULL,  -- UUIDv7
     CARD_TYPE_NAME VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_card_types PRIMARY KEY (CARD_TYPE_ID)
 );
 
@@ -134,6 +162,10 @@ CREATE TABLE ASOP_TARIFF_TYPES
     CODE           VARCHAR(50)  NOT NULL,
     NAME           VARCHAR(100) NOT NULL,
     DESCRIPTION    TEXT,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_tariff_types PRIMARY KEY (TARIFF_TYPE_ID),
     CONSTRAINT uq_tariff_types_code UNIQUE (CODE)
 );
@@ -143,6 +175,10 @@ CREATE TABLE ASOP_SESSION_TYPES
     SESSION_TYPE_ID   UUID         NOT NULL,  -- UUIDv7
     SESSION_TYPE_CODE VARCHAR(30)  NOT NULL,
     SESSION_TYPE_NAME VARCHAR(100) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_session_types PRIMARY KEY (SESSION_TYPE_ID),
     CONSTRAINT uq_session_types_code UNIQUE (SESSION_TYPE_CODE)
 );
@@ -151,6 +187,10 @@ CREATE TABLE ASOP_EVENT_TYPES
 (
     EVENT_TYPE      CHAR(4)      NOT NULL,
     EVENT_TYPE_NAME VARCHAR(128) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_event_types PRIMARY KEY (EVENT_TYPE)
 );
 
@@ -158,6 +198,10 @@ CREATE TABLE ASOP_TRANSACTION_TYPES
 (
     TRANSACTION_TYPE_ID   UUID         NOT NULL,  -- UUIDv7
     TRANSACTION_TYPE_NAME VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_transaction_types PRIMARY KEY (TRANSACTION_TYPE_ID)
 );
 
@@ -165,6 +209,10 @@ CREATE TABLE ASOP_TRANSACTION_RESULTS
 (
     TRANSACTION_RESULT_ID   UUID         NOT NULL,  -- UUIDv7
     TRANSACTION_RESULT_NAME VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_transaction_results PRIMARY KEY (TRANSACTION_RESULT_ID)
 );
 
@@ -175,6 +223,10 @@ CREATE TABLE ASOP_SERVICES
     DESCRIPTION  TEXT,
     PRIORITY     INT          NOT NULL UNIQUE,
     REGION_ID    UUID         NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_services PRIMARY KEY (SERVICE_ID),
     CONSTRAINT fk_services_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
 );
@@ -189,8 +241,10 @@ CREATE TABLE ASOP_BENEFITS
     REGION_ID    UUID         NOT NULL,
     DESCRIPTION  TEXT,
     IS_ACTIVE    BOOLEAN DEFAULT true,
-    CREATED_AT   TIMESTAMPTZ    NOT NULL,
-    UPDATED_AT   TIMESTAMPTZ    NOT NULL,
+    CREATED_AT   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UPDATED_AT   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_benefits PRIMARY KEY (BENEFIT_ID),
     CONSTRAINT uq_benefits_code UNIQUE (BENEFIT_CODE),
     CONSTRAINT fk_benefits_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
@@ -208,6 +262,10 @@ CREATE TABLE ASOP_BENEFIT_STEPS
     DISCOUNT_SHARE      NUMERIC(4, 2) NOT NULL CHECK (DISCOUNT_SHARE BETWEEN 0 AND 1),
     PERIOD_TYPE         VARCHAR(20)   NOT NULL DEFAULT 'MONTHLY'
                         CHECK (PERIOD_TYPE IN ('DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY')),
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_benefit_steps PRIMARY KEY (STEP_ID),
     CONSTRAINT fk_steps_benefit FOREIGN KEY (BENEFIT_ID) REFERENCES ASOP_BENEFITS (BENEFIT_ID) ON DELETE CASCADE,
     CONSTRAINT uq_benefit_steps_order UNIQUE (BENEFIT_ID, STEP_ORDER),
@@ -227,8 +285,10 @@ CREATE TABLE ASOP_CARDS_DISTRIBUTORS
     CONTACT_PHONE        VARCHAR(20),
     CONTACT_EMAIL        VARCHAR(100),
     IS_ACTIVE            BOOLEAN      DEFAULT true,
-    CREATED_AT           TIMESTAMPTZ    NOT NULL,
-    UPDATED_AT           TIMESTAMPTZ    NOT NULL,
+    CREATED_AT           TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UPDATED_AT           TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_cards_distributors PRIMARY KEY (CARDS_DISTRIBUTOR_ID),
     CONSTRAINT uq_cards_distributors_inn UNIQUE (INN)
 );
@@ -246,6 +306,8 @@ CREATE TABLE ASOP_CARRIERS
     REGION_ID    UUID         NOT NULL,
     CREATED_AT   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
     UPDATED_AT   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_carriers PRIMARY KEY (CARRIER_ID),
     CONSTRAINT uq_carriers_inn UNIQUE (INN),
     CONSTRAINT fk_carriers_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
@@ -266,8 +328,10 @@ CREATE TABLE ASOP_CONTRACTS
     COMMISSION_PERCENT     NUMERIC(5, 2)
                            CHECK (COMMISSION_PERCENT IS NULL OR (COMMISSION_PERCENT >= 0 AND COMMISSION_PERCENT <= 100)),
     ATTRIBUTES             JSONB,
-    CREATED_AT             TIMESTAMPTZ    NOT NULL,
-    UPDATED_AT             TIMESTAMPTZ    NOT NULL,
+    CREATED_AT             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UPDATED_AT             TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_contracts PRIMARY KEY (CONTRACT_ID),
     CONSTRAINT fk_contracts_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
     CONSTRAINT fk_contracts_cards_distributor FOREIGN KEY (CARDS_DISTRIBUTOR_ID) REFERENCES ASOP_CARDS_DISTRIBUTORS (CARDS_DISTRIBUTOR_ID),
@@ -292,6 +356,10 @@ CREATE TABLE ASOP_ROUTES
     MINISTRY_REGISTRY_NO VARCHAR(50),
     ROUTE_CATEGORY       VARCHAR(30) CHECK (ROUTE_CATEGORY IN ('CITY', 'SUBURBAN', 'INTERCITY', 'EXPRESS')),
     REGION_ID            UUID         NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_routes PRIMARY KEY (ROUTE_ID),
     CONSTRAINT fk_routes_organizer FOREIGN KEY (ORGANIZER_ID) REFERENCES ASOP_ORGANIZERS (ORGANIZER_ID),
     CONSTRAINT fk_routes_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
@@ -302,6 +370,10 @@ CREATE TABLE ASOP_CONTRACT_ROUTES
 (
     CONTRACT_ID UUID NOT NULL,
     ROUTE_ID    UUID NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_contract_routes PRIMARY KEY (CONTRACT_ID, ROUTE_ID),
     CONSTRAINT fk_cr_contract FOREIGN KEY (CONTRACT_ID) REFERENCES ASOP_CONTRACTS (CONTRACT_ID),
     CONSTRAINT fk_cr_route FOREIGN KEY (ROUTE_ID) REFERENCES ASOP_ROUTES (ROUTE_ID)
@@ -311,6 +383,10 @@ CREATE TABLE ASOP_VEHICLE_TYPES
 (
     VEHICLE_TYPE_ID UUID         NOT NULL,  -- UUIDv7
     TYPE_NAME       VARCHAR(100) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_vehicle_types PRIMARY KEY (VEHICLE_TYPE_ID)
 );
 
@@ -318,6 +394,10 @@ CREATE TABLE ASOP_VEHICLE_MODELS
 (
     VEHICLE_MODEL_ID UUID         NOT NULL,  -- UUIDv7
     MODEL_NAME       VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_vehicle_models PRIMARY KEY (VEHICLE_MODEL_ID)
 );
 
@@ -329,6 +409,10 @@ CREATE TABLE ASOP_VEHICLES
     VEHICLE_MODEL_ID UUID         NOT NULL,
     VEHICLE_NUMBER   VARCHAR(16)  NOT NULL,
     VEHICLE_NAME     VARCHAR(255) NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_vehicles PRIMARY KEY (VEHICLE_ID),
     CONSTRAINT fk_vehicles_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
     CONSTRAINT fk_vehicles_type FOREIGN KEY (VEHICLE_TYPE_ID) REFERENCES ASOP_VEHICLE_TYPES (VEHICLE_TYPE_ID),
@@ -348,6 +432,10 @@ CREATE TABLE ASOP_USERS
     SNILS_HASH         VARCHAR(64) UNIQUE,
     SNILS_ENCRYPTED    BYTEA,
     KEYCLOAK_ID        VARCHAR(255) UNIQUE,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_users PRIMARY KEY (USER_ID)
 );
 COMMENT ON TABLE ASOP_USERS IS 'ПДн защищены: СНИЛС хэшируется и шифруется, ФИО сокращено, аутентификация через Keycloak.';
@@ -356,6 +444,10 @@ CREATE TABLE ASOP_USER_ROLES
 (
     USER_ID UUID NOT NULL,
     ROLE_ID UUID NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_user_roles PRIMARY KEY (USER_ID, ROLE_ID),
     CONSTRAINT fk_ur_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
     CONSTRAINT fk_ur_role FOREIGN KEY (ROLE_ID) REFERENCES ASOP_ROLES (ROLE_ID)
@@ -365,6 +457,10 @@ CREATE TABLE ASOP_USER_CARRIERS
 (
     USER_ID    UUID NOT NULL,
     CARRIER_ID UUID NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_user_carriers PRIMARY KEY (USER_ID, CARRIER_ID),
     CONSTRAINT fk_uc_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
     CONSTRAINT fk_uc_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID)
@@ -374,6 +470,10 @@ CREATE TABLE ASOP_USER_REGIONS
 (
     USER_ID   UUID NOT NULL,
     REGION_ID UUID NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_user_regions PRIMARY KEY (USER_ID, REGION_ID),
     CONSTRAINT fk_ureg_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
     CONSTRAINT fk_ureg_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
@@ -390,6 +490,10 @@ CREATE TABLE ASOP_FARE_ZONES
     DESCRIPTION  VARCHAR(256),
     ZONE_POLYGON GEOGRAPHY(POLYGON, 4326),
     REGION_ID    UUID         NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_fare_zones PRIMARY KEY (ZONE_ID),
     CONSTRAINT uq_fare_zones_code UNIQUE (ZONE_CODE),
     CONSTRAINT fk_fare_zones_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID),
@@ -408,8 +512,10 @@ CREATE TABLE ASOP_TRANSPORT_STOPS
     ZONE_POLYGON GEOGRAPHY(POLYGON, 4326),
     DESCRIPTION  TEXT,
     IS_ACTIVE    BOOLEAN DEFAULT true,
-    CREATED_AT   TIMESTAMPTZ    NOT NULL,
-    UPDATED_AT   TIMESTAMPTZ    NOT NULL,
+    CREATED_AT   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UPDATED_AT   TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_transport_stops PRIMARY KEY (STOP_ID),
     CONSTRAINT uq_stop_code UNIQUE (STOP_CODE),
     CONSTRAINT fk_transport_stops_zone_id FOREIGN KEY (FARE_ZONE_ID) REFERENCES ASOP_FARE_ZONES (ZONE_ID),
@@ -432,6 +538,10 @@ CREATE TABLE ASOP_PATHS
     PATH_END_DATE   TIMESTAMPTZ,
     DESCRIPTION     VARCHAR(512),
     REGION_ID       UUID         NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_paths PRIMARY KEY (PATH_ID),
     CONSTRAINT fk_paths_route FOREIGN KEY (ROUTE_ID) REFERENCES ASOP_ROUTES (ROUTE_ID),
     CONSTRAINT fk_paths_start_stop FOREIGN KEY (START_STOP_ID) REFERENCES ASOP_TRANSPORT_STOPS (STOP_ID),
@@ -450,8 +560,10 @@ CREATE TABLE ASOP_PATH_TRANSPORT_STOPS
     STOP_ID       UUID      NOT NULL,
     SERIAL_NUMBER INT       NOT NULL,
     REGION_ID     UUID      NOT NULL,
-    CREATED_AT    TIMESTAMPTZ NOT NULL,
-    UPDATED_AT    TIMESTAMPTZ NOT NULL,
+    CREATED_AT    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_path_transport_stops PRIMARY KEY (PATH_STOP_ID),
     CONSTRAINT fk_pts_path FOREIGN KEY (PATH_ID) REFERENCES ASOP_PATHS (PATH_ID),
     CONSTRAINT fk_pts_stop FOREIGN KEY (STOP_ID) REFERENCES ASOP_TRANSPORT_STOPS (STOP_ID),
@@ -470,6 +582,10 @@ CREATE TABLE ASOP_SCHEDULE
     DWELL_TIME_SEC INT           DEFAULT 30,
     REGION_ID      UUID NOT NULL,
     IS_ACTIVE      BOOLEAN       DEFAULT true,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_schedule PRIMARY KEY (SCHEDULE_ID),
     CONSTRAINT fk_sched_path FOREIGN KEY (PATH_ID) REFERENCES ASOP_PATHS (PATH_ID) ON DELETE CASCADE,
     CONSTRAINT fk_sched_stop FOREIGN KEY (STOP_ID) REFERENCES ASOP_TRANSPORT_STOPS (STOP_ID),
@@ -487,6 +603,10 @@ CREATE TABLE ASOP_PATH_SERVICES
     TARIFF_TYPE_ID  UUID,
     PRICE           NUMERIC(10, 2) NOT NULL,
     IS_ACTIVE       BOOLEAN DEFAULT true,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_path_services PRIMARY KEY (PATH_SERVICE_ID),
     CONSTRAINT fk_ps_path FOREIGN KEY (PATH_ID) REFERENCES ASOP_PATHS (PATH_ID) ON DELETE CASCADE,
     CONSTRAINT fk_ps_service FOREIGN KEY (SERVICE_ID) REFERENCES ASOP_SERVICES (SERVICE_ID),
@@ -510,6 +630,10 @@ CREATE TABLE ASOP_PATH_DISCOUNTS
     VALID_FROM       TIMESTAMPTZ      NOT NULL,
     VALID_UNTIL      TIMESTAMPTZ,
     IS_ACTIVE        BOOLEAN                 DEFAULT true,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_path_discounts PRIMARY KEY (PATH_DISCOUNT_ID),
     CONSTRAINT fk_pd_path FOREIGN KEY (PATH_ID) REFERENCES ASOP_PATHS (PATH_ID) ON DELETE CASCADE,
     CONSTRAINT fk_pd_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
@@ -523,6 +647,10 @@ CREATE TABLE ASOP_PATH_BENEFITS
     PATH_BENEFIT_ID UUID NOT NULL,  -- UUIDv7
     PATH_ID         UUID NOT NULL,
     BENEFIT_ID      UUID NOT NULL,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_path_benefits PRIMARY KEY (PATH_BENEFIT_ID),
     CONSTRAINT fk_pb_path FOREIGN KEY (PATH_ID) REFERENCES ASOP_PATHS (PATH_ID) ON DELETE CASCADE,
     CONSTRAINT fk_pb_benefit FOREIGN KEY (BENEFIT_ID) REFERENCES ASOP_BENEFITS (BENEFIT_ID) ON DELETE CASCADE,
@@ -541,8 +669,10 @@ CREATE TABLE ASOP_CARDS
     LAST_SYNC_RECEIPT_TIME INT     DEFAULT 0,
     REGISTERED_AT          TIMESTAMPTZ,
     REGISTERED_BY_USER_ID  UUID,
-    CREATED_AT             TIMESTAMPTZ NOT NULL,
-    UPDATED_AT             TIMESTAMPTZ NOT NULL,
+    CREATED_AT             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_cards PRIMARY KEY (CARD_ID),
     CONSTRAINT fk_cards_type_id FOREIGN KEY (CARD_TYPE_ID) REFERENCES ASOP_CARD_TYPES (CARD_TYPE_ID),
     CONSTRAINT fk_cards_user_id FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID)
@@ -579,6 +709,10 @@ CREATE TABLE ASOP_CARD_MIFARES
     LAST_AUTH_TERMINAL   UUID,
 
     -- Первичные/Внешние ключи
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_card_mifares PRIMARY KEY (CARD_ID),
     CONSTRAINT uq_mifare_uid UNIQUE (UID),
     CONSTRAINT fk_mifares_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID) ON DELETE CASCADE,
@@ -625,6 +759,10 @@ CREATE TABLE ASOP_CARD_BANKS
     PAN_LAST4    CHAR(4),
     BIN          CHAR(6),
     IS_TOKENIZED BOOLEAN DEFAULT false,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_card_banks PRIMARY KEY (CARD_ID),
     CONSTRAINT fk_banks_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID) ON DELETE CASCADE
 );
@@ -641,8 +779,10 @@ CREATE TABLE ASOP_CARD_TARIFFS
     ACTIVATED_AT            TIMESTAMPTZ,
     PURCHASE_TRANSACTION_ID UUID,
     IS_ACTIVE               BOOLEAN DEFAULT true,
-    CREATED_AT              TIMESTAMPTZ NOT NULL,
-    UPDATED_AT              TIMESTAMPTZ NOT NULL,
+    CREATED_AT              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_card_tariffs PRIMARY KEY (CARD_TARIFF_ID),
     CONSTRAINT fk_card_tariffs_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID) ON DELETE CASCADE,
     CONSTRAINT fk_card_tariffs_type FOREIGN KEY (TARIFF_TYPE_ID) REFERENCES ASOP_TARIFF_TYPES (TARIFF_TYPE_ID)
@@ -653,6 +793,10 @@ CREATE TABLE ASOP_BLACKLISTS
     CARD_ID    UUID        NOT NULL,
     BLOCK_TYPE VARCHAR(20) NOT NULL,
     BLOCKED_AT TIMESTAMPTZ   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_blacklists PRIMARY KEY (CARD_ID),
     CONSTRAINT fk_blacklists_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID),
     CONSTRAINT chk_blacklist_type CHECK (BLOCK_TYPE IN ('PERMANENT', 'NEGATIVE_BALANCE'))
@@ -666,8 +810,10 @@ CREATE TABLE ASOP_USER_BENEFITS
     VALID_FROM    TIMESTAMPTZ NOT NULL,
     VALID_UNTIL   TIMESTAMPTZ,
     SYNC_VERSION  INT       NOT NULL DEFAULT 1,
-    CREATED_AT    TIMESTAMPTZ NOT NULL,
-    UPDATED_AT    TIMESTAMPTZ NOT NULL,
+    CREATED_AT    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_user_benefits PRIMARY KEY (ASSIGNMENT_ID),
     CONSTRAINT fk_ub_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID) ON DELETE CASCADE,
     CONSTRAINT fk_ub_benefit FOREIGN KEY (BENEFIT_ID) REFERENCES ASOP_BENEFITS (BENEFIT_ID)
@@ -683,8 +829,10 @@ CREATE TABLE ASOP_TARIFF_RATES
     PRICE          NUMERIC(10, 2) NOT NULL,
     DESCRIPTION    TEXT,
     IS_ACTIVE      BOOLEAN DEFAULT true,
-    CREATED_AT     TIMESTAMPTZ      NOT NULL,
-    UPDATED_AT     TIMESTAMPTZ      NOT NULL,
+    CREATED_AT     TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    UPDATED_AT     TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_tariff_rates PRIMARY KEY (TARIFF_RATE_ID),
     CONSTRAINT fk_tariff_rates_type FOREIGN KEY (TARIFF_TYPE_ID) REFERENCES ASOP_TARIFF_TYPES (TARIFF_TYPE_ID),
     CONSTRAINT fk_tariff_rates_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
@@ -845,8 +993,10 @@ CREATE TABLE ASOP_TIDS
     STATUS        VARCHAR(20) DEFAULT 'UNUSED',
     ASSIGNED_AT   TIMESTAMPTZ,
     UNASSIGNED_AT TIMESTAMPTZ,
-    CREATED_AT    TIMESTAMPTZ   NOT NULL,
-    UPDATED_AT    TIMESTAMPTZ   NOT NULL,
+    CREATED_AT    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    UPDATED_AT    TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    DELETED_AT TIMESTAMPTZ,
+    VERSION BIGINT,
     CONSTRAINT pk_tids PRIMARY KEY (TID_ID),
     CONSTRAINT fk_tids_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
     CONSTRAINT uq_tids_value UNIQUE (TID_VALUE),
@@ -1345,6 +1495,58 @@ COMMENT ON COLUMN ASOP_TERMINAL_CERTS.CA_CHAIN IS
     'PEM-цепочка CA (Root + Intermediate) на момент выпуска.';
 
 -- ========================
+-- 8.2. 3DES-КЛЮЧИ КАРТ И ПАРАМЕТРЫ АСОП
+-- ========================
+
+-- Глобальный пул ротируемых 3DES-ключей карт (24 байта, 3K3DES).
+-- KEY_MATERIAL всегда хранится зашифрованным ПУБЛИЧНЫМ КЛЮЧОМ СЕРВЕРА (base64).
+-- Записи принципиально физически не удаляются — только метка DELETED_AT.
+-- Таблица входит в дельта-синк (доставка на терминалы через mTLS, вариант Б).
+CREATE TABLE ASOP_3DES_KEYS
+(
+    KEY_ID       UUID         NOT NULL,  -- UUIDv7
+    KEY_MATERIAL TEXT         NOT NULL,  -- 3DES-ключ (24 байта), зашифрован публичным ключом сервера (base64)
+    CREATED_AT   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    UPDATED_AT   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    DELETED_AT   TIMESTAMPTZ,
+    VERSION      BIGINT,
+    CONSTRAINT pk_3des_keys PRIMARY KEY (KEY_ID)
+);
+COMMENT ON TABLE ASOP_3DES_KEYS IS
+    'Пул ротируемых 3DES-ключей карт (MIFARE/DESFire). KEY_MATERIAL зашифрован публичным ключом сервера. Записи никогда физически не удаляются — только метятся DELETED_AT.';
+COMMENT ON COLUMN ASOP_3DES_KEYS.KEY_MATERIAL IS
+    '24-байтный 3DES-ключ (3K3DES), зашифрованный публичным ключом сервера (base64). В открытом виде в БД не хранится.';
+
+-- Параметры АСОП в виде иерархии перекрытия.
+-- «Базовая» запись — все scope-колонки NULL. Более глубокий scope перекрывает нижние
+-- по цепочке: base → region → organizer → carrier → distributor → krs.
+-- Перекрываются только указанные ключи JSONB; отсутствующие берутся из нижнего уровня.
+CREATE TABLE ASOP_CONFIG_PARAMS
+(
+    PARAM_ID       UUID         NOT NULL,  -- UUIDv7
+    REGION_ID      UUID,
+    ORGANIZER_ID   UUID,
+    CARRIER_ID     UUID,
+    CARDS_DISTRIBUTOR_ID UUID,
+    KRS_ID         UUID,
+    PARAMS         JSONB        NOT NULL,
+    CREATED_AT     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    UPDATED_AT     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    DELETED_AT     TIMESTAMPTZ,
+    VERSION        BIGINT,
+    CONSTRAINT pk_config_params PRIMARY KEY (PARAM_ID),
+    CONSTRAINT fk_cp_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID),
+    CONSTRAINT fk_cp_organizer FOREIGN KEY (ORGANIZER_ID) REFERENCES ASOP_ORGANIZERS (ORGANIZER_ID),
+    CONSTRAINT fk_cp_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
+    CONSTRAINT fk_cp_distributor FOREIGN KEY (CARDS_DISTRIBUTOR_ID) REFERENCES ASOP_CARDS_DISTRIBUTORS (CARDS_DISTRIBUTOR_ID),
+    CONSTRAINT fk_cp_krs FOREIGN KEY (KRS_ID) REFERENCES ASOP_AUDIT_SERVICES (AUDIT_SERVICE_ID),
+    CONSTRAINT chk_cp_at_least_one_param CHECK (jsonb_typeof(PARAMS) = 'object')
+);
+COMMENT ON TABLE ASOP_CONFIG_PARAMS IS
+    'Иерархические параметры АСОП. Базовая строка — все scope NULL. Разрешение: самый глубокий scope, отсутствующие ключи берутся из нижестоящего уровня (base → region → organizer → carrier → distributor → krs).';
+CREATE INDEX idx_cp_scopes ON ASOP_CONFIG_PARAMS (REGION_ID, ORGANIZER_ID, CARRIER_ID, CARDS_DISTRIBUTOR_ID, KRS_ID);
+
+-- ========================
 -- 9. ОТЛОЖЕННЫЕ ВНЕШНИЕ КЛЮЧИ И ИНДЕКСЫ
 -- ========================
 -- FK для PURCHASE_TRANSACTION_ID (ASOP_TRANSACTIONS создаётся позже ASOP_CARD_TARIFFS)
@@ -1600,63 +1802,21 @@ ON CONFLICT (ROLE_ID) DO NOTHING;
 -- ============================================================
 
 -- Глобальный sequence для дельта-версионирования (курсор VERSION)
+
+
+-- ============================================================
+-- 11. DELTA SYNC SUPPORT
+--     UPDATED_AT/DELETED_AT/VERSION управляются триггерами.
+--     DELETE -> soft-delete (tombstone). VERSION -> курсор keyset.
+--     Колонки CREATED_AT/UPDATED_AT/DELETED_AT/VERSION объявлены
+--     явно в каждом CREATE TABLE (см. выше) — триггеры только
+--     заполняют их значения.
+-- ============================================================
+
+-- Глобальный sequence для дельта-версионирования (курсор VERSION)
 CREATE SEQUENCE IF NOT EXISTS asop_delta_version_seq;
 
-DO $body$
-DECLARE
-    _t TEXT;
-BEGIN
-    FOREACH _t IN ARRAY ARRAY[
-        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
-        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
-        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
-        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
-        'asop_cards_distributors',
-        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
-        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
-        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
-        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
-        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
-        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
-        'asop_tids'] LOOP
-        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW()', _t);
-        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW()', _t);
-        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS DELETED_AT TIMESTAMPTZ', _t);
-        EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS VERSION BIGINT', _t);
-        -- Колонки могут существовать из базового CREATE TABLE без DEFAULT (например
-        -- ASOP_BENEFITS.CREATED_AT). Проставляем дефолт, чтобы seed-скрипты могли
-        -- не указывать CREATED_AT/UPDATED_AT (trg_touch_updated всё равно перезапишет).
-        EXECUTE format('ALTER TABLE %I ALTER COLUMN CREATED_AT SET DEFAULT NOW()', _t);
-        EXECUTE format('ALTER TABLE %I ALTER COLUMN UPDATED_AT SET DEFAULT NOW()', _t);
-    END LOOP;
-END;
-$body$;
-
-DO $body$
-DECLARE
-    _t TEXT;
-BEGIN
-    FOREACH _t IN ARRAY ARRAY[
-        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
-        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
-        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
-        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
-        'asop_cards_distributors',
-        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
-        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
-        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
-        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
-        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
-        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
-        'asop_tids'] LOOP
-        EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_updated_deleted ON %I (UPDATED_AT, DELETED_AT)', _t, _t);
-        EXECUTE format('CREATE INDEX IF NOT EXISTS ix_%s_deleted ON %I (DELETED_AT)', _t, _t);
-    END LOOP;
-END;
-$body$;
-
 -- Generic soft-delete trigger: превращает DELETE в UPDATE UPDATED_AT/DELETED_AT.
--- Аргументы: (pk_column, pk_cast_type)
 CREATE OR REPLACE FUNCTION trg_fn_soft_delete()
 RETURNS TRIGGER AS $body$
 DECLARE
@@ -1670,8 +1830,7 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
--- Generic touch trigger: UPDATE → UPDATED_AT = now() (для дельта-синхронизации).
--- Приложение не обязано вручную проставлять UPDATED_AT при обновлении.
+-- Generic touch trigger: UPDATE -> UPDATED_AT = now().
 CREATE OR REPLACE FUNCTION trg_fn_touch_updated()
 RETURNS TRIGGER AS $body$
 BEGIN
@@ -1694,97 +1853,7 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
-DO $body$
-DECLARE
-    _tables TEXT[] := ARRAY[
-        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_roles',
-        'asop_card_types', 'asop_tariff_types', 'asop_session_types', 'asop_event_types',
-        'asop_transaction_types', 'asop_transaction_results', 'asop_services',
-        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
-        'asop_cards_distributors',
-        'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
-        'asop_users', 'asop_fare_zones', 'asop_transport_stops', 'asop_routes',
-        'asop_paths', 'asop_path_transport_stops', 'asop_schedule', 'asop_path_services',
-        'asop_path_discounts', 'asop_path_benefits', 'asop_cards', 'asop_card_mifares',
-        'asop_card_banks', 'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits',
-        'asop_tariff_rates', 'asop_tids'];
-    _pks    TEXT[] := ARRAY[
-        'region_id', 'territory_id', 'organizer_id', 'role_id',
-        'card_type_id', 'tariff_type_id', 'session_type_id', 'event_type',
-        'transaction_type_id', 'transaction_result_id', 'service_id',
-        'benefit_id', 'step_id', 'carrier_id', 'contract_id', 'cards_distributor_id',
-        'vehicle_type_id', 'vehicle_model_id', 'vehicle_id',
-        'user_id', 'zone_id', 'stop_id', 'route_id',
-        'path_id', 'path_stop_id', 'schedule_id', 'path_service_id',
-        'path_discount_id', 'path_benefit_id', 'card_id', 'card_id',
-        'card_id', 'card_tariff_id', 'card_id', 'assignment_id',
-        'tariff_rate_id', 'tid_id'];
-    _types  TEXT[] := ARRAY[
-        'uuid', 'uuid', 'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid', 'text',
-        'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid', 'uuid', 'uuid',
-        'uuid', 'uuid'];
-    _i INT;
-BEGIN
-    FOR _i IN 1 .. array_length(_tables, 1) LOOP
-        EXECUTE format('DROP TRIGGER IF EXISTS trg_soft_delete_%s ON %I', _tables[_i], _tables[_i]);
-        EXECUTE format('CREATE TRIGGER trg_soft_delete_%s BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete(%L, %L)',
-                       _tables[_i], _tables[_i], _pks[_i], _types[_i]);
-    END LOOP;
-END;
-$body$;
-
-DO $body$
-DECLARE
-    _tables TEXT[] := ARRAY[
-        'asop_organizer_territories', 'asop_contract_routes', 'asop_user_roles',
-        'asop_user_carriers', 'asop_user_regions'];
-    _pks1   TEXT[] := ARRAY['organizer_id', 'contract_id', 'user_id', 'user_id', 'user_id'];
-    _pks2   TEXT[] := ARRAY['territory_id', 'route_id', 'role_id', 'carrier_id', 'region_id'];
-    _i INT;
-BEGIN
-    FOR _i IN 1 .. array_length(_tables, 1) LOOP
-        EXECUTE format('DROP TRIGGER IF EXISTS trg_soft_delete_%s ON %I', _tables[_i], _tables[_i]);
-        EXECUTE format('CREATE TRIGGER trg_soft_delete_%s BEFORE DELETE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col(%L, %L)',
-                       _tables[_i], _tables[_i], _pks1[_i], _pks2[_i]);
-    END LOOP;
-END;
-$body$;
-
--- Touch-триггеры UPDATED_AT на все таблицы дельта-справочников
-DO $body$
-DECLARE
-    _t TEXT;
-BEGIN
-    FOREACH _t IN ARRAY ARRAY[
-        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
-        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
-        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
-        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
-        'asop_cards_distributors',
-        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
-        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
-        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
-        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
-        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
-        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
-        'asop_tids'] LOOP
-        EXECUTE format('DROP TRIGGER IF EXISTS trg_touch_updated_%s ON %I', _t, _t);
-        EXECUTE format('CREATE TRIGGER trg_touch_updated_%s BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated()',
-                       _t, _t);
-    END LOOP;
-END;
-$body$;
-
--- Generic VERSION trigger: INSERT/UPDATE → VERSION = nextval(sequence).
--- Значение, переданное приложением, игнорируется. Уникальные возрастающие
--- значения даже внутри одного bulk-INSERT — ключ для keyset-пагинации.
+-- Generic VERSION trigger: INSERT/UPDATE -> VERSION = nextval(sequence).
 CREATE OR REPLACE FUNCTION trg_fn_delta_version()
 RETURNS TRIGGER AS $body$
 BEGIN
@@ -1793,30 +1862,294 @@ BEGIN
 END;
 $body$ LANGUAGE plpgsql;
 
--- VERSION-триггеры на все таблицы дельта-справочников (после touch-триггера)
-DO $body$
+
+
+-- ============================================================
+-- 11. DELTA SYNC SUPPORT
+--     UPDATED_AT/DELETED_AT/VERSION управляются триггерами.
+--     DELETE -> soft-delete (tombstone). VERSION -> курсор keyset.
+--     Колонки CREATED_AT/UPDATED_AT/DELETED_AT/VERSION объявлены
+--     явно в каждом CREATE TABLE (см. выше) — триггеры только
+--     заполняют их значения.
+-- ============================================================
+
+-- Глобальный sequence для дельта-версионирования (курсор VERSION)
+CREATE SEQUENCE IF NOT EXISTS asop_delta_version_seq;
+
+-- Generic soft-delete trigger: превращает DELETE в UPDATE UPDATED_AT/DELETED_AT.
+CREATE OR REPLACE FUNCTION trg_fn_soft_delete()
+RETURNS TRIGGER AS $body$
 DECLARE
-    _t TEXT;
+    _pk    TEXT := TG_ARGV[0];
+    _ptype TEXT := COALESCE(TG_ARGV[1], 'uuid');
 BEGIN
-    FOREACH _t IN ARRAY ARRAY[
-        'asop_regions', 'asop_territories', 'asop_organizers', 'asop_organizer_territories',
-        'asop_roles', 'asop_card_types', 'asop_tariff_types', 'asop_session_types',
-        'asop_event_types', 'asop_transaction_types', 'asop_transaction_results', 'asop_services',
-        'asop_benefits', 'asop_benefit_steps', 'asop_carriers', 'asop_contracts',
-        'asop_cards_distributors',
-        'asop_contract_routes', 'asop_vehicle_types', 'asop_vehicle_models', 'asop_vehicles',
-        'asop_users', 'asop_user_roles', 'asop_user_carriers', 'asop_user_regions',
-        'asop_fare_zones', 'asop_transport_stops', 'asop_routes', 'asop_paths',
-        'asop_path_transport_stops', 'asop_schedule', 'asop_path_services', 'asop_path_discounts',
-        'asop_path_benefits', 'asop_cards', 'asop_card_mifares', 'asop_card_banks',
-        'asop_card_tariffs', 'asop_blacklists', 'asop_user_benefits', 'asop_tariff_rates',
-        'asop_tids'] LOOP
-        EXECUTE format('DROP TRIGGER IF EXISTS trg_delta_version_%s ON %I', _t, _t);
-        EXECUTE format('CREATE TRIGGER trg_delta_version_%s BEFORE INSERT OR UPDATE ON %I FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version()',
-                       _t, _t);
-    END LOOP;
+    EXECUTE format('UPDATE %I SET %I = now(), %I = now() WHERE %I = CAST(btrim($1) AS %s)',
+                   TG_TABLE_NAME, 'updated_at', 'deleted_at', _pk, _ptype)
+        USING row_to_json(OLD) ->> _pk;
+    RETURN NULL;
 END;
-$body$;
+$body$ LANGUAGE plpgsql;
+
+-- Generic touch trigger: UPDATE -> UPDATED_AT = now().
+CREATE OR REPLACE FUNCTION trg_fn_touch_updated()
+RETURNS TRIGGER AS $body$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Soft-delete trigger для таблиц с составным PK (2 колонки)
+CREATE OR REPLACE FUNCTION trg_fn_soft_delete_2col()
+RETURNS TRIGGER AS $body$
+DECLARE
+    _pk1 TEXT := TG_ARGV[0];
+    _pk2 TEXT := TG_ARGV[1];
+BEGIN
+    EXECUTE format('UPDATE %I SET %I = now(), %I = now() WHERE %I = CAST($1 AS uuid) AND %I = CAST($2 AS uuid)',
+                   TG_TABLE_NAME, 'updated_at', 'deleted_at', _pk1, _pk2)
+        USING row_to_json(OLD) ->> _pk1, row_to_json(OLD) ->> _pk2;
+    RETURN NULL;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Generic VERSION trigger: INSERT/UPDATE -> VERSION = nextval(sequence).
+CREATE OR REPLACE FUNCTION trg_fn_delta_version()
+RETURNS TRIGGER AS $body$
+BEGIN
+    NEW.version := nextval('asop_delta_version_seq');
+    RETURN NEW;
+END;
+$body$ LANGUAGE plpgsql;
+
+-- Индексы дельта-синхронизации
+CREATE INDEX IF NOT EXISTS ix_asop_regions_updated_deleted ON asop_regions (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_regions_deleted ON asop_regions (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_territories_updated_deleted ON asop_territories (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_territories_deleted ON asop_territories (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_organizers_updated_deleted ON asop_organizers (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_organizers_deleted ON asop_organizers (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_roles_updated_deleted ON asop_roles (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_roles_deleted ON asop_roles (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_types_updated_deleted ON asop_card_types (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_types_deleted ON asop_card_types (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_tariff_types_updated_deleted ON asop_tariff_types (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_tariff_types_deleted ON asop_tariff_types (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_session_types_updated_deleted ON asop_session_types (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_session_types_deleted ON asop_session_types (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_event_types_updated_deleted ON asop_event_types (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_event_types_deleted ON asop_event_types (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_transaction_types_updated_deleted ON asop_transaction_types (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_transaction_types_deleted ON asop_transaction_types (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_transaction_results_updated_deleted ON asop_transaction_results (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_transaction_results_deleted ON asop_transaction_results (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_services_updated_deleted ON asop_services (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_services_deleted ON asop_services (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_benefits_updated_deleted ON asop_benefits (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_benefits_deleted ON asop_benefits (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_benefit_steps_updated_deleted ON asop_benefit_steps (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_benefit_steps_deleted ON asop_benefit_steps (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_carriers_updated_deleted ON asop_carriers (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_carriers_deleted ON asop_carriers (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_contracts_updated_deleted ON asop_contracts (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_contracts_deleted ON asop_contracts (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_cards_distributors_updated_deleted ON asop_cards_distributors (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_cards_distributors_deleted ON asop_cards_distributors (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_vehicle_types_updated_deleted ON asop_vehicle_types (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_vehicle_types_deleted ON asop_vehicle_types (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_vehicle_models_updated_deleted ON asop_vehicle_models (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_vehicle_models_deleted ON asop_vehicle_models (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_vehicles_updated_deleted ON asop_vehicles (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_vehicles_deleted ON asop_vehicles (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_users_updated_deleted ON asop_users (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_users_deleted ON asop_users (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_fare_zones_updated_deleted ON asop_fare_zones (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_fare_zones_deleted ON asop_fare_zones (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_transport_stops_updated_deleted ON asop_transport_stops (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_transport_stops_deleted ON asop_transport_stops (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_routes_updated_deleted ON asop_routes (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_routes_deleted ON asop_routes (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_paths_updated_deleted ON asop_paths (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_paths_deleted ON asop_paths (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_transport_stops_updated_deleted ON asop_path_transport_stops (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_transport_stops_deleted ON asop_path_transport_stops (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_schedule_updated_deleted ON asop_schedule (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_schedule_deleted ON asop_schedule (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_services_updated_deleted ON asop_path_services (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_services_deleted ON asop_path_services (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_discounts_updated_deleted ON asop_path_discounts (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_discounts_deleted ON asop_path_discounts (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_benefits_updated_deleted ON asop_path_benefits (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_path_benefits_deleted ON asop_path_benefits (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_cards_updated_deleted ON asop_cards (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_cards_deleted ON asop_cards (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_mifares_updated_deleted ON asop_card_mifares (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_mifares_deleted ON asop_card_mifares (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_banks_updated_deleted ON asop_card_banks (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_banks_deleted ON asop_card_banks (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_tariffs_updated_deleted ON asop_card_tariffs (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_card_tariffs_deleted ON asop_card_tariffs (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_blacklists_updated_deleted ON asop_blacklists (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_blacklists_deleted ON asop_blacklists (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_benefits_updated_deleted ON asop_user_benefits (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_benefits_deleted ON asop_user_benefits (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_tariff_rates_updated_deleted ON asop_tariff_rates (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_tariff_rates_deleted ON asop_tariff_rates (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_tids_updated_deleted ON asop_tids (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_tids_deleted ON asop_tids (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_organizer_territories_updated_deleted ON asop_organizer_territories (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_organizer_territories_deleted ON asop_organizer_territories (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_contract_routes_updated_deleted ON asop_contract_routes (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_contract_routes_deleted ON asop_contract_routes (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_roles_updated_deleted ON asop_user_roles (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_roles_deleted ON asop_user_roles (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_carriers_updated_deleted ON asop_user_carriers (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_carriers_deleted ON asop_user_carriers (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_regions_updated_deleted ON asop_user_regions (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_regions_deleted ON asop_user_regions (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_3des_keys_updated_deleted ON asop_3des_keys (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_3des_keys_deleted ON asop_3des_keys (DELETED_AT);
+
+-- Soft-delete триггеры (одинарный PK)
+CREATE TRIGGER trg_soft_delete_asop_regions BEFORE DELETE ON asop_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('region_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_territories BEFORE DELETE ON asop_territories FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('territory_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_organizers BEFORE DELETE ON asop_organizers FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('organizer_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_roles BEFORE DELETE ON asop_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('role_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_card_types BEFORE DELETE ON asop_card_types FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('card_type_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_tariff_types BEFORE DELETE ON asop_tariff_types FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('tariff_type_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_session_types BEFORE DELETE ON asop_session_types FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('session_type_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_event_types BEFORE DELETE ON asop_event_types FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('event_type', 'text');
+CREATE TRIGGER trg_soft_delete_asop_transaction_types BEFORE DELETE ON asop_transaction_types FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('transaction_type_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_transaction_results BEFORE DELETE ON asop_transaction_results FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('transaction_result_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_services BEFORE DELETE ON asop_services FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('service_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_benefits BEFORE DELETE ON asop_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('benefit_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_benefit_steps BEFORE DELETE ON asop_benefit_steps FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('step_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_carriers BEFORE DELETE ON asop_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('carrier_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_contracts BEFORE DELETE ON asop_contracts FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('contract_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_cards_distributors BEFORE DELETE ON asop_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('cards_distributor_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_vehicle_types BEFORE DELETE ON asop_vehicle_types FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('vehicle_type_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_vehicle_models BEFORE DELETE ON asop_vehicle_models FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('vehicle_model_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_vehicles BEFORE DELETE ON asop_vehicles FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('vehicle_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_users BEFORE DELETE ON asop_users FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('user_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_fare_zones BEFORE DELETE ON asop_fare_zones FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('zone_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_transport_stops BEFORE DELETE ON asop_transport_stops FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('stop_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_routes BEFORE DELETE ON asop_routes FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('route_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_paths BEFORE DELETE ON asop_paths FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('path_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_path_transport_stops BEFORE DELETE ON asop_path_transport_stops FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('path_stop_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_schedule BEFORE DELETE ON asop_schedule FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('schedule_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_path_services BEFORE DELETE ON asop_path_services FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('path_service_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_path_discounts BEFORE DELETE ON asop_path_discounts FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('path_discount_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_path_benefits BEFORE DELETE ON asop_path_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('path_benefit_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_cards BEFORE DELETE ON asop_cards FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('card_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_card_mifares BEFORE DELETE ON asop_card_mifares FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('card_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_card_banks BEFORE DELETE ON asop_card_banks FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('card_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_card_tariffs BEFORE DELETE ON asop_card_tariffs FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('card_tariff_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_blacklists BEFORE DELETE ON asop_blacklists FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('card_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_user_benefits BEFORE DELETE ON asop_user_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('assignment_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_tariff_rates BEFORE DELETE ON asop_tariff_rates FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('tariff_rate_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_tids BEFORE DELETE ON asop_tids FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('tid_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_3des_keys BEFORE DELETE ON asop_3des_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('key_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_config_params BEFORE DELETE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('param_id', 'uuid');
+
+-- Soft-delete триггеры (составной PK)
+CREATE TRIGGER trg_soft_delete_asop_organizer_territories BEFORE DELETE ON asop_organizer_territories FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('organizer_id', 'territory_id');
+CREATE TRIGGER trg_soft_delete_asop_contract_routes BEFORE DELETE ON asop_contract_routes FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('contract_id', 'route_id');
+CREATE TRIGGER trg_soft_delete_asop_user_roles BEFORE DELETE ON asop_user_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('user_id', 'role_id');
+CREATE TRIGGER trg_soft_delete_asop_user_carriers BEFORE DELETE ON asop_user_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('user_id', 'carrier_id');
+CREATE TRIGGER trg_soft_delete_asop_user_regions BEFORE DELETE ON asop_user_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('user_id', 'region_id');
+
+-- Touch-триггеры UPDATED_AT
+CREATE TRIGGER trg_touch_updated_asop_regions BEFORE INSERT OR UPDATE ON asop_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_territories BEFORE INSERT OR UPDATE ON asop_territories FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_organizers BEFORE INSERT OR UPDATE ON asop_organizers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_roles BEFORE INSERT OR UPDATE ON asop_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_card_types BEFORE INSERT OR UPDATE ON asop_card_types FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_tariff_types BEFORE INSERT OR UPDATE ON asop_tariff_types FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_session_types BEFORE INSERT OR UPDATE ON asop_session_types FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_event_types BEFORE INSERT OR UPDATE ON asop_event_types FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_transaction_types BEFORE INSERT OR UPDATE ON asop_transaction_types FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_transaction_results BEFORE INSERT OR UPDATE ON asop_transaction_results FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_services BEFORE INSERT OR UPDATE ON asop_services FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_benefits BEFORE INSERT OR UPDATE ON asop_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_benefit_steps BEFORE INSERT OR UPDATE ON asop_benefit_steps FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_carriers BEFORE INSERT OR UPDATE ON asop_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_contracts BEFORE INSERT OR UPDATE ON asop_contracts FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_cards_distributors BEFORE INSERT OR UPDATE ON asop_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_vehicle_types BEFORE INSERT OR UPDATE ON asop_vehicle_types FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_vehicle_models BEFORE INSERT OR UPDATE ON asop_vehicle_models FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_vehicles BEFORE INSERT OR UPDATE ON asop_vehicles FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_users BEFORE INSERT OR UPDATE ON asop_users FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_fare_zones BEFORE INSERT OR UPDATE ON asop_fare_zones FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_transport_stops BEFORE INSERT OR UPDATE ON asop_transport_stops FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_routes BEFORE INSERT OR UPDATE ON asop_routes FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_paths BEFORE INSERT OR UPDATE ON asop_paths FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_path_transport_stops BEFORE INSERT OR UPDATE ON asop_path_transport_stops FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_schedule BEFORE INSERT OR UPDATE ON asop_schedule FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_path_services BEFORE INSERT OR UPDATE ON asop_path_services FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_path_discounts BEFORE INSERT OR UPDATE ON asop_path_discounts FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_path_benefits BEFORE INSERT OR UPDATE ON asop_path_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_cards BEFORE INSERT OR UPDATE ON asop_cards FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_card_mifares BEFORE INSERT OR UPDATE ON asop_card_mifares FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_card_banks BEFORE INSERT OR UPDATE ON asop_card_banks FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_card_tariffs BEFORE INSERT OR UPDATE ON asop_card_tariffs FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_blacklists BEFORE INSERT OR UPDATE ON asop_blacklists FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_user_benefits BEFORE INSERT OR UPDATE ON asop_user_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_tariff_rates BEFORE INSERT OR UPDATE ON asop_tariff_rates FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_tids BEFORE INSERT OR UPDATE ON asop_tids FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_organizer_territories BEFORE INSERT OR UPDATE ON asop_organizer_territories FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_contract_routes BEFORE INSERT OR UPDATE ON asop_contract_routes FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_user_roles BEFORE INSERT OR UPDATE ON asop_user_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_user_carriers BEFORE INSERT OR UPDATE ON asop_user_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_user_regions BEFORE INSERT OR UPDATE ON asop_user_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_3des_keys BEFORE INSERT OR UPDATE ON asop_3des_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_config_params BEFORE INSERT OR UPDATE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+
+-- VERSION-триггеры
+CREATE TRIGGER trg_delta_version_asop_regions BEFORE INSERT OR UPDATE ON asop_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_territories BEFORE INSERT OR UPDATE ON asop_territories FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_organizers BEFORE INSERT OR UPDATE ON asop_organizers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_roles BEFORE INSERT OR UPDATE ON asop_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_card_types BEFORE INSERT OR UPDATE ON asop_card_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_tariff_types BEFORE INSERT OR UPDATE ON asop_tariff_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_session_types BEFORE INSERT OR UPDATE ON asop_session_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_event_types BEFORE INSERT OR UPDATE ON asop_event_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_transaction_types BEFORE INSERT OR UPDATE ON asop_transaction_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_transaction_results BEFORE INSERT OR UPDATE ON asop_transaction_results FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_services BEFORE INSERT OR UPDATE ON asop_services FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_benefits BEFORE INSERT OR UPDATE ON asop_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_benefit_steps BEFORE INSERT OR UPDATE ON asop_benefit_steps FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_carriers BEFORE INSERT OR UPDATE ON asop_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_contracts BEFORE INSERT OR UPDATE ON asop_contracts FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_cards_distributors BEFORE INSERT OR UPDATE ON asop_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_vehicle_types BEFORE INSERT OR UPDATE ON asop_vehicle_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_vehicle_models BEFORE INSERT OR UPDATE ON asop_vehicle_models FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_vehicles BEFORE INSERT OR UPDATE ON asop_vehicles FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_users BEFORE INSERT OR UPDATE ON asop_users FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_fare_zones BEFORE INSERT OR UPDATE ON asop_fare_zones FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_transport_stops BEFORE INSERT OR UPDATE ON asop_transport_stops FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_routes BEFORE INSERT OR UPDATE ON asop_routes FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_paths BEFORE INSERT OR UPDATE ON asop_paths FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_path_transport_stops BEFORE INSERT OR UPDATE ON asop_path_transport_stops FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_schedule BEFORE INSERT OR UPDATE ON asop_schedule FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_path_services BEFORE INSERT OR UPDATE ON asop_path_services FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_path_discounts BEFORE INSERT OR UPDATE ON asop_path_discounts FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_path_benefits BEFORE INSERT OR UPDATE ON asop_path_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_cards BEFORE INSERT OR UPDATE ON asop_cards FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_card_mifares BEFORE INSERT OR UPDATE ON asop_card_mifares FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_card_banks BEFORE INSERT OR UPDATE ON asop_card_banks FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_card_tariffs BEFORE INSERT OR UPDATE ON asop_card_tariffs FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_blacklists BEFORE INSERT OR UPDATE ON asop_blacklists FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_user_benefits BEFORE INSERT OR UPDATE ON asop_user_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_tariff_rates BEFORE INSERT OR UPDATE ON asop_tariff_rates FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_tids BEFORE INSERT OR UPDATE ON asop_tids FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_organizer_territories BEFORE INSERT OR UPDATE ON asop_organizer_territories FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_contract_routes BEFORE INSERT OR UPDATE ON asop_contract_routes FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_user_roles BEFORE INSERT OR UPDATE ON asop_user_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_user_carriers BEFORE INSERT OR UPDATE ON asop_user_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_user_regions BEFORE INSERT OR UPDATE ON asop_user_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_3des_keys BEFORE INSERT OR UPDATE ON asop_3des_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_config_params BEFORE INSERT OR UPDATE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
 
 -- ============================================================
 -- ГОТОВО! Все UUID — v7 (Time-Ordered), генерируются на уровне приложения.

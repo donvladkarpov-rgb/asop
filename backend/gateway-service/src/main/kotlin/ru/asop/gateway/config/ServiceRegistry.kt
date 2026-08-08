@@ -43,6 +43,8 @@ class ServiceRegistry {
         "services" to svc("admin-service", 8091),
         "benefits" to svc("admin-service", 8091),
         "benefit-steps" to svc("admin-service", 8091),
+        "three-des-keys" to svc("admin-service", 8091),
+        "config-params" to svc("admin-service", 8091),
         // Routes & Paths (route-service)
         "fare-zones" to svc("route-service", 8092),
         "transport-stops" to svc("route-service", 8092),

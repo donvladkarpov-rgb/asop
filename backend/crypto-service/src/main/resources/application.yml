@@ -56,6 +56,27 @@ asop:
       keystore-password: ${INTERMEDIATE_CA_KEYSTORE_PASSWORD:changeit}
       key-alias: asop-intermediate-ca
 
+    server-cert:
+      keystore-path: ${SERVER_KEYSTORE_PATH:./data/server.p12}
+      keystore-password: ${SERVER_KEYSTORE_PASSWORD:changeit}
+      key-alias: crypto-service
+      validity-years: 5
+      common-name: crypto-service
+      # dnsNames не конфигурируется через yml-оверы? см. ServerCertConfig (он здесь НЕ задаётся — дефолт)
+      dns-names:
+        - crypto-service
+        - localhost
+
+    server-key:
+      keystore-path: ${SERVER_KEY_KEYSTORE_PATH:./data/server-key.p12}
+      keystore-password: ${SERVER_KEY_KEYSTORE_PASSWORD:changeit}
+      key-alias: ${SERVER_KEY_ALIAS:asop-server-key}
+      # DEV-режим: фиксированный 3DES-ключ (24 байта, hex 000102...171617):
+      # base64 = AAECAwQFBgcICQoLDA0ODxAREhMUFRYX
+      dev-key-base64: ${DEV_3DES_KEY_BASE64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYX}
+      # Включить ТОЛЬКО для разработки/отладки/тестирования. В проде — false!
+      dev-mode-enabled: ${DEV_3DES_KEY_MODE_ENABLED:false}
+
     terminal-cert:
       validity-years: 1
       dn-template: "CN={terminalSerial}, OU={carrierId}, O=ASOP"

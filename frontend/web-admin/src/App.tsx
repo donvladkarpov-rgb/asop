@@ -42,6 +42,8 @@ import { UserRegionsPage } from './pages/security/UserRegionsPage';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
+import { ThreeDesKeysPage } from './pages/ThreeDesKeys';
+import { ConfigParamsPage } from './pages/ConfigParams';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -117,6 +119,8 @@ function AppRoutes() {
         <Route path="user-roles" element={<UserRolesPage />} />
         <Route path="user-carriers" element={<UserCarriersPage />} />
         <Route path="user-regions" element={<UserRegionsPage />} />
+        <Route path="three-des-keys" element={<ThreeDesKeysPage />} />
+        <Route path="config-params" element={<ConfigParamsPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
