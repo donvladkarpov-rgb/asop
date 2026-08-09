@@ -19,12 +19,7 @@ class SecurityConfig {
             .httpBasic { it.disable() }
             .authorizeExchange { exchanges ->
                 exchanges
-                    .pathMatchers("/actuator/health", "/actuator/info").permitAll()
-                    .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                    .anyExchange().authenticated()
-            }
-            .oauth2ResourceServer { oauth2 ->
-                oauth2.jwt { }
+                    .anyExchange().permitAll()
             }
             .build()
     }

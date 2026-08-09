@@ -11,11 +11,16 @@ import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import ru.asop.api.crypto.dto.request.SmartCardCertRequest
 import ru.asop.api.crypto.dto.response.SmartCardCertResponse
+import ru.asop.api.crypto.dto.request.CardIdentitySignRequest
+import ru.asop.api.crypto.dto.response.CardIdentitySignResponse
+import ru.asop.crypto.service.ServerKeyService
+import java.nio.charset.StandardCharsets
 
 @RestController
 @RequestMapping("/api/v1/smart-cards")
 class SmartCardController(
-    private val smartCardCertService: SmartCardCertService
+    private val smartCardCertService: SmartCardCertService,
+    private val serverKeyService: ServerKeyService
 ) {
 
     @PostMapping("/issue")
@@ -48,6 +53,16 @@ class SmartCardController(
             )
         }.map { response ->
             ResponseEntity.ok(response)
+        }
+    }
+
+    @PostMapping("/sign")
+    fun signCardIdentity(
+        @RequestBody request: CardIdentitySignRequest
+    ): Mono<ResponseEntity<CardIdentitySignResponse>> {
+        return Mono.fromCallable {
+            val signature = serverKeyService.sign(request.identityJson.toByteArray(StandardCharsets.UTF_8))
+            ResponseEntity.ok(CardIdentitySignResponse(signatureBase64 = signature))
         }
     }
 }

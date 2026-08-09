@@ -1,24 +1,20 @@
-package ru.asop.card.model
+package ru.asop.audit.model
 
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
 import java.time.Instant
 import java.util.UUID
 
-@Table("ASOP_CARDS")
-data class CardEntity(
+@Table("ASOP_AUDIT_SERVICES")
+data class AuditServiceEntity(
     @Id
-    val cardId: UUID,
-    val cardTypeId: UUID,
-    val userId: UUID?,
-    val regionId: UUID? = null,
+    val auditServiceId: UUID,
+    val serviceCode: String,
+    val serviceName: String,
+    val issuerType: String,
     val organizerId: UUID? = null,
     val carrierId: UUID? = null,
-    val cardsDistributorId: UUID? = null,
-    val auditServiceId: UUID? = null,
-    val isPrimary: Boolean = false,
-    val registeredAt: Instant?,
-    val registeredByUserId: UUID? = null,
+    val isActive: Boolean = true,
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now(),
     val deletedAt: Instant? = null,

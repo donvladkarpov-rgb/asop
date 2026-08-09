@@ -221,8 +221,9 @@ class KeycloakAdminService(
                 val client = existing.first()
                 val clientResource = realmResource.clients().get(client.id)
                 client.redirectUris = redirectUris
+                client.isDirectAccessGrantsEnabled = true
                 clientResource.update(client)
-                log.info("Updated OIDC client '{}' redirect URIs", clientId)
+                log.info("Updated OIDC client '{}' redirect URIs + direct access grants", clientId)
                 return
             }
             realmResource.clients().create(
@@ -231,7 +232,7 @@ class KeycloakAdminService(
                     isEnabled = true
                     isPublicClient = true
                     isStandardFlowEnabled = true
-                    isDirectAccessGrantsEnabled = false
+                    isDirectAccessGrantsEnabled = true
                     this.redirectUris = redirectUris
                     webOrigins = listOf("+")
                     protocol = "openid-connect"

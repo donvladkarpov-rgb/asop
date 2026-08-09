@@ -27,6 +27,7 @@ class MasterRegistry {
         private fun route(resource: String) = MasterEndpoint("route-service", 8092, resource)
         private fun user(resource: String) = MasterEndpoint("user-service", 8082, resource)
         private fun card(resource: String) = MasterEndpoint("card-service", 8086, resource)
+        private fun audit(resource: String) = MasterEndpoint("audit-service", 8089, resource)
 
         // Таблицы, фильтруемые по (carrierId, regionId) напрямую на мастере
         val FILTERED_TABLES: Map<String, MasterEndpoint> = mapOf(
@@ -71,7 +72,9 @@ class MasterRegistry {
             // tariff-rates в card-service НЕ фильтруется по userIdsIn (SQL без фильтра)
             "asop_tariff_rates" to card("tariff-rates"),
             // Глобальный пул ротируемых 3DES-ключей карт (админка генерирует через crypto-service)
-            "asop_3des_keys" to admin("three-des-keys")
+            "asop_3des_keys" to admin("three-des-keys"),
+            // Справочник КРС (audit-service)
+            "asop_audit_services" to audit("audit-services")
         )
 
         // Пользовательские таблицы (user-service): фильтр по carrierId/regionId каскадом

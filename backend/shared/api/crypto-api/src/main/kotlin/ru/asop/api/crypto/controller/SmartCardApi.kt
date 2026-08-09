@@ -6,7 +6,9 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import reactor.core.publisher.Mono
+import ru.asop.api.crypto.dto.request.CardIdentitySignRequest
 import ru.asop.api.crypto.dto.request.SmartCardCertRequest
+import ru.asop.api.crypto.dto.response.CardIdentitySignResponse
 import ru.asop.api.crypto.dto.response.SmartCardCertResponse
 
 @RequestMapping("/api/v1/smart-cards")
@@ -16,4 +18,9 @@ interface SmartCardApi {
     fun issueSmartCard(
         @Valid @RequestBody request: SmartCardCertRequest
     ): Mono<ResponseEntity<SmartCardCertResponse>>
+
+    @PostMapping("/sign")
+    fun signCardIdentity(
+        @Valid @RequestBody request: CardIdentitySignRequest
+    ): Mono<ResponseEntity<CardIdentitySignResponse>>
 }

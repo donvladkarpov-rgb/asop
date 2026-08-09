@@ -9,11 +9,14 @@ import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.card.controller.CardApi
+import ru.asop.api.card.dto.request.CardActivateRequest
 import ru.asop.api.card.dto.request.CardRegisterRequest
 import ru.asop.api.card.dto.request.CardBlockRequest
+import ru.asop.api.card.dto.response.CardActivateResponse
 import ru.asop.api.card.dto.response.CardResponse
 import ru.asop.card.config.DeltaSupport
 import ru.asop.card.model.CardEntity
+import ru.asop.card.service.CardActivationService
 import ru.asop.card.service.CardService
 import java.security.Principal
 import java.util.UUID
@@ -21,6 +24,7 @@ import java.util.UUID
 @RestController
 class CardController(
     private val cardService: CardService,
+    private val cardActivationService: CardActivationService,
     private val template: R2dbcEntityTemplate
 ) : CardApi {
 
@@ -29,6 +33,14 @@ class CardController(
         principal: Mono<Principal>
     ): Mono<ResponseEntity<CardResponse>> {
         return cardService.register(request)
+            .map { ResponseEntity.ok(it) }
+    }
+
+    override fun activateCard(
+        request: CardActivateRequest,
+        principal: Mono<Principal>
+    ): Mono<ResponseEntity<CardActivateResponse>> {
+        return cardActivationService.activate(request)
             .map { ResponseEntity.ok(it) }
     }
 

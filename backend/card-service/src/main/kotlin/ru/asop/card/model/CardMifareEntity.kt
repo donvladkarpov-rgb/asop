@@ -15,6 +15,8 @@ data class CardMifareEntity(
     val protocolVersion: Int? = null,
     val memoryMap: String? = null,
     val cardRole: String = "PASSENGER_ANONYMOUS",
+    val identityJson: String? = null,
+    val identitySignature: String? = null,
     val certificateSerial: String? = null,
     val publicKeyHash: String? = null,
     val keyVersion: Int = 1,

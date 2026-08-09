@@ -477,6 +477,26 @@ Root CA (self-signed, ECC P-256, 10 лет)
 
 ---
 
+### Активация карт на терминале (промпт 005)
+
+14 типов карт АСОП (персонал/пассажиры), иерархия root → region → organizer → carrier/distributor/krs → dispatcher → driver/foreman/controller. Матрица авторизации 14×14. Self-авторизация разрешена (кроме root).
+
+**Роли**: 9 новых в `ASOP_ROLES` (REGION_ADMIN, ORGANIZER_ADMIN, KRS_ADMIN, CARRIER_DISPATCHER, DISTRIBUTOR_DISPATCHER, KRS_DISPATCHER, KRS_FOREMAN, KRS_CONTROLLER, PASSENGER_ANONYMOUS). `CARD_ROLE` CHECK = 14 значений.
+
+**cardIdentity** (canonical JSON): cardId (UUIDv7), uid (hex), regionId/organizerId/carrierId/cardsDistributorId/auditServiceId/userId, roles (JSON-массив). Сохраняется на карту в ASOP-приложении (AID 0xA05A01): File 0 = JSON, File 1 = RSA-PSS-SHA256 подпись.
+
+**Server endpoints:**
+- crypto-service: `POST /api/v1/smart-cards/sign` (RSA-PSS-SHA256, server-key)
+- card-service: `POST /api/v1/cards/activate` (проверка авторизации + подписи + upsert)
+- gateway: `POST /api/v1/sync/smart-cards/sign`, `POST /api/v1/sync/cards/activate`, `POST /api/v1/sync/auth/root` (Keycloak password grant)
+- audit-service: CRUD + `/delta` для `ASOP_AUDIT_SERVICES`
+
+**Android:** `DesfireCardWriter` (ChangeKey 0xC4, CreateApplication 0xCA, CreateStdDataFile 0x6D, WriteData 0x8D, ReadData 0xBD), `CardActivationScreen`/`ViewModel`, пункт «Активация карт» в drawer. Порядок: сервер → карта.
+
+**Known limitation:** `ChangeKey` без session key encryption — работает на клоне, не пройдёт на оригинальной NXP.
+
+---
+
 ## 8. База данных
 
 ### Ключевые таблицы

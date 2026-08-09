@@ -3,6 +3,7 @@ package ru.asop.user.controller
 import org.springframework.http.ResponseEntity
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
@@ -41,6 +42,13 @@ class UserAdminController(
         service.delete(id).map { rows ->
             if (rows > 0) ResponseEntity.noContent().build()
             else ResponseEntity.notFound().build()
+        }
+
+    @GetMapping("/by-keycloak/{keycloakId}")
+    fun getByKeycloak(@PathVariable keycloakId: String): Mono<ResponseEntity<UserResponse>> =
+        service.getByKeycloakId(keycloakId).flatMap { row ->
+            if (row.isEmpty()) Mono.just(ResponseEntity.notFound().build())
+            else Mono.just(ResponseEntity.ok(rowToResponse(row)))
         }
 
     @GetMapping("/delta")

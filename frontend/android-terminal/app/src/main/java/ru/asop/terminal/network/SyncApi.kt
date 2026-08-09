@@ -55,4 +55,19 @@ interface SyncApi {
     suspend fun reportGpsPosition(
         @Body request: GpsPositionReport
     ): Response<AcceptedResponse>
+
+    @POST("api/v1/sync/smart-cards/sign")
+    suspend fun signCardIdentity(
+        @Body request: CardIdentitySignRequest
+    ): Response<CardIdentitySignResponse>
+
+    @POST("api/v1/sync/cards/activate")
+    suspend fun activateCard(
+        @Body request: CardActivateRequest
+    ): Response<CardActivateResponse>
+
+    @POST("api/v1/sync/auth/root")
+    suspend fun rootLogin(
+        @Body request: RootLoginRequest
+    ): Response<RootLoginResponse>
 }

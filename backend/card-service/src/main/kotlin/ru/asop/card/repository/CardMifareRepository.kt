@@ -4,11 +4,14 @@ import org.springframework.data.repository.reactive.ReactiveCrudRepository
 import org.springframework.data.r2dbc.repository.Query
 import org.springframework.stereotype.Repository
 import reactor.core.publisher.Flux
+import reactor.core.publisher.Mono
 import ru.asop.card.model.CardMifareEntity
 import java.util.UUID
 
 @Repository
 interface CardMifareRepository : ReactiveCrudRepository<CardMifareEntity, UUID> {
+
+    fun findByUid(uid: ByteArray): Mono<CardMifareEntity>
 
     @Query("""
         SELECT m.* FROM ASOP_CARD_MIFARES m

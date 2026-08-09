@@ -23,6 +23,11 @@ class UserAdminService(
             .bind("id", parseId(id))
             .fetch().one().defaultIfEmpty(emptyMap())
 
+    fun getByKeycloakId(keycloakId: String): Mono<Map<String, Any?>> =
+        db.sql("SELECT user_id, first_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE keycloak_id = :keycloakId LIMIT 1")
+            .bind("keycloakId", keycloakId)
+            .fetch().one().defaultIfEmpty(emptyMap())
+
     fun create(request: UserCreateRequest): Mono<UserResponse> {
         val userId = UuidUtils.newId()
         val email = request.email ?: "${userId}@asop.local"

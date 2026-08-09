@@ -553,6 +553,20 @@ message Asop3desKeysRow {
   int64  version = 5;         // delta watermark
 }
 
+// Справочник КРС (audit-services).
+message AuditServicesRow {
+  string audit_service_id = 1;   // UUIDv7
+  string service_code = 2;
+  string service_name = 3;
+  string issuer_type = 4;        // ORGANIZER | CARRIER
+  string organizer_id = 5;       // UUID или пусто
+  string carrier_id = 6;         // UUID или пусто
+  string created_at = 7;         // RFC3339 timestamp
+  string deleted_at = 8;         // RFC3339 или пусто
+  int64  version = 9;            // delta watermark
+  bool   is_active = 10;         // статус активности
+}
+
 // Один дельта-чанк: записи из разных таблиц + метаданные чанка.
 message DeltaChunk {
   repeated RegionsRow asop_regions = 1;
@@ -598,6 +612,7 @@ message DeltaChunk {
   repeated TidsRow asop_tids = 41;
   repeated CardsDistributorsRow asop_cards_distributors = 42;
   repeated Asop3desKeysRow asop_3des_keys = 43;
+  repeated AuditServicesRow asop_audit_services = 44;
   int32 chunk_index = 90;
   int32 total_chunks = 91;
   string event_id = 92;
@@ -647,4 +662,5 @@ message UserBenefitsFile { repeated UserBenefitsRow rows = 1; }
 message TariffRatesFile { repeated TariffRatesRow rows = 1; }
 message TidsFile { repeated TidsRow rows = 1; }
 message Asop3desKeysFile { repeated Asop3desKeysRow rows = 1; }
+message AuditServicesFile { repeated AuditServicesRow rows = 1; }
 

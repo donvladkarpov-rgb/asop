@@ -12,7 +12,9 @@ import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.SecureRandom
+import java.security.Signature
 import java.security.spec.MGF1ParameterSpec
+import java.security.spec.PSSParameterSpec
 import javax.crypto.Cipher
 import javax.crypto.spec.OAEPParameterSpec
 import javax.crypto.spec.PSource
@@ -152,4 +154,30 @@ class ServerKeyService(
     }
 
     fun isDevModeEnabled(): Boolean = cfg.devModeEnabled
+
+    /**
+     * Подписывает данные (canonical JSON cardIdentity) RSA-PSS-SHA256 приватным ключом сервера.
+     */
+    fun sign(data: ByteArray): String {
+        val signature = Signature.getInstance("RSASSA-PSS")
+        val spec = PSSParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, 32, 1)
+        signature.setParameter(spec)
+        signature.initSign(rsaKeyPair.private)
+        signature.update(data)
+        return Base64.getEncoder().encodeToString(signature.sign())
+    }
+
+    /**
+     * Проверяет подпись RSA-PSS-SHA256 публичным ключом сервера.
+     */
+    fun verify(data: ByteArray, signatureBase64: String): Boolean {
+        return runCatching {
+            val signature = Signature.getInstance("RSASSA-PSS")
+            val spec = PSSParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, 32, 1)
+            signature.setParameter(spec)
+            signature.initVerify(rsaKeyPair.public)
+            signature.update(data)
+            signature.verify(Base64.getDecoder().decode(signatureBase64))
+        }.getOrDefault(false)
+    }
 }

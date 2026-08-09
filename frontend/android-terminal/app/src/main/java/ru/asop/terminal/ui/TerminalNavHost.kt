@@ -36,6 +36,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import ru.asop.terminal.ui.screen.AssignCarrierScreen
+import ru.asop.terminal.ui.screen.CardActivationScreen
 import ru.asop.terminal.ui.screen.CardReadScreen
 import ru.asop.terminal.ui.screen.MainScreen
 import ru.asop.terminal.ui.screen.ProvisioningScreen
@@ -204,6 +205,14 @@ fun TerminalNavHost() {
                     }
                 )
                 NavigationDrawerItem(
+                    label = { Text("Активация карт") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-activation")
+                    }
+                )
+                NavigationDrawerItem(
                     label = { Text("Зарегистрировать карту водителя") },
                     selected = false,
                     onClick = { scope.launch { drawerState.close() } }
@@ -268,6 +277,11 @@ fun TerminalNavHost() {
                 }
                 composable("card-read") {
                     CardReadScreen(
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable("card-activation") {
+                    CardActivationScreen(
                         onBack = { navController.popBackStack() }
                     )
                 }

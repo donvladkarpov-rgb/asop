@@ -143,6 +143,9 @@ dependencies {
     // (Message/Descriptors), которых нет в protobuf-javalite.
     implementation("com.google.protobuf:protobuf-java:3.25.5")
     implementation("com.google.protobuf:protobuf-java-util:3.25.5")
+
+    // UUIDv7 (времени-упорядоченные id, синхронно с UuidUtils.newId() на бэкенде)
+    implementation("com.github.f4b6a3:uuid-creator:6.0.0")
 }
 
 kapt {

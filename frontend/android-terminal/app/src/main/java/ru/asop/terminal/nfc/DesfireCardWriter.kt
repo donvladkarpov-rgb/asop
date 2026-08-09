@@ -1,0 +1,488 @@
+package ru.asop.terminal.nfc
+
+import android.nfc.Tag
+import android.nfc.tech.IsoDep
+import android.util.Log
+import java.io.IOException
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+/**
+ * Программирование MIFARE DESFire (EV1/EV2/EV3) для активации карт АСОП.
+ *
+ * ОТЛИЧАЕТСЯ от read-only зондов (`DesfireCardReader`, `DesfireAuthProbe`):
+ * этот модуль ИЗМЕНЯЕТ карту (ChangeKey / CreateApplication / CreateStdDataFile /
+ * WriteData) и используется ТОЛЬКО в flow активации карт (промпт 005).
+ *
+ * Опкоды (native, Layer 4, IsoDep): AuthenticateISO=0x1A (3K3DES), ChangeKey=0xC4,
+ * CreateApplication=0xCA, SelectApplication=0x5A, CreateStdDataFile=0x6D,
+ * WriteData=0x8D, ReadData=0xBD, GetMoreFrames=0xAF.
+ *
+ * ВАЖНО (исправлены ошибки DeepSeek): CreateStdDataFile = 0x6D (не 0xCD),
+ * WriteData = 0x8D (не 0x3D), AuthenticateISO = 0x1A (не 0xAA).
+ */
+class DesfireCardWriter {
+
+    data class WriteResult(
+        val ok: Boolean,
+        val steps: List<String>,
+        val error: String?
+    )
+
+    /**
+     * Полный flow прошивки карты (после успешной серверной регистрации).
+     *
+     * @param identityJson UTF-8 canonical JSON cardIdentity (file 0)
+     * @param signatureBase64 base64 RSA-PSS-SHA256 (file 1)
+     * @param authKey текущий ключ слота 0 (нулевой для новой карты, рабочий при re-registration)
+     * @param newKey новейший 3DES-ключ из terminal_keys — им заменяется слот 0
+     */
+    fun writeIdentity(
+        tag: Tag,
+        identityJson: ByteArray,
+        signatureBase64: String,
+        authKey: ByteArray,
+        newKey: ByteArray
+    ): WriteResult {
+        val steps = mutableListOf<String>()
+        val iso = IsoDep.get(tag)
+        if (iso == null) return WriteResult(false, steps, "IsoDep недоступен (карта не DESFire?)")
+        try {
+            iso.connect()
+            iso.timeout = 3000
+
+            // 1. Auth в мастер PICC (AID 000000) текущим ключом слота 0.
+            if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
+                return fail(steps, "SelectApplication(мастер PICC) не прошёл")
+            }
+            steps += "master PICC выбран"
+            if (!authenticate3k3des(iso, authKey)) {
+                return fail(steps, "AuthenticateISO(3K3DES, authKey) не прошёл")
+            }
+            steps += "authOK master PICC"
+
+            // 2. Смена ключа слота 0: authKey -> newKey.
+            if (!changeKey(iso, newKey)) {
+                return fail(steps, "ChangeKey(slot0) не прошёл")
+            }
+            steps += "ChangeKey slot0 -> новый 3DES-ключ"
+
+            // 3. Создание ASOP-приложения AID 0xA05A01, 1 ключ, смена ключа разрешена.
+            // Если приложение уже существует (перерегистрация) — CreateApplication
+            // вернёт ошибку, и мы продолжаем (файлы/ключ могут быть обновлены).
+            if (createApplication(iso, ASOP_AID)) {
+                steps += "ASOP-приложение создано"
+            } else {
+                steps += "ASOP-приложение уже существует (создание пропущено)"
+            }
+
+            // 4. Выбор ASOP-приложения + auth новым ключом.
+            if (!selectApplication(iso, aidBytes(ASOP_AID))) {
+                return fail(steps, "SelectApplication(0xA05A01) не прошёл")
+            }
+            if (!authenticate3k3des(iso, newKey)) {
+                return fail(steps, "AuthenticateISO(3K3DES, newKey) в ASOP-приложении не прошёл")
+            }
+            steps += "authOK ASOP-приложение (newKey)"
+
+            // 5. Запись identity (file 0) и подписи (file 1).
+            // Создание файлов терпимо к уже существующим (перерегистрация).
+            if (createStdDataFile(iso, 0, IDENTITY_FILE_SIZE)) {
+                steps += "file 0 создан"
+            } else {
+                steps += "file 0 уже существует (создание пропущено)"
+            }
+            if (!writeData(iso, 0, identityJson)) {
+                return fail(steps, "WriteData(file 0, identity) не прошёл")
+            }
+            steps += "identity записан"
+
+            if (createStdDataFile(iso, 1, SIGNATURE_FILE_SIZE)) {
+                steps += "file 1 создан"
+            } else {
+                steps += "file 1 уже существует (создание пропущено)"
+            }
+            if (!writeData(iso, 1, signatureBase64.toByteArray(Charsets.UTF_8))) {
+                return fail(steps, "WriteData(file 1, signature) не прошёл")
+            }
+            steps += "подпись записана"
+
+            // 6. Верификация чтением.
+            val readBackJson = readData(iso, 0)
+            if (readBackJson == null || !readBackJson.contentEquals(identityJson)) {
+                return fail(steps, "верификация identity (file 0) не сошлась")
+            }
+            steps += "верификация identity OK"
+            val readBackSig = readData(iso, 1)
+            if (readBackSig == null ||
+                !readBackSig.contentEquals(signatureBase64.toByteArray(Charsets.UTF_8))
+            ) {
+                return fail(steps, "верификация подписи (file 1) не сошлась")
+            }
+            steps += "верификация подписи OK"
+
+            return WriteResult(true, steps, null)
+        } catch (e: IOException) {
+            return fail(steps, "IOException: ${e.message}")
+        } catch (e: Exception) {
+            return fail(steps, "${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            runCatching { iso.close() }
+        }
+    }
+
+    private fun fail(steps: MutableList<String>, msg: String): WriteResult {
+        Log.w(TAG, msg)
+        return WriteResult(false, steps, msg)
+    }
+
+    // ---------- команды (public: используются ViewModel'ом в flow активации) ----------
+
+    /** Проверяет, подходит ли ключ карте: SelectApplication(мастер) + AuthenticateISO(0x1A, keyNo=0). */
+    fun tryAuthenticateMaster(tag: Tag, key: ByteArray): Boolean {
+        val iso = IsoDep.get(tag) ?: return false
+        try {
+            iso.connect()
+            iso.timeout = 3000
+            val res = selectApplication(iso, byteArrayOf(0, 0, 0)) && authenticate3k3des(iso, key)
+            return res
+        } catch (e: Exception) {
+            Log.w(TAG, "tryAuthenticateMaster: ${e.message}")
+            return false
+        } finally {
+            runCatching { iso.close() }
+        }
+    }
+
+    /**
+     * Обновление identity на уже зарегистрированной карте (перерегистрация):
+     * карта была аутентифицирована новым ключом в ASOP-приложении, файлы существуют —
+     * перезаписываем file 0/file 1 без создания заново.
+     */
+    fun reflashIdentity(
+        iso: IsoDep,
+        identityJson: ByteArray,
+        signatureBase64: String
+    ): Boolean {
+        return writeData(iso, 0, identityJson) &&
+            writeData(iso, 1, signatureBase64.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * Полная перерегистрация существующей карты (промпт 005, п.9.2.3 g-i):
+     * рабочий ключ найден → в мастер PICC меняем слот 0 на новейший ключ →
+     * в ASOP-приложении auth новым ключом → перезаписываем file 0/file 1.
+     */
+    fun reflashComplete(
+        tag: Tag,
+        identityJson: ByteArray,
+        signatureBase64: String,
+        oldKey: ByteArray,
+        newKey: ByteArray
+    ): WriteResult {
+        val steps = mutableListOf<String>()
+        val iso = IsoDep.get(tag)
+        if (iso == null) return WriteResult(false, steps, "IsoDep недоступен")
+        try {
+            iso.connect()
+            iso.timeout = 3000
+
+            // 1. мастер PICC auth рабочим ключом.
+            if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
+                return fail(steps, "SelectApplication(мастер PICC) не прошёл")
+            }
+            if (!authenticate3k3des(iso, oldKey)) {
+                return fail(steps, "AuthenticateISO(рабочий ключ) не прошёл")
+            }
+            // 2. Смена ключа мастера: рабочий → новейший 3DES.
+            if (!changeKey(iso, newKey)) {
+                return fail(steps, "ChangeKey(мастер PICC) не прошёл")
+            }
+            steps += "ChangeKey master -> newKey"
+
+            // 3. ASOP-приложение, auth новым ключом.
+            if (!selectApplication(iso, aidBytes(ASOP_AID))) {
+                return fail(steps, "SelectApplication(0xA05A01) не прошёл")
+            }
+            if (!authenticate3k3des(iso, newKey)) {
+                return fail(steps, "AuthenticateISO(newKey) в ASOP не прошёл")
+            }
+            steps += "authOK ASOP (newKey)"
+
+            // 4. Перезапись file 0/file 1.
+            if (!writeData(iso, 0, identityJson)) {
+                return fail(steps, "WriteData(file 0) не прошёл")
+            }
+            if (!writeData(iso, 1, signatureBase64.toByteArray(Charsets.UTF_8))) {
+                return fail(steps, "WriteData(file 1) не прошёл")
+            }
+            steps += "identity и подпись перезаписаны"
+
+            return WriteResult(true, steps, null)
+        } catch (e: IOException) {
+            return fail(steps, "IOException: ${e.message}")
+        } catch (e: Exception) {
+            return fail(steps, "${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            runCatching { iso.close() }
+        }
+    }
+
+    /** Выбор ASOP-приложения (0x5A) на уже открытом канале. */
+    fun selectAsop(iso: IsoDep): Boolean = selectApplication(iso, aidBytes(ASOP_AID))
+
+    /** Auth 3K3DES новым ключом в выбранном (ASOP) приложении. */
+    fun authenticateAsop(iso: IsoDep, key: ByteArray): Boolean = authenticate3k3des(iso, key)
+
+    /** Выбор мастер PICC (0x5A 000000) на уже открытом канале. */
+    fun selectMaster(iso: IsoDep): Boolean = selectApplication(iso, byteArrayOf(0, 0, 0))
+
+    /** ChangeKey (0xC4) slot0 на уже аутентифицированном канале (текущий ключ → новый). */
+    fun changeKeySlot0(iso: IsoDep, newKey: ByteArray): Boolean = changeKey(iso, newKey)
+
+    /** Чтение file из уже аутентифицированного ASOP-приложения. */
+    fun readStd(iso: IsoDep, fileNo: Int): ByteArray? = readData(iso, fileNo)
+
+    /** Открывает IsoDep-канал (для многошаговых процедур без повторного connect). */
+    fun open(tag: Tag): IsoDep? {
+        val iso = IsoDep.get(tag) ?: return null
+        return try {
+            iso.connect()
+            iso.timeout = 3000
+            iso
+        } catch (e: IOException) {
+            Log.w(TAG, "open: ${e.message}")
+            null
+        }
+    }
+
+    fun close(iso: IsoDep) {
+        runCatching { iso.close() }
+    }
+
+    /** SelectApplication (0x5A): 3-байтовый AID, 000000 = мастер PICC. */
+    private fun selectApplication(iso: IsoDep, aid: ByteArray): Boolean {
+        val cmd = ByteArray(4)
+        cmd[0] = OP_SELECT_APP.toByte()
+        System.arraycopy(aid, 0, cmd, 1, 3)
+        val resp = transceive(iso, cmd)
+        return resp != null && resp.size == 1 && (resp[0].toInt() and 0xFF) == STATUS_OK
+    }
+
+    /** AuthenticateISO (0x1A, 3K3DES) — полное рукопожатие, ключ 24 байта. */
+    private fun authenticate3k3des(iso: IsoDep, key: ByteArray): Boolean {
+        // Step1: 1A KeyNo=0 -> AF <8> = E_K(RndB)
+        val chResp = transceive(iso, byteArrayOf(OP_AUTH_3KDES.toByte(), 0x00))
+            ?: return false
+        val challenge = unwrapFrame(chResp) ?: return false
+        if (challenge.size != 8) return false
+        val rndB = try {
+            tripleDesCbcDecrypt(key, ByteArray(8), challenge)
+        } catch (e: Exception) {
+            Log.w(TAG, "3K3DES step1 decrypt: ${e.message}")
+            return false
+        }
+        val rndA = ByteArray(8).also { SecureRandom().nextBytes(it) }
+        val plaintext = ByteArray(16)
+        System.arraycopy(rndA, 0, plaintext, 0, 8)
+        System.arraycopy(rotateLeft(rndB), 0, plaintext, 8, 8)
+        val ciphertext = try {
+            tripleDesCbcEncrypt(key, challenge, plaintext)
+        } catch (e: Exception) {
+            Log.w(TAG, "3K3DES step2 encrypt: ${e.message}")
+            return false
+        }
+        // Step2: AF <E_K(RndA ‖ RotLeft(RndB))>, IV = challenge
+        val cmd2 = ByteArray(1 + ciphertext.size)
+        cmd2[0] = OP_GET_MORE
+        System.arraycopy(ciphertext, 0, cmd2, 1, ciphertext.size)
+        val resp2 = transceive(iso, cmd2) ?: return false
+        val final = unwrapFrame(resp2) ?: return false
+        if (final.size != 8) return false
+        val iv2 = ciphertext.copyOfRange(8, 16)
+        val dec = try {
+            tripleDesCbcDecrypt(key, iv2, final)
+        } catch (e: Exception) {
+            Log.w(TAG, "3K3DES step3 decrypt: ${e.message}")
+            return false
+        }
+        return dec.contentEquals(rotateLeft(rndA))
+    }
+
+    /**
+     * ChangeKey (0xC4): смена ключа слота 0 (PICC/приложение) на новый 3K3DES-ключ.
+     * После auth: C4 KeyNo <новый ключ 24 байта> <версия ключа 0x00>.
+     */
+    private fun changeKey(iso: IsoDep, newKey: ByteArray): Boolean {
+        val cmd = ByteArray(2 + newKey.size)
+        cmd[0] = OP_CHANGE_KEY.toByte()
+        cmd[1] = 0x00 // keyNo 0
+        System.arraycopy(newKey, 0, cmd, 2, newKey.size)
+        val resp = transceive(iso, cmd)
+        return resp != null && resp.isNotEmpty() && (resp[0].toInt() and 0xFF) == STATUS_OK
+    }
+
+    /**
+     * CreateApplication (0xCA): AID(3) KeySettings(1) NumKeys(1).
+     * KeySettings: 0x0F — смена ключей/конфигурация/приложение свободно изменяемо
+     * (changeKey=true, configChangeable=true, createDeleteable=true), NumKeys=1.
+     */
+    private fun createApplication(iso: IsoDep, aid: Int): Boolean {
+        val a = aidBytes(aid)
+        val cmd = byteArrayOf(
+            OP_CREATE_APP.toByte(),
+            a[0], a[1], a[2],
+            0x0F, // key settings
+            0x01  // numKeys
+        )
+        val resp = transceive(iso, cmd)
+        return resp != null && resp.size == 1 && (resp[0].toInt() and 0xFF) == STATUS_OK
+    }
+
+    /**
+     * CreateStdDataFile (0x6D): FileNo(1) CommsSettings(1) AccessRights(2) FileSize(3).
+     * CommsSettings: 0x00 — plain (без MAC/encryption); AccessRights 0x00 0x00 —
+     * чтение и запись ключом 0 (auth-required).
+     */
+    private fun createStdDataFile(iso: IsoDep, fileNo: Int, size: Int): Boolean {
+        val cmd = ByteArray(8)
+        cmd[0] = OP_CREATE_STD_FILE.toByte()
+        cmd[1] = fileNo.toByte()
+        cmd[2] = 0x00 // comm settings (plain)
+        cmd[3] = 0x00 // access: read key0
+        cmd[4] = 0x00 // access: write key0
+        cmd[5] = (size ushr 16).toByte()
+        cmd[6] = (size ushr 8).toByte()
+        cmd[7] = size.toByte()
+        val resp = transceive(iso, cmd)
+        return resp != null && resp.size == 1 && (resp[0].toInt() and 0xFF) == STATUS_OK
+    }
+
+    /** WriteData (0x8D): FileNo(1) Offset(3) + данные. */
+    private fun writeData(iso: IsoDep, fileNo: Int, data: ByteArray): Boolean {
+        // DESFire WriteData: 8D FileNo <offset 3 байта> <данные>. Для длинных данных
+        // шлём блоками по 32 байта (WriteData поддерживает до 32 байт за раз в EV1).
+        var offset = 0
+        val chunkSize = 32
+        while (offset < data.size) {
+            val len = minOf(chunkSize, data.size - offset)
+            val cmd = ByteArray(1 + 1 + 3 + len)
+            cmd[0] = OP_WRITE_DATA.toByte()
+            cmd[1] = fileNo.toByte()
+            cmd[2] = (offset ushr 16).toByte()
+            cmd[3] = (offset ushr 8).toByte()
+            cmd[4] = offset.toByte()
+            System.arraycopy(data, offset, cmd, 5, len)
+            val resp = transceive(iso, cmd)
+            if (resp == null || resp.isEmpty() || (resp[0].toInt() and 0xFF) != STATUS_OK) {
+                Log.w(TAG, "WriteData(file $fileNo, offset $offset) -> ${resp?.toHex() ?: "нет ответа"}")
+                return false
+            }
+            offset += len
+        }
+        return true
+    }
+
+    /** ReadData (0xBD): FileNo(1) Offset(3) Length(3). */
+    private fun readData(iso: IsoDep, fileNo: Int): ByteArray? {
+        val out = java.io.ByteArrayOutputStream()
+        var offset = 0
+        val chunkSize = 32
+        while (out.size() < FILE_READ_LIMIT) {
+            val cmd = ByteArray(8)
+            cmd[0] = OP_READ_DATA.toByte()
+            cmd[1] = fileNo.toByte()
+            cmd[2] = (offset ushr 16).toByte()
+            cmd[3] = (offset ushr 8).toByte()
+            cmd[4] = offset.toByte()
+            cmd[5] = 0x00
+            cmd[6] = 0x00
+            cmd[7] = chunkSize.toByte()
+            val resp = transceive(iso, cmd)
+            if (resp == null || resp.isEmpty()) return null
+            val status = resp[0].toInt() and 0xFF
+            if (status == 0x00) {
+                out.write(resp, 1, resp.size - 1)
+                if (resp.size - 1 < chunkSize) break
+                offset += resp.size - 1
+            } else if (status == 0xAF) {
+                out.write(resp, 1, resp.size - 1)
+                offset += resp.size - 1
+            } else if (status == 0xCE || status == 0x1C) {
+                // OutOfBoundary / FileNotFound — конец данных
+                break
+            } else {
+                return null
+            }
+        }
+        return out.toByteArray()
+    }
+
+    /** Шлёт native-команду, возвращает полный ответ (статус-байты включены). */
+    private fun transceive(iso: IsoDep, cmd: ByteArray): ByteArray? = try {
+        val resp = iso.transceive(cmd)
+        Log.d(TAG, "${cmd.toHex()} -> ${resp.toHex()}")
+        resp
+    } catch (e: IOException) {
+        Log.w(TAG, "${cmd.toHex()} fail: ${e.message}")
+        null
+    }
+
+    /** Снимает кадр ответа: 00/0xAF <data> -> data (без досбора GetMoreFrames). */
+    private fun unwrapFrame(resp: ByteArray): ByteArray? {
+        if (resp.isEmpty()) return null
+        return when (resp[0].toInt() and 0xFF) {
+            STATUS_OK.toInt() and 0xFF, OP_GET_MORE.toInt() and 0xFF -> resp.copyOfRange(1, resp.size)
+            else -> null
+        }
+    }
+
+    // ---------- криптография ----------
+
+    private fun tripleDesCbcEncrypt(key: ByteArray, iv: ByteArray, data: ByteArray): ByteArray {
+        val c = Cipher.getInstance("DESede/CBC/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "DESede"), IvParameterSpec(iv))
+        return c.doFinal(data)
+    }
+
+    private fun tripleDesCbcDecrypt(key: ByteArray, iv: ByteArray, data: ByteArray): ByteArray {
+        val c = Cipher.getInstance("DESede/CBC/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "DESede"), IvParameterSpec(iv))
+        return c.doFinal(data)
+    }
+
+    /** Циклический сдвиг влево на 1 байт (по спецификации DESFire). */
+    private fun rotateLeft(b: ByteArray): ByteArray {
+        val out = ByteArray(b.size)
+        for (i in b.indices) out[i] = b[(i + 1) % b.size]
+        return out
+    }
+
+    private fun aidBytes(aid: Int): ByteArray = byteArrayOf(
+        ((aid ushr 16) and 0xFF).toByte(),
+        ((aid ushr 8) and 0xFF).toByte(),
+        (aid and 0xFF).toByte()
+    )
+
+    companion object {
+        private const val TAG = "DesfireCardWriter"
+        const val ASOP_AID = 0xA05A01
+        const val IDENTITY_FILE_SIZE = 2048
+        const val SIGNATURE_FILE_SIZE = 1024
+        const val FILE_READ_LIMIT = 4096
+
+        private const val OP_AUTH_3KDES = 0x1A
+        private const val OP_CHANGE_KEY = 0xC4
+        private const val OP_CREATE_APP = 0xCA
+        private const val OP_SELECT_APP = 0x5A
+        private const val OP_CREATE_STD_FILE = 0x6D
+        private const val OP_WRITE_DATA = 0x8D
+        private const val OP_READ_DATA = 0xBD
+        private const val OP_GET_MORE = 0xAF.toByte()
+        private const val STATUS_OK = 0x00
+    }
+}
+
+private fun ByteArray.toHex(): String = joinToString(" ") { String.format("%02X", it) }
