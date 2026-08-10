@@ -293,6 +293,32 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                         )
                     }
                 }
+
+                // ASOP card identity
+                result.identity?.let { identity ->
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "ASOP cardIdentity",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = identity.identityJson,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    InfoRow("Подпись (RSA-PSS)", "${identity.signatureBase64.take(40)}...")
+                }
+
             } else {
                 Text("Карта не DESFire", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))

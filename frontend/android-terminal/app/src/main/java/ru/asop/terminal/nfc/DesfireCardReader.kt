@@ -4,7 +4,12 @@ import android.nfc.Tag
 import android.nfc.tech.IsoDep
 import android.nfc.tech.NfcA
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.IvParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Чтение Mifare DESFire (EV1/EV2/EV3) через NFC на терминале.
@@ -83,6 +88,11 @@ object DesfireCardReader {
         }
     }
 
+    data class AsopIdentity(
+        val identityJson: String,
+        val signatureBase64: String
+    )
+
     data class ReadResult(
         val techs: List<String>,
         val uid: String,
@@ -96,10 +106,47 @@ object DesfireCardReader {
         val ev2Plus: Boolean?,
         val nonGenuineReasons: List<String>,
         val auth: DesfireAuthProbe.AuthResult? = null,
+        val identity: AsopIdentity? = null,
         val notes: List<String>,
         val error: String?
     ) {
         val isDesfire: Boolean get() = version != null
+    }
+
+    /**
+     * Пытается прочитать ASOP cardIdentity с карты: выбирает приложение 0xA05A01,
+     * пробует аутентификацию каждым переданным ключом (3K3DES, 0x1A), читает File 0
+     * (JSON identity) и File 1 (RSA-PSS подпись base64). Возвращает [AsopIdentity]
+     * если чтение удалось, null — если карта не ASOP или ключи не подошли.
+     */
+    fun readAsopIdentity(tag: Tag, keys: List<ByteArray>): AsopIdentity? {
+        val iso = IsoDep.get(tag) ?: return null
+        try {
+            iso.connect()
+            iso.timeout = 3000
+            // Выбираем мастер PICC для пробной аутентификации
+            if (!selectApp(iso, byteArrayOf(0, 0, 0))) return null
+            for (key in keys) {
+                if (!authenticate3k3des(iso, key)) continue
+                // Мастер PICC аутентифицирован — выбираем ASOP-приложение
+                if (!selectApp(iso, aidBytes(ASOP_AID))) continue
+                // Аутентификация в ASOP-приложении тем же ключом
+                if (!authenticate3k3des(iso, key)) continue
+                // Читаем файлы
+                val jsonBytes = readFile(iso, 0)
+                val sigBytes = readFile(iso, 1)
+                if (jsonBytes == null || sigBytes == null) return null
+                val identityJson = jsonBytes.toString(Charsets.UTF_8)
+                val signatureBase64 = sigBytes.toString(Charsets.UTF_8)
+                return AsopIdentity(identityJson, signatureBase64)
+            }
+            return null
+        } catch (e: Exception) {
+            Log.w(TAG, "readAsopIdentity: ${e.message}")
+            return null
+        } finally {
+            runCatching { iso.close() }
+        }
     }
 
     fun read(tag: Tag): ReadResult {
@@ -138,6 +185,37 @@ object DesfireCardReader {
             auth = data.auth,
             notes = notes,
             error = null
+        )
+    }
+
+    /**
+     * Читает PICC-информацию карты на уже открытом IsoDep-канале (НЕ закрывает IsoDep).
+     * Используется в CardActivationViewModel, чтобы не терять соединение между
+     * чтением и попыткой аутентификации.
+     */
+    fun readWithIsoDep(iso: IsoDep, tag: Tag): ReadResult {
+        val notes = mutableListOf<String>()
+        val nfcA = NfcA.get(tag)
+        val atqa = nfcA?.let { runCatching { it.atqa.toHex() }.getOrNull() }
+        val sak = nfcA?.let { runCatching { String.format("%02X", it.sak.toInt() and 0xFF) }.getOrNull() }
+        val atsHistorical = iso?.let { runCatching { it.historicalBytes?.toHex() }.getOrNull() }
+        val atsHiLayer = iso?.let { runCatching { it.hiLayerResponse?.toHex() }.getOrNull() }
+        val techs = tag.techList.map { it.substringAfterLast('.') }
+        val uid = tag.id.toHex()
+        val version = transceiveDesfire(iso::transceive, GET_VERSION_CMD, notes, "IsoDep GetVersion")
+            ?.let { parseVersion(it) }
+        val free = transceiveDesfire(iso::transceive, GET_FREE_MEMORY_CMD, notes, "IsoDep GetFreeMemory")
+            ?.let { parseFreeMemory(it) }
+        val apps = transceiveDesfire(iso::transceive, GET_APPLICATION_IDS_CMD, notes, "IsoDep GetApplicationIDs")
+            ?.let { parseAids(it) } ?: emptyList()
+        if (version == null && apps.isEmpty() && free == null) {
+            notes += "Свободные команды DESFire не ответили"
+        }
+        return ReadResult(
+            techs = techs, uid = uid, atqa = atqa, sak = sak,
+            atsHistorical = atsHistorical, atsHiLayer = atsHiLayer,
+            version = version, freeMemory = free, applications = apps,
+            ev2Plus = null, nonGenuineReasons = emptyList(), notes = notes, error = null
         )
     }
 
@@ -427,5 +505,99 @@ object DesfireCardReader {
         return "нестандартный код 0x${String.format("%02X", code)}"
     }
 }
+
+const val ASOP_AID = 0xA05A01
+
+// ---------- ASOP identity reading (read-only, no ChangeKey/CreateApplication) ----------
+
+private fun selectApp(iso: IsoDep, aid: ByteArray): Boolean {
+    val cmd = ByteArray(4)
+    cmd[0] = 0x5A
+    System.arraycopy(aid, 0, cmd, 1, 3)
+    val resp = try { iso.transceive(cmd) } catch (e: Exception) { null }
+    return resp != null && resp.size == 1 && (resp[0].toInt() and 0xFF) == 0x00
+}
+
+private fun authenticate3k3des(iso: IsoDep, key: ByteArray): Boolean {
+    val chResp = try { iso.transceive(byteArrayOf(0x1A, 0x00)) } catch (e: Exception) { null } ?: return false
+    val challenge = unwrapAuthFrame(chResp) ?: return false
+    if (challenge.size != 8) return false
+    val rndB = try {
+        val c = Cipher.getInstance("DESede/CBC/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "DESede"), IvParameterSpec(ByteArray(8)))
+        c.doFinal(challenge)
+    } catch (e: Exception) { return false }
+    val rndA = ByteArray(8).also { SecureRandom().nextBytes(it) }
+    val pt = ByteArray(16)
+    System.arraycopy(rndA, 0, pt, 0, 8)
+    System.arraycopy(rotLeft(rndB), 0, pt, 8, 8)
+    val ct = try {
+        val c = Cipher.getInstance("DESede/CBC/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "DESede"), IvParameterSpec(challenge))
+        c.doFinal(pt)
+    } catch (e: Exception) { return false }
+    val cmd2 = ByteArray(1 + ct.size)
+    cmd2[0] = 0xAF.toByte()
+    System.arraycopy(ct, 0, cmd2, 1, ct.size)
+    val resp2 = try { iso.transceive(cmd2) } catch (e: Exception) { null } ?: return false
+    val final = unwrapAuthFrame(resp2) ?: return false
+    if (final.size != 8) return false
+    val iv2 = ct.copyOfRange(8, 16)
+    val dec = try {
+        val c = Cipher.getInstance("DESede/CBC/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "DESede"), IvParameterSpec(iv2))
+        c.doFinal(final)
+    } catch (e: Exception) { return false }
+    return dec.contentEquals(rotLeft(rndA))
+}
+
+private fun readFile(iso: IsoDep, fileNo: Int): ByteArray? {
+    val out = ByteArrayOutputStream()
+    var offset = 0
+    val chunkSize = 32
+    while (out.size() < 4096) {
+        val cmd = byteArrayOf(0xBD.toByte(), fileNo.toByte(), 0, 0, 0, 0, 0, 0)
+        cmd[2] = (offset ushr 16).toByte()
+        cmd[3] = (offset ushr 8).toByte()
+        cmd[4] = offset.toByte()
+        cmd[7] = chunkSize.toByte()
+        val resp = try { iso.transceive(cmd) } catch (e: Exception) { null } ?: return null
+        val status = resp[0].toInt() and 0xFF
+        when {
+            status == 0x00 -> {
+                out.write(resp, 1, resp.size - 1)
+                if (resp.size - 1 < chunkSize) break
+                offset += resp.size - 1
+            }
+            status == 0xAF -> {
+                out.write(resp, 1, resp.size - 1)
+                offset += resp.size - 1
+            }
+            status == 0xCE || status == 0x1C -> break
+            else -> return null
+        }
+    }
+    return out.toByteArray()
+}
+
+private fun unwrapAuthFrame(resp: ByteArray): ByteArray? {
+    if (resp.isEmpty()) return null
+    return when (resp[0].toInt() and 0xFF) {
+        0x00, 0xAF -> resp.copyOfRange(1, resp.size)
+        else -> null
+    }
+}
+
+private fun rotLeft(b: ByteArray): ByteArray {
+    val out = ByteArray(b.size)
+    for (i in b.indices) out[i] = b[(i + 1) % b.size]
+    return out
+}
+
+private fun aidBytes(aid: Int): ByteArray = byteArrayOf(
+    ((aid ushr 16) and 0xFF).toByte(),
+    ((aid ushr 8) and 0xFF).toByte(),
+    (aid and 0xFF).toByte()
+)
 
 private fun ByteArray.toHex(): String = joinToString(" ") { String.format("%02X", it) }

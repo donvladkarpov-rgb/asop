@@ -164,7 +164,7 @@ class WorkScheduler @Inject constructor(
         val request = OneTimeWorkRequestBuilder<DeltaChunkPollWorker>()
             .setConstraints(constraints)
             .setInputData(DeltaChunkPollWorker.buildForcedData())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.SECONDS)
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(

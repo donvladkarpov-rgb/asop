@@ -1,5 +1,8 @@
 package ru.asop.terminal.ui.screen
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
@@ -18,7 +21,8 @@ import java.util.Locale
 @Composable
 fun MainScreen(
     terminalViewModel: TerminalViewModel = hiltViewModel(),
-    syncViewModel: SyncViewModel = hiltViewModel()
+    syncViewModel: SyncViewModel = hiltViewModel(),
+    referenceSyncViewModel: ReferenceSyncViewModel = hiltViewModel()
 ) {
     val terminalState by terminalViewModel.state.collectAsState()
     val terminal by terminalViewModel.terminalInfo.collectAsState()
@@ -26,6 +30,9 @@ fun MainScreen(
     val pendingCount by syncViewModel.pendingCount.collectAsState()
     val currentSession by syncViewModel.currentSession.collectAsState()
     val lastSyncTime by syncViewModel.lastSyncTime.collectAsState()
+    val activeReferenceCount by referenceSyncViewModel.activeReferenceCount.collectAsState()
+    val pendingDeltaCount by referenceSyncViewModel.pendingDeltaCount.collectAsState()
+    val deltaProgress by referenceSyncViewModel.deltaProgress.collectAsState()
 
     LaunchedEffect(terminalId) {
         if (terminalId != null && terminal == null) {
@@ -53,6 +60,69 @@ fun MainScreen(
                     Spacer(Modifier.width(8.dp))
                 }
             )
+        },
+        bottomBar = {
+            val syncActive = pendingDeltaCount > 0 || deltaProgress != null
+            AnimatedVisibility(
+                visible = syncActive,
+                enter = slideInVertically { it },
+                exit = slideOutVertically { it }
+            ) {
+                Surface(
+                    tonalElevation = 2.dp,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column {
+                        val p = deltaProgress
+                        if (p != null && p.totalChunks > 0) {
+                            LinearProgressIndicator(
+                                progress = { p.fraction },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            if (p != null && p.totalChunks > 0 && p.fraction > 0f) {
+                                val estimated = (activeReferenceCount / p.fraction).toInt()
+                                Text(
+                                    text = "Справочники: $activeReferenceCount/$estimated строк",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${p.currentChunk}/${p.totalChunks}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else if (pendingDeltaCount > 0) {
+                                Text(
+                                    text = "Справочники: $activeReferenceCount строк",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Загрузка...",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Text(
+                                    text = "Справочники: $activeReferenceCount строк",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     ) { padding ->
         LazyColumn(

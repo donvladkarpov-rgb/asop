@@ -37,34 +37,83 @@ run_jvm() {
   return $exit_code
 }
 
-# Special case: crypto-service generates self-signed cert (can't call its own API yet)
-# Retry не нужен — crypto-service сам генерирует сертификаты и не зависит от Kafka.
-# Если JVM падает, Docker перезапускает контейнер (весь скрипт заново).
+# Special case: crypto-service is the CA. Spring Boot reads server.p12 BEFORE
+# RootCaService.init runs (Netty binds in onRefresh, beans created later), so we
+# cannot rely on Java to seed the leaf cert in time. Здесь мы собираем полную
+# цепочку в bash: Root CA -> Intermediate CA -> server.p12 (signed by
+# Intermediate CA). Java-RootCaService.loadRootCa()/loadIntermediateCa() при
+# старте просто загрузит эти готовые keystore (существующие файлы -> skip).
 if [ "$SERVICE_NAME" = "crypto-service" ]; then
   KEYSTORE_PATH="${KEYSTORE_PATH:-file:/data/server.p12}"
   KEYSTORE_FILE=$(echo "$KEYSTORE_PATH" | sed 's/^file://')
+  DATA_DIR="$(dirname "$KEYSTORE_FILE")"
+  ROOT_P12="$DATA_DIR/root-ca.p12"
+  INT_P12="$DATA_DIR/intermediate-ca.p12"
 
-  if [ -f "$KEYSTORE_FILE" ] && [ -f "$CERT_DIR/truststore.p12" ]; then
-    info "Keystore and truststore exist, skipping"
+  mkdir -p "$DATA_DIR" "$CERT_DIR"
+
+  # Если есть pre-generated dev CA (bind mount, переживает down -v) — копируем и используем
+  if [ -f "/data/dev-ca/root-ca.p12" ] && [ -f "/data/dev-ca/intermediate-ca.p12" ] && [ -f "/data/dev-ca/server.p12" ] && [ -f "/data/dev-ca/truststore.p12" ]; then
+    cp /data/dev-ca/root-ca.p12 "$ROOT_P12"
+    cp /data/dev-ca/intermediate-ca.p12 "$INT_P12"
+    cp /data/dev-ca/server.p12 "$KEYSTORE_FILE"
+    cp /data/dev-ca/truststore.p12 "$CERT_DIR/truststore.p12"
+    info "Using pre-generated dev CA from /data/dev-ca (bind mount, survives down -v)"
     exec "$@"
   fi
 
-  mkdir -p "$(dirname "$KEYSTORE_FILE")"
+  if [ -f "$KEYSTORE_FILE" ] && [ -f "$ROOT_P12" ] && [ -f "$INT_P12" ] && [ -f "$CERT_DIR/truststore.p12" ]; then
+    info "Crypto keystores exist (volume), skipping CA bootstrap"
+    exec "$@"
+  fi
 
-  info "Generating self-signed cert for crypto-service..."
-  openssl ecparam -genkey -name prime256v1 -noout -out /tmp/crypto-key.pem
-  openssl req -new -key /tmp/crypto-key.pem -out /tmp/crypto-csr.pem -subj "/CN=crypto-service"
-  openssl x509 -req -in /tmp/crypto-csr.pem -signkey /tmp/crypto-key.pem -out /tmp/crypto-cert.pem -days 3650
+  rm -f /tmp/root-key.pem /tmp/root-cert.pem /tmp/root-csr.pem /tmp/int-key.pem /tmp/int-csr.pem \
+        /tmp/int-cert.pem /tmp/srv-key.pem /tmp/srv-csr.pem /tmp/srv-cert.pem \
+        /tmp/root-cert.srl /tmp/int-cert.srl /tmp/root-ext.cnf /tmp/san.cnf
 
-  openssl pkcs12 -export -in /tmp/crypto-cert.pem -inkey /tmp/crypto-key.pem \
+# ---- 1. Root CA (self-signed) ----
+  info "Bootstrap: generating Root CA..."
+  openssl ecparam -genkey -name prime256v1 -noout -out /tmp/root-key.pem
+  printf "[ca_ext]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n" > /tmp/root-ext.cnf
+  openssl req -new -key /tmp/root-key.pem -out /tmp/root-csr.pem -subj "/CN=ASOP Root CA,O=ASOP,C=RU"
+  openssl x509 -req -in /tmp/root-csr.pem -signkey /tmp/root-key.pem -out /tmp/root-cert.pem -days 3650 \
+    -extfile /tmp/root-ext.cnf -extensions ca_ext
+  openssl pkcs12 -export -inkey /tmp/root-key.pem -in /tmp/root-cert.pem \
+    -name asop-root-ca -out "$ROOT_P12" -password "pass:$PASSWORD"
+
+  # ---- 2. Intermediate CA (signed by Root CA) ----
+  info "Bootstrap: generating Intermediate CA..."
+  openssl ecparam -genkey -name prime256v1 -noout -out /tmp/int-key.pem
+  openssl req -new -key /tmp/int-key.pem -out /tmp/int-csr.pem \
+    -subj "/CN=ASOP Intermediate CA,O=ASOP,C=RU"
+  openssl x509 -req -in /tmp/int-csr.pem -CA /tmp/root-cert.pem -CAkey /tmp/root-key.pem \
+    -CAcreateserial -out /tmp/int-cert.pem -days 1825 -extfile /tmp/root-ext.cnf -extensions ca_ext
+  openssl pkcs12 -export -inkey /tmp/int-key.pem -in /tmp/int-cert.pem \
+    -name asop-intermediate-ca -out "$INT_P12" -password "pass:$PASSWORD"
+
+  # ---- 3. Server leaf cert (signed by Intermediate CA, with SAN) ----
+  info "Bootstrap: generating crypto-service server cert signed by Intermediate CA..."
+  openssl ecparam -genkey -name prime256v1 -noout -out /tmp/srv-key.pem
+  openssl req -new -key /tmp/srv-key.pem -out /tmp/srv-csr.pem -subj "/CN=crypto-service,O=ASOP"
+  printf "[v3_req]\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nbasicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:crypto-service,DNS:localhost\n" > /tmp/san.cnf
+  openssl x509 -req -in /tmp/srv-csr.pem -CA /tmp/int-cert.pem -CAkey /tmp/int-key.pem \
+    -CAcreateserial -out /tmp/srv-cert.pem -days 365 \
+    -extfile /tmp/san.cnf -extensions v3_req
+  openssl pkcs12 -export -inkey /tmp/srv-key.pem -in /tmp/srv-cert.pem \
     -name "$KEY_ALIAS" -out "$KEYSTORE_FILE" -password "pass:$PASSWORD"
 
+  # ---- 4. Truststore (Root CA + Intermediate CA) ----
+  info "Bootstrap: building truststore with Root CA + Intermediate CA..."
   keytool -importcert -keystore "$CERT_DIR/truststore.p12" -storepass "$PASSWORD" \
-    -storetype PKCS12 -alias crypto-ca -file /tmp/crypto-cert.pem -noprompt
+    -storetype PKCS12 -alias root-ca -file /tmp/root-cert.pem -noprompt
+  keytool -importcert -keystore "$CERT_DIR/truststore.p12" -storepass "$PASSWORD" \
+    -storetype PKCS12 -alias intermediate-ca -file /tmp/int-cert.pem -noprompt
 
-  rm -f /tmp/crypto-key.pem /tmp/crypto-csr.pem /tmp/crypto-cert.pem
+  rm -f /tmp/root-key.pem /tmp/root-cert.pem /tmp/root-csr.pem /tmp/int-key.pem /tmp/int-csr.pem \
+        /tmp/int-cert.pem /tmp/srv-key.pem /tmp/srv-csr.pem /tmp/srv-cert.pem \
+        /tmp/root-cert.srl /tmp/int-cert.srl /tmp/root-ext.cnf /tmp/san.cnf
 
-  info "Self-signed cert generated: $KEYSTORE_FILE"
+  info "Crypto CA bootstrap complete: root-ca.p12, intermediate-ca.p12, server.p12 (Intermediate-CA-signed)"
   exec "$@"
 fi
 

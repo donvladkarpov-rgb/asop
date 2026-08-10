@@ -77,7 +77,13 @@ class RootCaService(
             return
         }
         val trustStore = KeyStore.getInstance("PKCS12")
-        FileInputStream(file).use { trustStore.load(it, password.toCharArray()) }
+        if (file.exists()) {
+            FileInputStream(file).use { trustStore.load(it, password.toCharArray()) }
+            log.info("Loaded existing truststore from {}", truststorePath)
+        } else {
+            trustStore.load(null, password.toCharArray())
+            log.warn("Truststore {} missing, creating a fresh one with CA certs", truststorePath)
+        }
 
         var updated = false
         if (!trustStore.containsAlias("root-ca")) {

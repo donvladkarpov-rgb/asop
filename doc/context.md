@@ -468,7 +468,14 @@ Root CA (self-signed, ECC P-256, 10 лет)
 
 **Android:**
 - `TerminalKeyEntity` в `AppDatabase` v5, таблица `terminal_keys` (не `reference_rows`)
-- `TerminalKeyCryptor` — AndroidKeyStore AES-GCM, неэкспортируемый
+- `TerminalKeyCryptor` — AndroidKeyStore AES-GCM, неэкспортируемый, алиас `asop_terminal_keys_aes`
+  - PURPOSE: `ENCRYPT | DECRYPT` (без `SIGN | VERIFY` — отдельный ключ, не связанный с mTLS)
+  - Алгоритм: AES-256, GCM/NoPadding, IV 12 байт, tag 128 бит
+  - Генерация: **lazy** — при первом вызове `encrypt()`/`decrypt()`, т.е. когда приходит первый чанк/файл с `asop_3des_keys` через дельту или полную выкачку
+  - Хранилище: AndroidKeyStore (TEE/StrongBox), ключ **неэкспортируемый** — извлечь невозможно даже с root
+  - Жизненный цикл: создаётся один раз и живёт в Keystore навсегда. **Не зависит** от mTLS-сертификата терминала (разные PURPOSE, разные алиасы). Переживает: перевыпуск сертификата, переустановку приложения (тот же signing key), `fallbackToDestructiveMigration()` Room. Удаляется только при очистке данных приложения или factory reset
+  - Инъекция: `@Singleton` через Hilt, потокобезопасность — `synchronized` не требуется (AndroidKeyStore атомарен на уровне KeyGenParameterSpec)
+  - Ротация: не предусмотрена в текущей версии. При потере Keystore-ключа существующие `KEY_MATERIAL_ENC` в `terminal_keys` становятся нерасшифровываемыми
 - Записи с DELETED_AT физически удаляются, порядок KEY_ID DESC
 
 **web-admin:**

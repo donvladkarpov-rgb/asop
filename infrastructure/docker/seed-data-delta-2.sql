@@ -212,7 +212,7 @@ SELECT
     68,
     8,
     2,
-    'PASSENGER_BENEFIT',
+    'PASSENGER',
     1
 FROM generate_series(1, 5000) AS n
 ON CONFLICT (CARD_ID) DO NOTHING;
@@ -252,4 +252,5 @@ SELECT
     (n % 200 + 1)::numeric,
     'Тариф delta-2 #' || n,
     true
-FROM generate_series(1, 5000) AS n;
+FROM generate_series(1, 5000) AS n
+ON CONFLICT (TARIFF_RATE_ID) DO NOTHING;

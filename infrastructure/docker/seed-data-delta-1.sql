@@ -344,7 +344,7 @@ SELECT
     68,
     8,
     2,
-    'PASSENGER_BENEFIT',
+    'PASSENGER',
     1
 FROM generate_series(1, 100) AS n
 ON CONFLICT (CARD_ID) DO NOTHING;

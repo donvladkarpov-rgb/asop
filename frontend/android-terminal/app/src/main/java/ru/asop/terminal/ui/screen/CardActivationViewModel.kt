@@ -4,6 +4,9 @@ import android.app.Application
 import android.content.Context
 import android.nfc.NfcAdapter
 import android.nfc.Tag
+import android.nfc.tech.IsoDep
+import android.nfc.tech.NfcA
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.f4b6a3.uuid.UuidCreator
@@ -63,8 +66,8 @@ class CardActivationViewModel @Inject constructor(
         val step: Step = Step.NetworkCheck,
         val message: String = "",
         // авторизация
-        val rootUsername: String = "",
-        val rootPassword: String = "",
+        val rootUsername: String = "admin@asop.local",
+        val rootPassword: String = "admin",
         val operatorRoles: List<String> = emptyList(),
         val authorizedByRoot: Boolean = false,
         val rootUserId: String? = null,
@@ -217,7 +220,13 @@ class CardActivationViewModel @Inject constructor(
     private fun identifyAuthCard(tag: Tag) {
         viewModelScope.launch(Dispatchers.IO) {
             _state.update { it.copy(message = "Идентификация авторизующей карты…") }
-            val roles = identifyCardRoles(tag)
+            val writer = DesfireCardWriter()
+            val iso = writer.open(tag)
+            if (iso == null) {
+                _state.update { it.copy(message = "Не удалось открыть IsoDep авторизующей карты") }
+                return@launch
+            }
+            val roles = try { identifyCardRoles(iso) } finally { writer.close(iso) }
             if (roles == null) {
                 _state.update { it.copy(message = "Не удалось прочитать авторизующую карту (ключ/identity)") }
                 return@launch
@@ -239,8 +248,8 @@ class CardActivationViewModel @Inject constructor(
     }
 
     /** Читает роли карты: идентификация рабочим ключом → identity JSON roles. */
-    private suspend fun identifyCardRoles(tag: Tag): List<String>? {
-        val roles = identifyCard(tag)?.identity?.optJSONArray("roles")
+    private suspend fun identifyCardRoles(iso: IsoDep): List<String>? {
+        val roles = identifyCard(iso)?.identity?.optJSONArray("roles")
         if (roles == null) return null
         return (0 until roles.length()).mapNotNull { i ->
             roles.optString(i).takeIf { it.isNotBlank() }
@@ -250,95 +259,237 @@ class CardActivationViewModel @Inject constructor(
     private data class Identified(val key: ByteArray, val identity: JSONObject?)
 
     /**
-     * Процедура идентификации (п.9.5): перебор terminal_keys (свежие первыми)
-     * + нулевой ключ → рабочий ключ → мат auth → чтение ASOP identity file 0.
+     * Идентификация на уже открытом IsoDep: перебирает terminal_keys,
+     * пробует auth, читает ASOP identity file 0.
      */
-    private suspend fun identifyCard(tag: Tag): Identified? {
+    private suspend fun identifyCard(iso: IsoDep): Identified? {
         val writer = DesfireCardWriter()
         val keys = terminalKeyDao.getActive(30)
         val candidates = buildList {
-            add(ZERO_KEY.copyOf())
             keys.map { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
                 .forEach { add(it.copyOf()) }
         }
         for (key in candidates) {
-            if (!writer.tryAuthenticateMaster(tag, key)) continue
-            val iso = writer.open(tag)
-            if (iso == null) continue
+            if (!writer.tryAuthenticateMaster(iso, key)) continue
+            if (key.contentEquals(ZERO_KEY)) return null
             val identity = try {
                 if (writer.selectAsop(iso) && writer.authenticateAsop(iso, key)) {
                     writer.readStd(iso, 0)?.let { data ->
                         runCatching { JSONObject(String(data, Charsets.UTF_8)) }.getOrNull()
                     }
                 } else null
-            } finally {
-                writer.close(iso)
-            }
-            // Нулевой ключ = новая карта → identity нет.
-            if (key.contentEquals(ZERO_KEY)) return null
+            } catch (e: Exception) { null }
             return Identified(key, identity)
         }
         return null
     }
 
-    /** Целевая карта: нулевой ключ → новая; иначе existing (обновление). */
+    /** Целевая карта: диагностика пригодности → нулевой ключ → новая; иначе existing. */
     private fun processTargetCard(tag: Tag) {
         viewModelScope.launch(Dispatchers.IO) {
             heldTag = tag
             _state.update { it.copy(busy = true, message = "Определение состояния карты…") }
-            val read = DesfireCardReader.read(tag)
-            if (read.version == null) {
-                _state.update { it.copy(busy = false, message = "Целевая карта не DESFire") }
-                return@launch
-            }
-            val uid = read.uid.replace(" ", "")
             val writer = DesfireCardWriter()
+            val uid = tag.id.joinToString("") { String.format("%02X", it) }
 
-            if (writer.tryAuthenticateMaster(tag, ZERO_KEY)) {
-                // Новая карта.
-                heldTag = tag
+            // === Шаг 1: проверка что карта — DESFire (GetVersion через IsoDep) ===
+            val iso = IsoDep.get(tag)
+            if (iso != null) {
+                try {
+                    iso.connect()
+                    iso.timeout = 5000
+
+                    // GetVersion (0x60) — базовая PICC-команда, должна отвечать на любой DESFire
+                    val verResp = try { iso.transceive(byteArrayOf(0x60)) } catch (e: Exception) { null }
+                    if (verResp == null || verResp.isEmpty()) {
+                        // GetVersion не ответил — попробуем NfcA fallback
+                        Log.w("TARGET", "IsoDep GetVersion failed, trying NfcA")
+                        runCatching { iso.close() }
+                        processViaNfcA(tag, uid, writer)
+                        return@launch
+                    }
+
+                    // === Шаг 2: SelectApplication(мастер PICC) — проверка пригодности ===
+                    val selResult = writer.selectApplicationDetailed(iso, byteArrayOf(0, 0, 0))
+                    when (selResult) {
+                        DesfireCardWriter.SelectResult.OK -> {
+                            // SelectApplication прошла — карта функциональная DESFire
+                            processWithIsoDep(tag, iso, uid, writer)
+                            return@launch
+                        }
+                        DesfireCardWriter.SelectResult.IO_ERROR -> {
+                            // Transceive failed — возможно клон без SelectApplication
+                            Log.w("TARGET", "IsoDep SelectApplication IO_ERROR — clone?")
+                            runCatching { iso.close() }
+                            // Пробуем NfcA fallback
+                            processViaNfcA(tag, uid, writer)
+                            return@launch
+                        }
+                        DesfireCardWriter.SelectResult.UNSUPPORTED -> {
+                            // 0x1C — команда не поддерживается
+                            runCatching { iso.close() }
+                            _state.update {
+                                it.copy(busy = false,
+                                    message = "Карта не поддерживает SelectApplication (0x1C). " +
+                                        "Возможно, это неполноценный клон DESFire. " +
+                                        "Используйте оригинальную карту NXP DESFire EV2/EV3.")
+                            }
+                            return@launch
+                        }
+                        DesfireCardWriter.SelectResult.ERROR_STATUS -> {
+                            // Другой статус (0xAE, 0x7E и т.д.) — карта знает команду, но ошибка
+                            Log.w("TARGET", "IsoDep SelectApplication ERROR_STATUS")
+                            runCatching { iso.close() }
+                            processViaNfcA(tag, uid, writer)
+                            return@launch
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("TARGET", "IsoDep failed: ${e.message}")
+                    runCatching { iso.close() }
+                    processViaNfcA(tag, uid, writer)
+                    return@launch
+                }
+            }
+
+            // IsoDep нет в techList — пробуем NfcA
+            processViaNfcA(tag, uid, writer)
+        }
+    }
+
+    /** Fallback через NfcA (Layer 2, native фрейминг). */
+    private fun processViaNfcA(tag: Tag, uid: String, writer: DesfireCardWriter) {
+        val nfcA = NfcA.get(tag)
+        if (nfcA == null) {
+            _state.update {
+                it.copy(busy = false,
+                    message = "Карта не поддерживает IsoDep или NfcA. " +
+                        "Возможно, карта не DESFire.")
+            }
+            return
+        }
+        try {
+            nfcA.connect()
+            nfcA.timeout = 5000
+            Log.d("TARGET", "Using NfcA (Layer 2) for card $uid")
+
+            // GetVersion через NfcA
+            val verResp = try { nfcA.transceive(byteArrayOf(0x60)) } catch (e: Exception) { null }
+            if (verResp == null || verResp.isEmpty()) {
                 _state.update {
-                    it.copy(
-                        busy = false,
-                        targetCardUid = uid,
-                        targetCardMode = "new",
-                        workingKeyForCard = null,
-                        message = "Карта новая. Заполните поля"
-                    )
+                    it.copy(busy = false,
+                        message = "Карта не отвечает на GetVersion. " +
+                            "Карта не является DESFire или неисправна.")
+                }
+                return
+            }
+
+            // SelectApplication через NfcA
+            val selResp = try { nfcA.transceive(byteArrayOf(0x5A, 0, 0, 0)) } catch (e: Exception) { null }
+            if (selResp == null || selResp.isEmpty()) {
+                _state.update {
+                    it.copy(busy = false,
+                        message = "Карта не поддерживает SelectApplication. " +
+                            "Возможно, это неполноценный клон DESFire. " +
+                            "Используйте оригинальную карту NXP DESFire EV2/EV3.")
+                }
+                return
+            }
+
+            val selStatus = selResp[0].toInt() and 0xFF
+            if (selStatus != 0x00) {
+                _state.update {
+                    it.copy(busy = false,
+                        message = "SelectApplication вернул ошибку 0x${String.format("%02X", selStatus)}. " +
+                            "Карта не пригодна для активации.")
+                }
+                return
+            }
+
+            // Auth через NfcA
+            if (authenticateZeroKeysNfcA(nfcA)) {
+                _state.update {
+                    it.copy(busy = false, targetCardUid = uid, targetCardMode = "new",
+                        workingKeyForCard = null, message = "Карта новая (NfcA). Заполните поля")
                 }
                 loadReferenceData()
             } else {
-                val identified = identifyCard(tag)
+                // SelectApplication прошла, но auth нулевым ключом не прошёл —
+                // карта зарегистрированная, но NfcA не подходит для write-операций.
+                _state.update {
+                    it.copy(busy = false,
+                        message = "Карта уже зарегистрирована (ключ не нулевой). " +
+                            "NfcA не поддерживает write-операции — переприложите карту для IsoDep.")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("TARGET", "NfcA error: ${e.message}")
+            _state.update {
+                it.copy(busy = false,
+                    message = "Ошибка связи (NfcA): ${e.message}. " +
+                        "Карта не пригодна для активации.")
+            }
+        } finally {
+            runCatching { nfcA.close() }
+        }
+    }
+
+    private suspend fun processWithIsoDep(tag: Tag, iso: IsoDep, uid: String, writer: DesfireCardWriter) {
+        // SelectApplication уже прошла — пробуем auth нулевым ключом (новая карта)
+        if (writer.tryAuthenticateMaster(iso, ByteArray(24))) {
+            _state.update {
+                it.copy(busy = false, targetCardUid = uid, targetCardMode = "new",
+                    workingKeyForCard = null, message = "Карта новая. Заполните поля")
+            }
+            loadReferenceData()
+        } else {
+            // Auth нулевым ключом не прошёл — карта зарегистрированная, ищем рабочий ключ
+            runCatching { iso.close() }
+            // Переоткрываем IsoDep для identifyCard
+            val iso2 = writer.open(tag)
+            if (iso2 == null) {
+                _state.update { it.copy(busy = false, message = "Не удалось переоткрыть IsoDep для идентификации") }
+                return
+            }
+            try {
+                val identified = identifyCard(iso2)
                 if (identified == null) {
                     _state.update {
-                        it.copy(
-                            busy = false,
-                            message = "Карта не идентифицирована. Возможно, она не зарегистрирована в системе или ключ устарел."
-                        )
+                        it.copy(busy = false,
+                            message = "Карта не идентифицирована. " +
+                                "Возможно, она не зарегистрирована в системе или ключ устарел.")
                     }
                 } else {
-                    heldTag = tag
-                    val prev = identified.identity
+                    val identity = identified.identity
                     _state.update {
-                        it.copy(
-                            busy = false,
-                            targetCardUid = uid,
-                            targetCardMode = "existing",
-                            workingKeyForCard = identified.key,
-                            previousIdentityJson = prev?.toString(),
-                            previousRegionId = prev?.optString("regionId")?.takeIf { s -> s.isNotBlank() },
-                            previousOrganizerId = prev?.optString("organizerId")?.takeIf { s -> s.isNotBlank() },
-                            previousCarrierId = prev?.optString("carrierId")?.takeIf { s -> s.isNotBlank() },
-                            previousDistributorId = prev?.optString("cardsDistributorId")?.takeIf { s -> s.isNotBlank() },
-                            previousAuditServiceId = prev?.optString("auditServiceId")?.takeIf { s -> s.isNotBlank() },
-                            previousUserId = prev?.optString("userId")?.takeIf { s -> s.isNotBlank() },
-                            message = "Карта идентифицирована. Заполните поля"
-                        )
+                        it.copy(busy = false, targetCardUid = uid, targetCardMode = "existing",
+                            workingKeyForCard = identified.key.copyOf(),
+                            previousIdentityJson = identity?.toString(),
+                            previousRegionId = identity?.optString("regionId")?.takeIf { it.isNotBlank() },
+                            previousOrganizerId = identity?.optString("organizerId")?.takeIf { it.isNotBlank() },
+                            previousCarrierId = identity?.optString("carrierId")?.takeIf { it.isNotBlank() },
+                            previousDistributorId = identity?.optString("cardsDistributorId")?.takeIf { it.isNotBlank() },
+                            previousAuditServiceId = identity?.optString("auditServiceId")?.takeIf { it.isNotBlank() },
+                            previousUserId = identity?.optString("userId")?.takeIf { it.isNotBlank() },
+                            message = "Карта зарегистрирована. Обновите поля и нажмите «Активировать»")
                     }
                     loadReferenceData()
                 }
+            } finally {
+                writer.close(iso2)
             }
         }
+    }
+
+    private fun authenticateZeroKeysNfcA(nfcA: NfcA): Boolean {
+        // Пробуем AES zero (16 байт) через native transceive
+        val aesCmd = byteArrayOf(0xAA.toByte(), 0x00)
+        val aesResp = try { nfcA.transceive(aesCmd) } catch (e: Exception) { null }
+        if (aesResp != null && aesResp.size > 1 && (aesResp[0].toInt() and 0xFF) == 0xAF) return true
+        // Пробуем 3K3DES zero (24 байта)
+        val desCmd = byteArrayOf(0x1A, 0x00)
+        val desResp = try { nfcA.transceive(desCmd) } catch (e: Exception) { null }
+        return desResp != null && desResp.size > 1 && (desResp[0].toInt() and 0xFF) == 0xAF
     }
 
     // ---------- Шаг 4: справочники ----------

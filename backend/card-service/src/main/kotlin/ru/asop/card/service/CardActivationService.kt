@@ -42,11 +42,14 @@ class CardActivationService(
         return Mono.fromCallable {
             val identity = objectMapper.readTree(request.identityJson)
             authorize(request, identity)
-            val pk = pubKey()
-            if (!verifySignature(pk, request.identityJson, request.identitySignature)) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid cardIdentity signature")
-            }
             identity
+        }.flatMap { identity ->
+            pubKey().map { pk ->
+                if (!verifySignature(pk, request.identityJson, request.identitySignature)) {
+                    throw ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid cardIdentity signature")
+                }
+                identity
+            }
         }.flatMap { identity -> upsert(request, identity) }
     }
 
@@ -72,17 +75,20 @@ class CardActivationService(
         }
     }
 
-    private fun pubKey(): String {
-        cachedPublicKeyBase64?.let { return it }
-        val node = cryptoWebClient.get()
+    private fun pubKey(): Mono<String> {
+        cachedPublicKeyBase64?.let { return Mono.just(it) }
+        return cryptoWebClient.get()
             .uri("https://crypto-service:8081/api/v1/keys/public")
             .retrieve()
             .bodyToMono(JsonNode::class.java)
-            .block()
-        val key = node?.path("publicKeyBase64")?.asText()
-            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Crypto service unavailable")
-        cachedPublicKeyBase64 = key
-        return key
+            .map { node ->
+                val key = node.path("publicKeyBase64").asText()
+                if (key.isBlank()) {
+                    throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Crypto service unavailable")
+                }
+                cachedPublicKeyBase64 = key
+                key
+            }
     }
 
     private fun verifySignature(publicKeyBase64: String, dataJson: String, signatureBase64: String): Boolean {
@@ -144,7 +150,6 @@ class CardActivationService(
             identityJson = request.identityJson,
             identitySignature = request.identitySignature,
             keyVersion = 1,
-            validFrom = now,
             createdAt = now,
             updatedAt = now
         )

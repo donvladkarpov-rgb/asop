@@ -15,6 +15,7 @@ import ru.asop.terminal.db.dao.SyncMetaDao
 import ru.asop.terminal.db.entity.DeltaSyncJobEntity
 import ru.asop.terminal.network.GatewayApi
 import ru.asop.terminal.network.models.DeltaSyncRequest
+import ru.asop.terminal.worker.WorkScheduler
 
 /**
  * Раз в час (или вручную): шлёт delta-запрос (202 + eventId) на gateway,
@@ -31,7 +32,8 @@ class DeltaSyncWorker @AssistedInject constructor(
     private val syncPreferences: SyncPreferences,
     private val syncMetaDao: SyncMetaDao,
     private val deltaSyncJobDao: DeltaSyncJobDao,
-    private val gatewayApi: GatewayApi
+    private val gatewayApi: GatewayApi,
+    private val workScheduler: WorkScheduler
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -106,6 +108,7 @@ class DeltaSyncWorker @AssistedInject constructor(
                     requestedAt = System.currentTimeMillis()
                 )
             )
+            workScheduler.enqueueForcedDeltaChunkPoll()
             Log.d(TAG, "Delta requested: eventId=$eventId, lastVersion=$lastVersion, forced=$forced")
             return Result.success()
         } catch (e: Exception) {

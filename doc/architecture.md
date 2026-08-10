@@ -376,6 +376,16 @@ DRIVER: "CN={cardId}, OU=DRIVER:{carrierId}, O=ASOP"
 CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 ```
 
+### 3DES-ключи на терминале (локальное AES-шифрование)
+
+3DES-ключи доставляются на терминал через дельту/полную выкачку (поле `asop_3des_keys = 43` в `DeltaChunk`). На устройстве они **перешифровываются** локальным AES-ключом, чтобы не хранить plaintext 3DES-материал в Room:
+
+- `TerminalKeyCryptor` (алиас `asop_terminal_keys_aes`, AndroidKeyStore AES-256/GCM, `PURPOSE_ENCRYPT|DECRYPT`)
+- Генерация: **lazy** — при первом прибытии `asop_3des_keys` через дельту
+- Ключ **неэкспортируемый**, живёт в TEE/StrongBox, **не зависит от mTLS-сертификата** (разные алиасы и PURPOSE)
+- Переживает: перевыпуск mTLS-серта, переустановку приложения (тот же signing key), `fallbackToDestructiveMigration()` Room
+- Удаляется только при очистке данных приложения или factory reset
+
 ---
 
 ## 8.1. Delta Sync (инкрементальная дельта-синхронизация справочников)

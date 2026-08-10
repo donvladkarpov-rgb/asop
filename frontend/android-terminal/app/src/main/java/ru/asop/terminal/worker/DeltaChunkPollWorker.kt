@@ -9,6 +9,7 @@ import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
+import ru.asop.terminal.db.DeltaProgressTracker
 import ru.asop.terminal.db.ReferenceSyncStore
 import ru.asop.terminal.db.dao.DeltaSyncJobDao
 import ru.asop.terminal.db.SyncPreferences
@@ -27,7 +28,8 @@ class DeltaChunkPollWorker @AssistedInject constructor(
     private val deltaSyncJobDao: DeltaSyncJobDao,
     private val referenceSyncStore: ReferenceSyncStore,
     private val gatewayApi: GatewayApi,
-    private val syncPreferences: SyncPreferences
+    private val syncPreferences: SyncPreferences,
+    private val deltaProgressTracker: DeltaProgressTracker
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -99,8 +101,10 @@ class DeltaChunkPollWorker @AssistedInject constructor(
                 val totalChunks = meta.body()!!.totalChunks ?: 0
                 if (totalChunks <= 0) {
                     deltaSyncJobDao.markCompleted(eventId, 0, System.currentTimeMillis())
+                    deltaProgressTracker.finish(eventId)
                     return true
                 }
+                deltaProgressTracker.startDelta(eventId, totalChunks)
                 for (n in 0 until totalChunks) {
                     val chunkResponse = gatewayApi.getDeltaChunk(eventId, n)
                     if (!chunkResponse.isSuccessful || chunkResponse.body() == null) {
@@ -109,9 +113,11 @@ class DeltaChunkPollWorker @AssistedInject constructor(
                     val bytes = chunkResponse.body()!!.bytes()
                     val chunk = DeltaChunk.parseFrom(bytes)
                     referenceSyncStore.applyChunk(chunk)
+                    deltaProgressTracker.reportChunk(eventId, n + 1)
                 }
                 referenceSyncStore.updateGlobalWatermark()
                 deltaSyncJobDao.markCompleted(eventId, totalChunks, System.currentTimeMillis())
+                deltaProgressTracker.finish(eventId)
                 Log.d(TAG, "Delta applied: $eventId, chunks=$totalChunks")
                 true
             }

@@ -8,6 +8,7 @@ import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.delay
+import ru.asop.terminal.db.DeltaProgressTracker
 import ru.asop.terminal.db.ReferenceSyncStore
 import ru.asop.terminal.db.dao.DeltaSyncJobDao
 import ru.asop.terminal.db.entity.DeltaSyncJobEntity
@@ -27,7 +28,8 @@ class FullDumpDownloadWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val deltaSyncJobDao: DeltaSyncJobDao,
     private val referenceSyncStore: ReferenceSyncStore,
-    private val gatewayApi: GatewayApi
+    private val gatewayApi: GatewayApi,
+    private val deltaProgressTracker: DeltaProgressTracker
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -59,6 +61,20 @@ class FullDumpDownloadWorker @AssistedInject constructor(
             }
             val bytes = response.body()!!.bytes()
 
+            // Считаем .pb-файлы в ZIP для прогресса
+            var pbCount = 0
+            ZipInputStream(bytes.inputStream()).use { zip ->
+                var entry = zip.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory && entry.name.endsWith(".pb")) pbCount++
+                    zip.closeEntry()
+                    entry = zip.nextEntry
+                }
+            }
+
+            deltaProgressTracker.startDelta(eventId, pbCount)
+
+            var applied = 0
             ZipInputStream(bytes.inputStream()).use { zip ->
                 var entry = zip.nextEntry
                 while (entry != null) {
@@ -67,6 +83,8 @@ class FullDumpDownloadWorker @AssistedInject constructor(
                         if (name.endsWith(".pb")) {
                             val table = "asop_${name.removeSuffix(".pb")}"
                             referenceSyncStore.applyFile(table, zip.readBytes())
+                            applied++
+                            deltaProgressTracker.reportChunk(eventId, applied)
                         }
                     }
                     zip.closeEntry()
@@ -75,6 +93,7 @@ class FullDumpDownloadWorker @AssistedInject constructor(
             }
 
             referenceSyncStore.updateGlobalWatermark()
+            deltaProgressTracker.finish(eventId)
 
             deltaSyncJobDao.markCompleted(eventId, 0, System.currentTimeMillis())
             Log.d(TAG, "Full dump applied: $eventId")

@@ -140,19 +140,61 @@ class DesfireCardWriter {
 
     // ---------- команды (public: используются ViewModel'ом в flow активации) ----------
 
-    /** Проверяет, подходит ли ключ карте: SelectApplication(мастер) + AuthenticateISO(0x1A, keyNo=0). */
+    /** Результат SelectApplication для диагностики клонов. */
+    enum class SelectResult { OK, IO_ERROR, UNSUPPORTED, ERROR_STATUS }
+
+    /**
+     * SelectApplication с детальным результатом — для диагностики клонов.
+     * Возвращает:
+     * - OK — команда прошла (0x00)
+     * - IO_ERROR — IOException (Transceive failed), связь оборвалась
+     * - UNSUPPORTED — 0x1C (Illegal Command Code), команда не поддерживается
+     * - ERROR_STATUS — другой статус (0xAE, 0x7E и т.д.)
+     */
+    fun selectApplicationDetailed(iso: IsoDep, aid: ByteArray): SelectResult {
+        val cmd = ByteArray(4)
+        cmd[0] = OP_SELECT_APP.toByte()
+        System.arraycopy(aid, 0, cmd, 1, 3)
+        return try {
+            val resp = iso.transceive(cmd)
+            val status = resp[0].toInt() and 0xFF
+            Log.d(TAG, "selectApp ${cmd.toHex()} -> ${resp.toHex()}")
+            when (status) {
+                STATUS_OK -> SelectResult.OK
+                0x1C -> SelectResult.UNSUPPORTED
+                else -> {
+                    Log.d(TAG, "selectApp status: 0x${String.format("%02X", status)}")
+                    SelectResult.ERROR_STATUS
+                }
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "selectApp ${cmd.toHex()} IOException: ${e.message}")
+            SelectResult.IO_ERROR
+        }
+    }
+
+    /**
+     * Проверяет, подходит ли ключ карте через уже открытый IsoDep.
+     * Сначала пробует AES нулевым ключом (16 байт), затем 3K3DES нулевым (24 байта),
+     * затем переданным ключом.
+     */
+    fun tryAuthenticateMaster(iso: IsoDep, key: ByteArray): Boolean {
+        if (!selectApplication(iso, byteArrayOf(0, 0, 0))) return false
+        if (authenticateAes(iso, ByteArray(16))) return true
+        if (authenticate3k3des(iso, ByteArray(24))) return true
+        if (key.size == 24 && authenticate3k3des(iso, key)) return true
+        return false
+    }
+
+    /**
+     * Открывает IsoDep и пробует ключи. Фолбэк для случаев, когда Tag ещё свежий.
+     */
     fun tryAuthenticateMaster(tag: Tag, key: ByteArray): Boolean {
-        val iso = IsoDep.get(tag) ?: return false
-        try {
-            iso.connect()
-            iso.timeout = 3000
-            val res = selectApplication(iso, byteArrayOf(0, 0, 0)) && authenticate3k3des(iso, key)
-            return res
-        } catch (e: Exception) {
-            Log.w(TAG, "tryAuthenticateMaster: ${e.message}")
-            return false
+        val iso = open(tag) ?: return false
+        return try {
+            tryAuthenticateMaster(iso, key)
         } finally {
-            runCatching { iso.close() }
+            close(iso)
         }
     }
 
@@ -308,6 +350,40 @@ class DesfireCardWriter {
             Log.w(TAG, "3K3DES step3 decrypt: ${e.message}")
             return false
         }
+        return dec.contentEquals(rotateLeft(rndA))
+    }
+
+    /** AuthenticateAES (0xAA) — полное рукопожатие, ключ 16 байт. */
+    private fun authenticateAes(iso: IsoDep, key: ByteArray): Boolean {
+        val chResp = transceive(iso, byteArrayOf(0xAA.toByte(), 0x00)) ?: return false
+        val challenge = unwrapFrame(chResp) ?: return false
+        if (challenge.size != 16) return false
+        val rndB = try {
+            val c = Cipher.getInstance("AES/ECB/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"))
+            c.doFinal(challenge)
+        } catch (e: Exception) { Log.w(TAG, "AES step1 decrypt: ${e.message}"); return false }
+        val rndA = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val pt = ByteArray(32)
+        System.arraycopy(rndA, 0, pt, 0, 16)
+        System.arraycopy(rotateLeft(rndB), 0, pt, 16, 16)
+        val ct = try {
+            val c = Cipher.getInstance("AES/CBC/NoPadding")
+            c.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(challenge))
+            c.doFinal(pt)
+        } catch (e: Exception) { Log.w(TAG, "AES step2 encrypt: ${e.message}"); return false }
+        val cmd2 = ByteArray(1 + ct.size)
+        cmd2[0] = OP_GET_MORE
+        System.arraycopy(ct, 0, cmd2, 1, ct.size)
+        val resp2 = transceive(iso, cmd2) ?: return false
+        val final = unwrapFrame(resp2) ?: return false
+        if (final.size != 16) return false
+        val iv2 = ct.copyOfRange(16, 32)
+        val dec = try {
+            val c = Cipher.getInstance("AES/CBC/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(iv2))
+            c.doFinal(final)
+        } catch (e: Exception) { Log.w(TAG, "AES step3 decrypt: ${e.message}"); return false }
         return dec.contentEquals(rotateLeft(rndA))
     }
 
