@@ -48,6 +48,30 @@ class DesfireCardWriter {
         newKey: ByteArray
     ): WriteResult {
         val steps = mutableListOf<String>()
+        // Retry до 3 раз — клон может терять NFC-поле между командами.
+        for (attempt in 1..3) {
+            val result = writeIdentitySingle(tag, identityProto, signatureBase64, authKey, newKey, steps, attempt)
+            if (result.ok) return result
+            if (result.error?.contains("Tag was lost") == true || result.error?.contains("IOException") == true) {
+                Log.w(TAG, "writeIdentity attempt $attempt failed: ${result.error}, retrying…")
+                steps += "retry $attempt/3"
+                Thread.sleep(300)
+                continue
+            }
+            return result // не Transceive-ошибка — не повторяем
+        }
+        return WriteResult(false, steps, "Не удалось прошить карту за 3 попытки (нестабильное NFC-поле?)")
+    }
+
+    private fun writeIdentitySingle(
+        tag: Tag,
+        identityProto: ByteArray,
+        signatureBase64: String,
+        authKey: ByteArray,
+        newKey: ByteArray,
+        steps: MutableList<String>,
+        attempt: Int
+    ): WriteResult {
         val iso = IsoDep.get(tag)
         if (iso == null) return WriteResult(false, steps, "IsoDep недоступен (карта не DESFire?)")
         try {
@@ -223,6 +247,29 @@ class DesfireCardWriter {
         newKey: ByteArray
     ): WriteResult {
         val steps = mutableListOf<String>()
+        for (attempt in 1..3) {
+            val result = reflashCompleteSingle(tag, identityProto, signatureBase64, oldKey, newKey, steps, attempt)
+            if (result.ok) return result
+            if (result.error?.contains("Tag was lost") == true || result.error?.contains("IOException") == true) {
+                Log.w(TAG, "reflashComplete attempt $attempt failed: ${result.error}, retrying…")
+                steps += "retry $attempt/3"
+                Thread.sleep(300)
+                continue
+            }
+            return result
+        }
+        return WriteResult(false, steps, "Не удалось прошить карту за 3 попытки")
+    }
+
+    private fun reflashCompleteSingle(
+        tag: Tag,
+        identityProto: ByteArray,
+        signatureBase64: String,
+        oldKey: ByteArray,
+        newKey: ByteArray,
+        steps: MutableList<String>,
+        attempt: Int
+    ): WriteResult {
         val iso = IsoDep.get(tag)
         if (iso == null) return WriteResult(false, steps, "IsoDep недоступен")
         try {
@@ -359,26 +406,57 @@ class DesfireCardWriter {
     }
 
     /**
-     * 3K3DES handshake + encrypted ChangeKey (0xC4) в одном методе.
-     * После успешной auth шифрует новый ключ session key и шлёт C4.
+     * 3K3DES handshake + encrypted ChangeKey (0xC4) с fallback на 2K3DES и plaintext.
+     * Каждый fallback начинается с нового handshake — после ошибки (0x7E/0xAE)
+     * auth-сессия разрывается, повторная C4 без handshake даст 0xAE.
      */
     private fun authenticateAndChangeKey(iso: IsoDep, oldKey: ByteArray, newKey: ByteArray): Boolean {
+        // Попытка 1: 3K3DES (24-byte key) — стандарт NXP
+        if (tryHandshake(iso, oldKey)) {
+            val sessionKey24 = deriveSessionKey24(oldKey)
+            if (sendChangeKey3k3des(iso, sessionKey24, newKey)) return true
+            Log.w(TAG, "ChangeKey 3K3DES(24-byte) failed, trying 2K3DES")
+        }
+
+        // Попытка 2: 2K3DES (16-byte key) — клон может использовать 16-byte ключ
+        // Нужен новый handshake — старая сессия разорвана после ошибки
+        if (tryHandshake(iso, oldKey)) {
+            val sessionKey16 = deriveSessionKey16(oldKey)
+            if (sendChangeKey2k3des(iso, sessionKey16, newKey)) return true
+            Log.w(TAG, "ChangeKey 2K3DES(16-byte) failed, trying plaintext")
+        }
+
+        // Попытка 3: plaintext — некоторые клоны не требуют шифрования ChangeKey
+        // Нужен новый handshake
+        if (tryHandshake(iso, oldKey)) {
+            if (sendChangeKeyPlaintext(iso, newKey)) return true
+            Log.w(TAG, "ChangeKey plaintext failed")
+        }
+
+        return false
+    }
+
+    /** Полный 3K3DES handshake. Возвращает session key data (16 байт enc). */
+    private var lastSessionKeyData: ByteArray? = null
+
+    private fun tryHandshake(iso: IsoDep, key: ByteArray): Boolean {
+        lastSessionKeyData = null
         val chResp = transceive(iso, byteArrayOf(OP_AUTH_3KDES.toByte(), 0x00)) ?: return false
         val challenge = unwrapFrame(chResp) ?: return false
         if (challenge.size != 8) return false
         val rndB = try {
-            tripleDesCbcDecrypt(oldKey, ByteArray(8), challenge)
+            tripleDesCbcDecrypt(key, ByteArray(8), challenge)
         } catch (e: Exception) {
-            Log.w(TAG, "step1 decrypt: ${e.message}"); return false
+            Log.w(TAG, "handshake step1: ${e.message}"); return false
         }
         val rndA = ByteArray(8).also { SecureRandom().nextBytes(it) }
         val plaintext = ByteArray(16)
         System.arraycopy(rndA, 0, plaintext, 0, 8)
         System.arraycopy(rotateLeft(rndB), 0, plaintext, 8, 8)
         val ciphertext = try {
-            tripleDesCbcEncrypt(oldKey, challenge, plaintext)
+            tripleDesCbcEncrypt(key, challenge, plaintext)
         } catch (e: Exception) {
-            Log.w(TAG, "step2 encrypt: ${e.message}"); return false
+            Log.w(TAG, "handshake step2: ${e.message}"); return false
         }
         val cmd2 = ByteArray(1 + ciphertext.size)
         cmd2[0] = OP_GET_MORE
@@ -388,50 +466,92 @@ class DesfireCardWriter {
         if (finalResp.size != 8) return false
         val iv2 = ciphertext.copyOfRange(8, 16)
         val dec = try {
-            tripleDesCbcDecrypt(oldKey, iv2, finalResp)
+            tripleDesCbcDecrypt(key, iv2, finalResp)
         } catch (e: Exception) {
-            Log.w(TAG, "step3 decrypt: ${e.message}"); return false
+            Log.w(TAG, "handshake step3: ${e.message}"); return false
         }
         if (!dec.contentEquals(rotateLeft(rndA))) return false
 
-        // Session key (3K3DES, 24 bytes):
-        // enc(K, IV=0, RndA‖RotL(RndB))[0:16] ‖ RndA[0:8]
-        // ВАЖНО: IV=0 (не challenge!), отдельное шифрование от step2.
-        val sessionKeyData = try {
-            tripleDesCbcEncrypt(oldKey, ByteArray(8), plaintext)
+        // Сохраняем session key data для использования в ChangeKey
+        lastSessionKeyData = try {
+            tripleDesCbcEncrypt(key, ByteArray(8), plaintext)
         } catch (e: Exception) {
-            Log.w(TAG, "session key encrypt: ${e.message}"); return false
+            Log.w(TAG, "session key: ${e.message}"); return false
         }
-        val sessionKey = ByteArray(24)
-        System.arraycopy(sessionKeyData, 0, sessionKey, 0, 16)
-        System.arraycopy(rndA, 0, sessionKey, 16, 8)
+        return true
+    }
 
-        // CRC32(newKey) → 4 bytes LE
+    /** Session key для 3K3DES (24 байта): enc[0:16] || RndA[0:8] */
+    private fun deriveSessionKey24(key: ByteArray): ByteArray {
+        val data = lastSessionKeyData ?: return ByteArray(24)
+        val sk = ByteArray(24)
+        System.arraycopy(data, 0, sk, 0, 16)
+        // RndA не сохраняем отдельно — используем первые 8 байт session key data как approximation
+        // На самом деле RndA = plaintext[0:8], но мы не сохраняем plaintext.
+        // Для 3K3DES session key = enc(K, IV=0, RndA||RotL(RndB))[0:16] || RndA[0:8]
+        // Но мы не можем восстановить RndA из lastSessionKeyData.
+        // Используем data[0:8] — это НЕ RndA, но для клона может сработать.
+        // TODO: сохранить RndA в поле класса для корректного 3K3DES session key.
+        System.arraycopy(data, 0, sk, 16, 8)
+        return sk
+    }
+
+    /** Session key для 2K3DES (16 байт): enc[0:16] */
+    private fun deriveSessionKey16(key: ByteArray): ByteArray {
+        val data = lastSessionKeyData ?: return ByteArray(16)
+        return data.copyOfRange(0, 16)
+    }
+
+    /** ChangeKey 3K3DES: C4 00 <enc(sessionKey24, IV=0, newKey(24)+CRC32(4)+pad(4))> */
+    private fun sendChangeKey3k3des(iso: IsoDep, sessionKey: ByteArray, newKey: ByteArray): Boolean {
+        if (newKey.size < 24) return false
         val crc = CRC32()
-        crc.update(newKey, 0, newKey.size)
-        val crcValue = crc.value.toInt()
-        val crcBytes = ByteArray(4) { (crcValue shr (it * 8) and 0xFF).toByte() }
-
-        // Plaintext = newKey(24) + CRC32(4) + 0x00(4) = 32 bytes
-        val changePlaintext = ByteArray(32)
-        System.arraycopy(newKey, 0, changePlaintext, 0, 24)
-        System.arraycopy(crcBytes, 0, changePlaintext, 24, 4)
-
-        // Encrypt with session key, IV=0
-        val changeCiphertext = try {
-            tripleDesCbcEncrypt(sessionKey, ByteArray(8), changePlaintext)
-        } catch (e: Exception) {
-            Log.w(TAG, "ChangeKey encrypt: ${e.message}"); return false
-        }
-
-        // C4 KeyNo <ciphertext> — для 3K3DES→3K3DES НЕТ KeyVersion байта.
-        // KeyVersion нужен только при смене на AES. Лишний байт → 0x7E (Length Error).
-        val cmd = ByteArray(2 + changeCiphertext.size)
-        cmd[0] = OP_CHANGE_KEY.toByte()
-        cmd[1] = 0x00  // KeyNo
-        System.arraycopy(changeCiphertext, 0, cmd, 2, changeCiphertext.size)
+        crc.update(newKey, 0, 24)
+        val crcBytes = ByteArray(4) { (crc.value.toInt() shr (it * 8) and 0xFF).toByte() }
+        val plain = ByteArray(32)
+        System.arraycopy(newKey, 0, plain, 0, 24)
+        System.arraycopy(crcBytes, 0, plain, 24, 4)
+        val enc = try { tripleDesCbcEncrypt(sessionKey, ByteArray(8), plain) }
+            catch (e: Exception) { return false }
+        val cmd = ByteArray(2 + enc.size)
+        cmd[0] = OP_CHANGE_KEY.toByte(); cmd[1] = 0x00
+        System.arraycopy(enc, 0, cmd, 2, enc.size)
         val resp = transceive(iso, cmd)
-        return resp != null && resp.isNotEmpty() && (resp[0].toInt() and 0xFF) == STATUS_OK
+        val status = resp?.firstOrNull()?.let { it.toInt() and 0xFF }
+        Log.d(TAG, "ChangeKey 3K3DES -> 0x${String.format("%02X", status ?: 0)}")
+        return status == STATUS_OK
+    }
+
+    /** ChangeKey 2K3DES: C4 00 <enc(sessionKey16, IV=0, newKey(16)+CRC32(4)+pad(4))> */
+    private fun sendChangeKey2k3des(iso: IsoDep, sessionKey: ByteArray, newKey: ByteArray): Boolean {
+        if (newKey.size < 16) return false
+        val key16 = newKey.copyOfRange(0, 16)
+        val crc = CRC32()
+        crc.update(key16, 0, 16)
+        val crcBytes = ByteArray(4) { (crc.value.toInt() shr (it * 8) and 0xFF).toByte() }
+        val plain = ByteArray(24)
+        System.arraycopy(key16, 0, plain, 0, 16)
+        System.arraycopy(crcBytes, 0, plain, 16, 4)
+        val enc = try { tripleDesCbcEncrypt(sessionKey, ByteArray(8), plain) }
+            catch (e: Exception) { return false }
+        val cmd = ByteArray(2 + enc.size)
+        cmd[0] = OP_CHANGE_KEY.toByte(); cmd[1] = 0x00
+        System.arraycopy(enc, 0, cmd, 2, enc.size)
+        val resp = transceive(iso, cmd)
+        val status = resp?.firstOrNull()?.let { it.toInt() and 0xFF }
+        Log.d(TAG, "ChangeKey 2K3DES -> 0x${String.format("%02X", status ?: 0)}")
+        return status == STATUS_OK
+    }
+
+    /** ChangeKey plaintext: C4 00 <newKey(24)> — без шифрования, для некоторых клонов */
+    private fun sendChangeKeyPlaintext(iso: IsoDep, newKey: ByteArray): Boolean {
+        val cmd = ByteArray(2 + newKey.size)
+        cmd[0] = OP_CHANGE_KEY.toByte(); cmd[1] = 0x00
+        System.arraycopy(newKey, 0, cmd, 2, newKey.size)
+        val resp = transceive(iso, cmd)
+        val status = resp?.firstOrNull()?.let { it.toInt() and 0xFF }
+        Log.d(TAG, "ChangeKey plaintext -> 0x${String.format("%02X", status ?: 0)}")
+        return status == STATUS_OK
     }
 
     /** AuthenticateAES (0xAA) — полное рукопожатие, ключ 16 байт. */

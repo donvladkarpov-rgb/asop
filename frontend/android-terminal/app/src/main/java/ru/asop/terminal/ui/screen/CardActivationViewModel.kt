@@ -217,7 +217,6 @@ class CardActivationViewModel @Inject constructor(
         val s = _state.value
         if (s.busy || s.finalResult != null) return
         if (s.serverRegistered && s.targetCardMode != null) {
-            // Повторное прикладывание для прошивки
             runWrite(tag)
             return
         }
@@ -788,10 +787,9 @@ class CardActivationViewModel @Inject constructor(
         val sig = pendingWriteSignature ?: return
         viewModelScope.launch(Dispatchers.IO) {
             _state.update { it.copy(busy = true, message = "Прошивка…") }
-            heldTag = tag
             val writeResult = try {
                 withTimeout(90_000) {
-                    provisionCard(proto, sig)
+                    provisionCard(tag, proto, sig)
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 "таймаут — карта не отвечает"
@@ -812,8 +810,7 @@ class CardActivationViewModel @Inject constructor(
     }
 
     /** Возвращает null при успехе прошивки, иначе текст ошибки. */
-    private suspend fun provisionCard(identityJson: ByteArray, signatureBase64: String): String? {
-        val tag = heldTag ?: return "карта убрана с поля NFC"
+    private suspend fun provisionCard(tag: Tag, identityJson: ByteArray, signatureBase64: String): String? {
         val writer = DesfireCardWriter()
         val keys = terminalKeyDao.getActive(5)
         val newestKey = keys.firstOrNull()?.let { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
