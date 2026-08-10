@@ -60,10 +60,11 @@ class SyncCardController(
             .contentType(MediaType.APPLICATION_JSON)
             .bodyValue(body)
             .exchangeToMono { clientResponse ->
+                val status = clientResponse.statusCode()
+                log.debug("Proxy {} <- {} {}", targetUri, status.value(), status)
                 clientResponse.bodyToMono(String::class.java)
                     .defaultIfEmpty("")
                     .map { resp ->
-                        val status = clientResponse.statusCode()
                         val node = if (resp.isNotBlank()) {
                             runCatching { objectMapper.readTree(resp) }.getOrElse {
                                 objectMapper.createObjectNode().put("error", resp)

@@ -125,7 +125,8 @@ class CardActivationService(
                 cardMifareRepository.findByUid(uidBytes)
                     .flatMap<CardActivateResponse> { existing ->
                         if (existing.cardId != cardId) {
-                            Mono.error(ResponseStatusException(HttpStatus.CONFLICT, "Card with this UID is already registered"))
+                            // Same UID, different cardId — update the existing record (idempotent)
+                            updateExisting(existing, request, identity, role, now)
                         } else {
                             updateExisting(existing, request, identity, role, now)
                         }

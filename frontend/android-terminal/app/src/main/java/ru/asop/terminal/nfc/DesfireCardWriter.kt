@@ -52,7 +52,7 @@ class DesfireCardWriter {
         if (iso == null) return WriteResult(false, steps, "IsoDep недоступен (карта не DESFire?)")
         try {
             iso.connect()
-            iso.timeout = 3000
+            iso.timeout = 5000
 
             if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
                 return fail(steps, "SelectApplication(мастер PICC) не прошёл")
@@ -145,22 +145,26 @@ class DesfireCardWriter {
         val cmd = ByteArray(4)
         cmd[0] = OP_SELECT_APP.toByte()
         System.arraycopy(aid, 0, cmd, 1, 3)
-        return try {
-            val resp = iso.transceive(cmd)
-            val status = resp[0].toInt() and 0xFF
-            Log.d(TAG, "selectApp ${cmd.toHex()} -> ${resp.toHex()}")
-            when (status) {
-                STATUS_OK -> SelectResult.OK
-                0x1C -> SelectResult.UNSUPPORTED
-                else -> {
-                    Log.d(TAG, "selectApp status: 0x${String.format("%02X", status)}")
-                    SelectResult.ERROR_STATUS
+        var lastError: Exception? = null
+        repeat(3) { attempt ->
+            try {
+                val resp = transceive(iso, cmd)
+                if (resp != null && resp.isNotEmpty()) {
+                    val status = resp[0].toInt() and 0xFF
+                    Log.d(TAG, "selectApp ${cmd.toHex()} -> ${resp.toHex()}")
+                    return when (status) {
+                        STATUS_OK -> SelectResult.OK
+                        0x1C -> SelectResult.UNSUPPORTED
+                        else -> SelectResult.ERROR_STATUS
+                    }
                 }
+            } catch (e: IOException) { lastError = e }
+            if (attempt < 2) {
+                try { Thread.sleep(120) } catch (_: InterruptedException) {}
             }
-        } catch (e: IOException) {
-            Log.w(TAG, "selectApp ${cmd.toHex()} IOException: ${e.message}")
-            SelectResult.IO_ERROR
         }
+        Log.w(TAG, "selectApp ${cmd.toHex()} failed after 3 attempts: ${lastError?.message}")
+        return SelectResult.IO_ERROR
     }
 
     /**
@@ -171,8 +175,12 @@ class DesfireCardWriter {
     fun tryAuthenticateMaster(iso: IsoDep, key: ByteArray): Boolean {
         if (!selectApplication(iso, byteArrayOf(0, 0, 0))) return false
         if (authenticateAes(iso, ByteArray(16))) return true
+        if (!selectApplication(iso, byteArrayOf(0, 0, 0))) return false
         if (authenticate3k3des(iso, ByteArray(24))) return true
-        if (key.size == 24 && authenticate3k3des(iso, key)) return true
+        if (key.size == 24) {
+            if (!selectApplication(iso, byteArrayOf(0, 0, 0))) return false
+            if (authenticate3k3des(iso, key)) return true
+        }
         return false
     }
 
@@ -219,7 +227,7 @@ class DesfireCardWriter {
         if (iso == null) return WriteResult(false, steps, "IsoDep недоступен")
         try {
             iso.connect()
-            iso.timeout = 3000
+            iso.timeout = 5000
 
             if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
                 return fail(steps, "SelectApplication(мастер PICC) не прошёл")
@@ -266,6 +274,23 @@ class DesfireCardWriter {
 
     /** Чтение file из уже аутентифицированного ASOP-приложения. */
     fun readStd(iso: IsoDep, fileNo: Int): ByteArray? = readData(iso, fileNo)
+
+    /**
+     * Connect с таймаутом через отдельный поток.
+     * На некоторых Samsung IsoDep.connect() на stale-теге блокируется навсегда.
+     */
+    fun connectIsoDep(iso: IsoDep, timeoutMs: Long): Boolean {
+        val t = Thread { runCatching { iso.connect() } }
+        t.isDaemon = true
+        t.start()
+        try { t.join(timeoutMs) } catch (_: InterruptedException) { return false }
+        if (t.isAlive) {
+            t.interrupt()
+            runCatching { iso.close() }
+            return false
+        }
+        return true
+    }
 
     /** Открывает IsoDep-канал (для многошаговых процедур без повторного connect). */
     fun open(tag: Tag): IsoDep? {
@@ -369,7 +394,9 @@ class DesfireCardWriter {
         }
         if (!dec.contentEquals(rotateLeft(rndA))) return false
 
-        // Session key: enc(IV=0, RndA || RotL(RndB))[0:16] || RndA[0:8] = 24 bytes
+        // Session key (3K3DES, 24 bytes):
+        // enc(K, IV=0, RndA‖RotL(RndB))[0:16] ‖ RndA[0:8]
+        // ВАЖНО: IV=0 (не challenge!), отдельное шифрование от step2.
         val sessionKeyData = try {
             tripleDesCbcEncrypt(oldKey, ByteArray(8), plaintext)
         } catch (e: Exception) {
@@ -397,10 +424,11 @@ class DesfireCardWriter {
             Log.w(TAG, "ChangeKey encrypt: ${e.message}"); return false
         }
 
-        // C4 KeyNo <ciphertext>
+        // C4 KeyNo <ciphertext> — для 3K3DES→3K3DES НЕТ KeyVersion байта.
+        // KeyVersion нужен только при смене на AES. Лишний байт → 0x7E (Length Error).
         val cmd = ByteArray(2 + changeCiphertext.size)
         cmd[0] = OP_CHANGE_KEY.toByte()
-        cmd[1] = 0x00
+        cmd[1] = 0x00  // KeyNo
         System.arraycopy(changeCiphertext, 0, cmd, 2, changeCiphertext.size)
         val resp = transceive(iso, cmd)
         return resp != null && resp.isNotEmpty() && (resp[0].toInt() and 0xFF) == STATUS_OK
@@ -544,6 +572,34 @@ class DesfireCardWriter {
     } catch (e: IOException) {
         Log.w(TAG, "${cmd.toHex()} fail: ${e.message}")
         null
+    }
+
+    /**
+     * transceive с аппаратным таймаутом через отдельный поток.
+     * Используется в writeIdentity/reflashComplete где retry невозможен.
+     * При таймауте НЕ закрывает IsoDep (чтобы не сломать retry-циклы в selectApplicationDetailed).
+     */
+    private fun transceiveSafe(iso: IsoDep, cmd: ByteArray): ByteArray? {
+        val result = arrayOfNulls<ByteArray?>(1)
+        val error = arrayOfNulls<Exception?>(1)
+        val thread = Thread {
+            try { result[0] = iso.transceive(cmd) } catch (e: Exception) { error[0] = e }
+        }
+        thread.isDaemon = true
+        thread.start()
+        try { thread.join(7000) } catch (_: InterruptedException) { return null }
+        if (thread.isAlive) {
+            thread.interrupt()
+            Log.w(TAG, "${cmd.toHex()} timeout — thread blocked")
+            return null
+        }
+        if (error[0] != null) {
+            Log.w(TAG, "${cmd.toHex()} fail: ${error[0]?.message}")
+            return null
+        }
+        val resp = result[0]
+        if (resp != null) Log.d(TAG, "${cmd.toHex()} -> ${resp.toHex()}")
+        return resp
     }
 
     /** Снимает кадр ответа: 00/0xAF <data> -> data (без досбора GetMoreFrames). */

@@ -9,6 +9,7 @@ import reactor.netty.http.client.HttpClient
 import reactor.netty.tcp.SslProvider
 import java.io.FileInputStream
 import java.security.KeyStore
+import java.time.Duration
 import javax.net.ssl.TrustManagerFactory
 
 @Configuration
@@ -39,11 +40,13 @@ class WebClientConfig {
         val sslContextBuilder = SslContextBuilder.forClient()
             .trustManager(tmf)
 
-        val httpClient = HttpClient.create().secure { spec ->
-            spec.sslContext(sslContextBuilder)
-                .defaultConfiguration(SslProvider.DefaultConfigurationType.NONE)
-                .build()
-        }
+        val httpClient = HttpClient.create()
+            .responseTimeout(Duration.ofSeconds(10))
+            .secure { spec ->
+                spec.sslContext(sslContextBuilder)
+                    .defaultConfiguration(SslProvider.DefaultConfigurationType.NONE)
+                    .build()
+            }
 
         return WebClient.builder()
             .clientConnector(ReactorClientHttpConnector(httpClient))

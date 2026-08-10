@@ -60,9 +60,9 @@ object AppModule {
         return OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustAll)
             .hostnameVerifier { _, _ -> true }
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
             .build()
     }
@@ -79,9 +79,9 @@ object AppModule {
         return OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustAll)
             .hostnameVerifier { _, _ -> true }
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
             .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.HEADERS })
             .build()
     }

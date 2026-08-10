@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 import ru.asop.terminal.activation.AsopCardType
@@ -115,6 +116,10 @@ class CardActivationViewModel @Inject constructor(
     @Volatile
     private var heldTag: Tag? = null
 
+    // Для повторного прикладывания после серверной регистрации.
+    private var pendingWriteProto: ByteArray? = null
+    private var pendingWriteSignature: String? = null
+
     val nfcAvailable: Boolean get() = nfcAdapter != null && (nfcAdapter?.isEnabled ?: false)
 
     private val humanTagsByStep = mapOf(
@@ -211,6 +216,11 @@ class CardActivationViewModel @Inject constructor(
     fun onTagDiscovered(tag: Tag) {
         val s = _state.value
         if (s.busy || s.finalResult != null) return
+        if (s.serverRegistered && s.targetCardMode != null) {
+            // Повторное прикладывание для прошивки
+            runWrite(tag)
+            return
+        }
         when (s.step) {
             Step.AuthForm -> identifyAuthCard(tag)
             Step.TargetCard -> processTargetCard(tag)
@@ -297,41 +307,26 @@ class CardActivationViewModel @Inject constructor(
             val writer = DesfireCardWriter()
             val uid = tag.id.joinToString("") { String.format("%02X", it) }
 
-            // === Шаг 1: проверка что карта — DESFire (GetVersion через IsoDep) ===
+            // === Шаг 1: SelectApplication(мастер PICC) через IsoDep ===
             val iso = IsoDep.get(tag)
             if (iso != null) {
                 try {
                     iso.connect()
                     iso.timeout = 5000
-
-                    // GetVersion (0x60) — базовая PICC-команда, должна отвечать на любой DESFire
-                    val verResp = try { iso.transceive(byteArrayOf(0x60)) } catch (e: Exception) { null }
-                    if (verResp == null || verResp.isEmpty()) {
-                        // GetVersion не ответил — попробуем NfcA fallback
-                        Log.w("TARGET", "IsoDep GetVersion failed, trying NfcA")
-                        runCatching { iso.close() }
-                        processViaNfcA(tag, uid, writer)
-                        return@launch
-                    }
-
-                    // === Шаг 2: SelectApplication(мастер PICC) — проверка пригодности ===
                     val selResult = writer.selectApplicationDetailed(iso, byteArrayOf(0, 0, 0))
                     when (selResult) {
                         DesfireCardWriter.SelectResult.OK -> {
-                            // SelectApplication прошла — карта функциональная DESFire
+                            iso.timeout = 5000
                             processWithIsoDep(tag, iso, uid, writer)
                             return@launch
                         }
                         DesfireCardWriter.SelectResult.IO_ERROR -> {
-                            // Transceive failed — возможно клон без SelectApplication
                             Log.w("TARGET", "IsoDep SelectApplication IO_ERROR — clone?")
                             runCatching { iso.close() }
-                            // Пробуем NfcA fallback
                             processViaNfcA(tag, uid, writer)
                             return@launch
                         }
                         DesfireCardWriter.SelectResult.UNSUPPORTED -> {
-                            // 0x1C — команда не поддерживается
                             runCatching { iso.close() }
                             _state.update {
                                 it.copy(busy = false,
@@ -342,7 +337,6 @@ class CardActivationViewModel @Inject constructor(
                             return@launch
                         }
                         DesfireCardWriter.SelectResult.ERROR_STATUS -> {
-                            // Другой статус (0xAE, 0x7E и т.д.) — карта знает команду, но ошибка
                             Log.w("TARGET", "IsoDep SelectApplication ERROR_STATUS")
                             runCatching { iso.close() }
                             processViaNfcA(tag, uid, writer)
@@ -357,7 +351,6 @@ class CardActivationViewModel @Inject constructor(
                 }
             }
 
-            // IsoDep нет в techList — пробуем NfcA
             processViaNfcA(tag, uid, writer)
         }
     }
@@ -375,11 +368,15 @@ class CardActivationViewModel @Inject constructor(
         }
         try {
             nfcA.connect()
-            nfcA.timeout = 5000
+            nfcA.timeout = 2000
             Log.d("TARGET", "Using NfcA (Layer 2) for card $uid")
 
-            // GetVersion через NfcA
-            val verResp = try { nfcA.transceive(byteArrayOf(0x60)) } catch (e: Exception) { null }
+            // GetVersion — 2 попытки (0x60, 0x60 0x00), без ретраев
+            var verResp: ByteArray? = null
+            for (cmd in listOf(byteArrayOf(0x60), byteArrayOf(0x60, 0x00))) {
+                try { verResp = nfcA.transceive(cmd) } catch (_: Exception) {}
+                if (verResp != null && verResp.isNotEmpty()) break
+            }
             if (verResp == null || verResp.isEmpty()) {
                 _state.update {
                     it.copy(busy = false,
@@ -389,8 +386,15 @@ class CardActivationViewModel @Inject constructor(
                 return
             }
 
-            // SelectApplication через NfcA
-            val selResp = try { nfcA.transceive(byteArrayOf(0x5A, 0, 0, 0)) } catch (e: Exception) { null }
+            // SelectApplication через NfcA — 2 попытки
+            var selResp: ByteArray? = null
+            for (attempt in 1..2) {
+                try {
+                    selResp = nfcA.transceive(byteArrayOf(0x5A, 0, 0, 0))
+                    if (selResp != null && selResp.isNotEmpty()) break
+                } catch (_: Exception) { }
+                if (attempt < 2) Thread.sleep(120)
+            }
             if (selResp == null || selResp.isEmpty()) {
                 _state.update {
                     it.copy(busy = false,
@@ -723,51 +727,49 @@ class CardActivationViewModel @Inject constructor(
                 val signatureBase64 = signResp.body()?.signatureBase64
                     ?: throw IllegalStateException("пустая подпись")
 
-                // 2. Регистрация на сервере.
+                // 2. Регистрация на сервере (проверяем, нет ли уже такого UID).
                 _state.update { it.copy(message = "Регистрация на сервере…") }
-                val s2 = _state.value
-                val role = s2.cardType?.role ?: throw IllegalStateException("роль не определена")
-                val activateResp = syncApi.activateCard(
-                    CardActivateRequest(
-                        cardIdentity = CardIdentity(
-                            cardId = identity.optString("cardId"),
-                            uid = identity.optString("uid"),
-                            regionId = identity.optString("regionId").takeIf { it.isNotBlank() },
-                            organizerId = identity.optString("organizerId").takeIf { it.isNotBlank() },
-                            carrierId = identity.optString("carrierId").takeIf { it.isNotBlank() },
-                            cardsDistributorId = identity.optString("cardsDistributorId").takeIf { it.isNotBlank() },
-                            auditServiceId = identity.optString("auditServiceId").takeIf { it.isNotBlank() },
-                            userId = identity.optString("userId").takeIf { it.isNotBlank() },
-                            roles = listOf(role)
-                        ),
-                        identityJson = canonical,
-                        identitySignature = signatureBase64,
-                        operatorRoles = s2.operatorRoles,
-                        authorizedByRoot = s2.authorizedByRoot,
-                        rootUserId = s2.rootUserId
+                val uid = identity.optString("uid")
+                val existingCardId = runCatching {
+                    val resp = syncApi.getCardByUid(uid)
+                    if (resp.isSuccessful) resp.body()?.cardId else null
+                }.getOrNull()
+                if (existingCardId != null) {
+                    // Уже зарегистрирована — activate не нужен
+                    identity.put("cardId", existingCardId)
+                } else {
+                    val s2 = _state.value
+                    val role = s2.cardType?.role ?: throw IllegalStateException("роль не определена")
+                    val activateResp = syncApi.activateCard(
+                        CardActivateRequest(
+                            cardIdentity = CardIdentity(
+                                cardId = identity.optString("cardId"),
+                                uid = identity.optString("uid"),
+                                regionId = identity.optString("regionId").takeIf { it.isNotBlank() },
+                                organizerId = identity.optString("organizerId").takeIf { it.isNotBlank() },
+                                carrierId = identity.optString("carrierId").takeIf { it.isNotBlank() },
+                                cardsDistributorId = identity.optString("cardsDistributorId").takeIf { it.isNotBlank() },
+                                auditServiceId = identity.optString("auditServiceId").takeIf { it.isNotBlank() },
+                                userId = identity.optString("userId").takeIf { it.isNotBlank() },
+                                roles = listOf(role)
+                            ),
+                            identityJson = canonical,
+                            identitySignature = signatureBase64,
+                            operatorRoles = s2.operatorRoles,
+                            authorizedByRoot = s2.authorizedByRoot,
+                            rootUserId = s2.rootUserId
+                        )
                     )
-                )
-                if (!activateResp.isSuccessful) throw IllegalStateException("activate HTTP ${activateResp.code()}")
-                _state.update { it.copy(serverRegistered = true, message = "Карта зарегистрирована на сервере. Прошивка…") }
+                    if (!activateResp.isSuccessful) throw IllegalStateException("activate HTTP ${activateResp.code()}")
+                }
+                _state.update { it.copy(serverRegistered = true, busy = false,
+                    message = "Карта зарегистрирована. Приложите карту повторно для прошивки.") }
 
-                // 3. Прошивка карты.
+                // Сохраняем данные для прошивки, ждём свежий тег.
                 val identityJson = JSONObject(canonical)
                 val identityProto = CardIdentityCodec.fromJson(identityJson)
-                val writeResult = provisionCard(identityProto.toByteArray(), signatureBase64)
-                val ok = writeResult == null
-                val msg = when {
-                    writeResult == null -> "Карта ${role} успешно активирована"
-                    else -> "Карта зарегистрирована на сервере, но запись не удалась: $writeResult. Повторите прикладывание."
-                }
-                _state.update {
-                    it.copy(
-                        busy = false,
-                        cardWritten = ok,
-                        finalOk = ok,
-                        finalResult = msg
-                    )
-                }
-                if (ok) TonePlayer.softBeep()
+                pendingWriteProto = identityProto.toByteArray()
+                pendingWriteSignature = signatureBase64
             } catch (e: Exception) {
                 _state.update {
                     it.copy(
@@ -777,6 +779,35 @@ class CardActivationViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    /** Прошивка с повторно приложенной картой (свежий тег). */
+    private fun runWrite(tag: Tag) {
+        val proto = pendingWriteProto ?: return
+        val sig = pendingWriteSignature ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(busy = true, message = "Прошивка…") }
+            heldTag = tag
+            val writeResult = try {
+                withTimeout(90_000) {
+                    provisionCard(proto, sig)
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                "таймаут — карта не отвечает"
+            }
+            val ok = writeResult == null
+            val role = _state.value.cardType?.role ?: ""
+            val msg = when {
+                writeResult == null -> "Карта $role успешно активирована"
+                else -> "Карта зарегистрирована, но запись не удалась: $writeResult. Повторите прикладывание."
+            }
+            pendingWriteProto = null
+            pendingWriteSignature = null
+            _state.update {
+                it.copy(busy = false, cardWritten = ok, finalOk = ok, finalResult = msg)
+            }
+            if (ok) TonePlayer.softBeep()
         }
     }
 
