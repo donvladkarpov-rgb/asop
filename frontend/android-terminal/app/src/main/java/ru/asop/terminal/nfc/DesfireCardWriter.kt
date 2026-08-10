@@ -5,6 +5,7 @@ import android.nfc.tech.IsoDep
 import android.util.Log
 import java.io.IOException
 import java.security.SecureRandom
+import java.util.zip.CRC32
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -57,15 +58,10 @@ class DesfireCardWriter {
                 return fail(steps, "SelectApplication(мастер PICC) не прошёл")
             }
             steps += "master PICC выбран"
-            if (!authenticate3k3des(iso, authKey)) {
-                return fail(steps, "AuthenticateISO(3K3DES, authKey) не прошёл")
+            if (!authenticateAndChangeKey(iso, authKey, newKey)) {
+                return fail(steps, "auth+ChangeKey(slot0) не прошёл")
             }
-            steps += "authOK master PICC"
-
-            if (!changeKey(iso, newKey)) {
-                return fail(steps, "ChangeKey(slot0) не прошёл")
-            }
-            steps += "ChangeKey slot0 -> новый 3DES-ключ"
+            steps += "authOK + ChangeKey slot0 -> новый 3DES-ключ (encrypted)"
 
             if (createApplication(iso, ASOP_AID)) {
                 steps += "ASOP-приложение создано"
@@ -228,13 +224,10 @@ class DesfireCardWriter {
             if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
                 return fail(steps, "SelectApplication(мастер PICC) не прошёл")
             }
-            if (!authenticate3k3des(iso, oldKey)) {
-                return fail(steps, "AuthenticateISO(рабочий ключ) не прошёл")
+            if (!authenticateAndChangeKey(iso, oldKey, newKey)) {
+                return fail(steps, "auth+ChangeKey(мастер PICC) не прошёл")
             }
-            if (!changeKey(iso, newKey)) {
-                return fail(steps, "ChangeKey(мастер PICC) не прошёл")
-            }
-            steps += "ChangeKey master -> newKey"
+            steps += "authOK + ChangeKey master -> newKey (encrypted)"
 
             if (!selectApplication(iso, aidBytes(ASOP_AID))) {
                 return fail(steps, "SelectApplication(0xA05A01) не прошёл")
@@ -270,9 +263,6 @@ class DesfireCardWriter {
 
     /** Выбор мастер PICC (0x5A 000000) на уже открытом канале. */
     fun selectMaster(iso: IsoDep): Boolean = selectApplication(iso, byteArrayOf(0, 0, 0))
-
-    /** ChangeKey (0xC4) slot0 на уже аутентифицированном канале (текущий ключ → новый). */
-    fun changeKeySlot0(iso: IsoDep, newKey: ByteArray): Boolean = changeKey(iso, newKey)
 
     /** Чтение file из уже аутентифицированного ASOP-приложения. */
     fun readStd(iso: IsoDep, fileNo: Int): ByteArray? = readData(iso, fileNo)
@@ -343,6 +333,79 @@ class DesfireCardWriter {
         return dec.contentEquals(rotateLeft(rndA))
     }
 
+    /**
+     * 3K3DES handshake + encrypted ChangeKey (0xC4) в одном методе.
+     * После успешной auth шифрует новый ключ session key и шлёт C4.
+     */
+    private fun authenticateAndChangeKey(iso: IsoDep, oldKey: ByteArray, newKey: ByteArray): Boolean {
+        val chResp = transceive(iso, byteArrayOf(OP_AUTH_3KDES.toByte(), 0x00)) ?: return false
+        val challenge = unwrapFrame(chResp) ?: return false
+        if (challenge.size != 8) return false
+        val rndB = try {
+            tripleDesCbcDecrypt(oldKey, ByteArray(8), challenge)
+        } catch (e: Exception) {
+            Log.w(TAG, "step1 decrypt: ${e.message}"); return false
+        }
+        val rndA = ByteArray(8).also { SecureRandom().nextBytes(it) }
+        val plaintext = ByteArray(16)
+        System.arraycopy(rndA, 0, plaintext, 0, 8)
+        System.arraycopy(rotateLeft(rndB), 0, plaintext, 8, 8)
+        val ciphertext = try {
+            tripleDesCbcEncrypt(oldKey, challenge, plaintext)
+        } catch (e: Exception) {
+            Log.w(TAG, "step2 encrypt: ${e.message}"); return false
+        }
+        val cmd2 = ByteArray(1 + ciphertext.size)
+        cmd2[0] = OP_GET_MORE
+        System.arraycopy(ciphertext, 0, cmd2, 1, ciphertext.size)
+        val resp2 = transceive(iso, cmd2) ?: return false
+        val finalResp = unwrapFrame(resp2) ?: return false
+        if (finalResp.size != 8) return false
+        val iv2 = ciphertext.copyOfRange(8, 16)
+        val dec = try {
+            tripleDesCbcDecrypt(oldKey, iv2, finalResp)
+        } catch (e: Exception) {
+            Log.w(TAG, "step3 decrypt: ${e.message}"); return false
+        }
+        if (!dec.contentEquals(rotateLeft(rndA))) return false
+
+        // Session key: enc(IV=0, RndA || RotL(RndB))[0:16] || RndA[0:8] = 24 bytes
+        val sessionKeyData = try {
+            tripleDesCbcEncrypt(oldKey, ByteArray(8), plaintext)
+        } catch (e: Exception) {
+            Log.w(TAG, "session key encrypt: ${e.message}"); return false
+        }
+        val sessionKey = ByteArray(24)
+        System.arraycopy(sessionKeyData, 0, sessionKey, 0, 16)
+        System.arraycopy(rndA, 0, sessionKey, 16, 8)
+
+        // CRC32(newKey) → 4 bytes LE
+        val crc = CRC32()
+        crc.update(newKey, 0, newKey.size)
+        val crcValue = crc.value.toInt()
+        val crcBytes = ByteArray(4) { (crcValue shr (it * 8) and 0xFF).toByte() }
+
+        // Plaintext = newKey(24) + CRC32(4) + 0x00(4) = 32 bytes
+        val changePlaintext = ByteArray(32)
+        System.arraycopy(newKey, 0, changePlaintext, 0, 24)
+        System.arraycopy(crcBytes, 0, changePlaintext, 24, 4)
+
+        // Encrypt with session key, IV=0
+        val changeCiphertext = try {
+            tripleDesCbcEncrypt(sessionKey, ByteArray(8), changePlaintext)
+        } catch (e: Exception) {
+            Log.w(TAG, "ChangeKey encrypt: ${e.message}"); return false
+        }
+
+        // C4 KeyNo <ciphertext>
+        val cmd = ByteArray(2 + changeCiphertext.size)
+        cmd[0] = OP_CHANGE_KEY.toByte()
+        cmd[1] = 0x00
+        System.arraycopy(changeCiphertext, 0, cmd, 2, changeCiphertext.size)
+        val resp = transceive(iso, cmd)
+        return resp != null && resp.isNotEmpty() && (resp[0].toInt() and 0xFF) == STATUS_OK
+    }
+
     /** AuthenticateAES (0xAA) — полное рукопожатие, ключ 16 байт. */
     private fun authenticateAes(iso: IsoDep, key: ByteArray): Boolean {
         val chResp = transceive(iso, byteArrayOf(0xAA.toByte(), 0x00)) ?: return false
@@ -375,19 +438,6 @@ class DesfireCardWriter {
             c.doFinal(final)
         } catch (e: Exception) { Log.w(TAG, "AES step3 decrypt: ${e.message}"); return false }
         return dec.contentEquals(rotateLeft(rndA))
-    }
-
-    /**
-     * ChangeKey (0xC4): смена ключа слота 0 (PICC/приложение) на новый 3K3DES-ключ.
-     * После auth: C4 KeyNo <новый ключ 24 байта> <версия ключа 0x00>.
-     */
-    private fun changeKey(iso: IsoDep, newKey: ByteArray): Boolean {
-        val cmd = ByteArray(2 + newKey.size)
-        cmd[0] = OP_CHANGE_KEY.toByte()
-        cmd[1] = 0x00 // keyNo 0
-        System.arraycopy(newKey, 0, cmd, 2, newKey.size)
-        val resp = transceive(iso, cmd)
-        return resp != null && resp.isNotEmpty() && (resp[0].toInt() and 0xFF) == STATUS_OK
     }
 
     /**
