@@ -17,6 +17,20 @@
 - **No tests exist** — `./gradlew test` runs zero tests. Don't assume coverage requirements.
 - **No CI workflow** — GitHub Actions not configured.
 
+## Target device
+
+**Feitian F20** (FTSafe) — целевое устройство для `android-terminal`. Android-POS терминал для перевозчиков, дистрибьюторов, диспетчеров, водителей.
+
+- **Модель:** Feitian F20 Smart Mobile POS, PCI PTS 5.1, сертификаты EMV L1/L2
+- **SoC:** Quad-core 4×A53@2.0 GHz, 2 GB RAM / 32 GB ROM
+- **ОС:** Android 14 (опц. Android 10)
+- **NFC:** 13.56 МГц, ISO/IEC 14443 (Type A&B), ISO 18092, Felica, Mifare — поддерживает DESFire EV1/EV2/EV3 (ISO 14443-4). **Caveat:** PCI PTS-терминал — NFC может быть залочен на платёжное ядро, доступ `IsoDep` сторонним приложениям не гарантирован. Проверить на реальной партии перед закупом.
+- **Экран:** 5.5" HD IPS LCD 720×1440 multi-touch
+- **Связь:** 4G, Wi-Fi 5, BT 5.0, GPS (GPS+BDS+GLONASS+Galileo)
+- **Принтер:** термо 58 мм, 80 мм/с
+- **Прочее:** MSR, IC (ISO 7816), PSAM, камера 8 MP, отпечаток пальца, USB-C (OTG)
+- **Сайт:** https://www.ftsafe.com/payment/f20/
+
 ## Architecture
 
 **Gateway → Kafka → Services** (async, CQRS-подобная). Gateway не пишет в БД, только валидирует и пушит команды в Kafka, возвращает `202 Accepted`.
@@ -226,6 +240,8 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - `RegistrationScreen`: серийный номер (`ANDROID_ID`) — read-only; пользователь вводит регион (dropdown), перевозчика (dropdown), часовой пояс (device default), модель (опц.), инвентарный номер (обяз.). После успешной регистрации `TerminalViewModel.registerTerminal` сохраняет `response.terminal.id` через `SyncPreferences.setTerminalId(...)`. В запросе передаются `carrierId`, `timezone`, `terminalId`.
 
   **Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
+  
+  **Целевое устройство:** Feitian F20 — см. раздел «Target device» выше.
 
   **NFC DESFire-зонды** (`nfc/DesfireCardReader.kt` + `nfc/DesfireAuthProbe.kt`, экран «Прочитать карту» в drawer):
   - Только **read-only** команды — ни одной пишущей (нет ChangeKey/CreateApplication/WriteData/FormatPICC). Не портит проверяемые карты, включая боевые с реальными ключами. Неудачная auth ничего не «сжигает» — состояние сессии исчезает при снятии карты с поля.

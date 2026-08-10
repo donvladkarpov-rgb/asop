@@ -39,6 +39,7 @@
 | Gradle | 8.10.2 | Система сборки |
 | React | 18 + Vite | Админка |
 | oidc-client-ts | — | OIDC-клиент |
+| **Целевое устройство** | Feitian F20 | Android-POS терминал для транспорта (перевозчики, дистрибьюторы, диспетчеры, водители) |
 
 ### Ограничения JVM (критично)
 - Gradle daemon: `-Xmx4g`
@@ -504,6 +505,26 @@ Delta:    DeltaSyncWorker (60m) → POST /sync/references/delta (lastVersion) �
           DeltaChunkPollWorker (5m) → GET .../{eventId}/meta + /chunks/{n} → applyChunk → reference_rows + sync_meta
 Full:     FullDumpDownloadWorker → GET /events/{eventId} (10с×60) → ZIP по s3Url → applyFile
 ```
+
+### Целевое устройство
+
+**Feitian F20** (бренд FTSafe) — мобильный Android-POS терминал, целевое устройство для установки `android-terminal`.
+
+| Характеристика | Значение |
+|----------------|----------|
+| Модель | Feitian F20 Smart Mobile POS |
+| SoC | Quad-core 4×A53@2.0GHz |
+| RAM/ROM | 2 GB / 32 GB |
+| ОС | Android 14 (опц. Android 10) |
+| NFC | 13.56 МГц, ISO/IEC 14443 (Type A&B), ISO 18092, Felica, Mifare — поддерживает DESFire EV1/EV2/EV3 (ISO 14443-4) |
+| Экран | 5.5" HD IPS LCD 720×1440, multi-touch |
+| Связь | 4G, Wi-Fi 5 (2.4/5 GHz), BT 5.0, GPS (GPS+BDS+GLONASS+Galileo) |
+| Принтер | Термо 58 мм, 80 мм/с |
+| Дополнительно | MSR (магнитная полоса), IC-карты (ISO 7816), PSAM, камера 8 MP, сканер отпечатков |
+| Сертификаты | PCI PTS 5.1, EMV L1/L2, EMV Contactless L1 |
+| Сайт | https://www.ftsafe.com/payment/f20/ |
+
+**Важно:** F20 — PCI PTS-сертифицированный финансовый терминал. NFC-контроллер может быть залочен на платёжное ядро и не пробрасываться в стандартный Android `android.nfc.tech.IsoDep` / `NfcAdapter` для сторонних приложений. Доступ к NFC для `android-terminal` необходимо проверить на конкретной партии; при необходимости — подключить Feitian SDK.
 
 ### Android Test (`frontend/android-test/`)
 - Отдельное Android-приложение (Kotlin + Jetpack Compose, подписано тем же debug-ключом), НЕ содержит mTLS/SyncApi — только проверка результата синка через ContentProvider `android-terminal`.

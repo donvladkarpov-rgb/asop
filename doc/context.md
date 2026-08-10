@@ -38,6 +38,7 @@
 - **Сборка:** Gradle 8.10.2
 - **UUID:** v7 (Time-Ordered, RFC 9562)
 - **Фронтенд:** Vite + React 18 + TypeScript + oidc-client-ts
+- **Целевое устройство:** Feitian F20 (FTSafe) — Android 14, Quad-core 2.0 GHz, 2 GB RAM / 32 GB ROM, 5.5" экран, NFC (ISO/IEC 14443-4 — DESFire EV1+), 4G/Wi-Fi/BT/GPS, термопринтер 58 мм. PCI PTS 5.1. Подробнее: `doc/architecture.md` раздел «Целевое устройство».
 
 ### Микросервисы
 ```
@@ -656,6 +657,8 @@ Liquibase запускается **отдельным Docker-контейнер�
 **Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED (теперь статус живёт в Redis, TTL 24 ч).
 
 См. подробнее в `doc/smoke-tests.md` (7 сценариев интеграционного тестирования).
+
+**Целевое устройство:** Feitian F20 (см. `doc/architecture.md` раздел «Целевое устройство»).
 
 ### Страницы
 `Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
