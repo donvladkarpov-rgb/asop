@@ -4,7 +4,9 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.delay
 import ru.asop.terminal.cert.MtlsManager
+import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.network.CertSignApi
+import ru.asop.terminal.network.GatewayApi
 import ru.asop.terminal.network.models.CertSignRequest
 import ru.asop.terminal.network.models.CertStoredResult
 import javax.inject.Inject
@@ -23,6 +25,8 @@ import javax.inject.Singleton
 class CertificateService @Inject constructor(
     private val mtlsManager: MtlsManager,
     private val certSignApi: CertSignApi,
+    private val gatewayApi: GatewayApi,
+    private val syncPreferences: SyncPreferences,
     private val moshi: Moshi
 ) {
     companion object {
@@ -102,6 +106,23 @@ class CertificateService @Inject constructor(
                         appendLine("-----END CERTIFICATE-----")
                     }
                     mtlsManager.storeCertificateChain(listOf(terminalPem, result.caChain))
+
+                    // Загружаем публичный ключ сервера (RSA-PSS для верификации подписей карт)
+                    try {
+                        val pkResp = gatewayApi.getPublicKey()
+                        if (pkResp.isSuccessful) {
+                            val pem = buildString {
+                                appendLine("-----BEGIN PUBLIC KEY-----")
+                                append(pkResp.body()?.publicKeyBase64 ?: "")
+                                appendLine()
+                                appendLine("-----END PUBLIC KEY-----")
+                            }
+                            syncPreferences.setServerPublicKey(pem)
+                        }
+                    } catch (_: Exception) {
+                        // Некритично — ключ подтянется позже при следующей синхронизации
+                    }
+
                     return result
                 }
                 else -> throw RuntimeException("Unknown event state: ${status.state}")

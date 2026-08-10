@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package asop.v1;
+option java_package = "ru.asop.proto.v1";
+option java_multiple_files = true;
+
+message CardIdentity {
+  string card_id = 1;
+  string uid = 2;
+  string region_id = 3;
+  string organizer_id = 4;
+  string carrier_id = 5;
+  string cards_distributor_id = 6;
+  string audit_service_id = 7;
+  string user_id = 8;
+  repeated string roles = 9;
+}

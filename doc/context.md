@@ -490,7 +490,13 @@ Root CA (self-signed, ECC P-256, 10 лет)
 
 **Роли**: 9 новых в `ASOP_ROLES` (REGION_ADMIN, ORGANIZER_ADMIN, KRS_ADMIN, CARRIER_DISPATCHER, DISTRIBUTOR_DISPATCHER, KRS_DISPATCHER, KRS_FOREMAN, KRS_CONTROLLER, PASSENGER_ANONYMOUS). `CARD_ROLE` CHECK = 14 значений.
 
-**cardIdentity** (canonical JSON): cardId (UUIDv7), uid (hex), regionId/organizerId/carrierId/cardsDistributorId/auditServiceId/userId, roles (JSON-массив). Сохраняется на карту в ASOP-приложении (AID 0xA05A01): File 0 = JSON, File 1 = RSA-PSS-SHA256 подпись.
+**cardIdentity** (canonical JSON): cardId (UUIDv7), uid (hex), regionId/organizerId/carrierId/cardsDistributorId/auditServiceId/userId, roles (JSON-массив). Сохраняется на карту в ASOP-приложении (AID 0xA05A01): File 0 = protobuf binary (CardIdentity message), File 1 = RSA-PSS-SHA256 подпись canonical JSON.
+
+**Верификация подписи на терминале:**
+- При регистрации терминала (CertificateService.provision) загружается публичный RSA ключ сервера (`GET /api/v1/keys/public`) → хранится в SyncPreferences (DataStore)
+- При чтении зарегистрированной карты (CardReadScreen) терминал парсит proto из File 0, строит canonical JSON, верифицирует подпись из File 1 через `SignatureVerifier`
+- Результат (`signatureValid`) отображается в UI
+- Не выполняется при активации новых карт (write-операция)
 
 **Server endpoints:**
 - crypto-service: `POST /api/v1/smart-cards/sign` (RSA-PSS-SHA256, server-key)

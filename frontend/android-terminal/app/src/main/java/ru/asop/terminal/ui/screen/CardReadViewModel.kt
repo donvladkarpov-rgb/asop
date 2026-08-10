@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ru.asop.terminal.db.SignatureVerifier
 import ru.asop.terminal.db.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.nfc.DesfireCardReader
@@ -22,7 +23,8 @@ import javax.inject.Inject
 class CardReadViewModel @Inject constructor(
     val nfcAdapter: NfcAdapter?,
     private val terminalKeyDao: TerminalKeyDao,
-    private val keyCryptor: TerminalKeyCryptor
+    private val keyCryptor: TerminalKeyCryptor,
+    private val signatureVerifier: SignatureVerifier
 ) : ViewModel() {
 
     data class UiState(
@@ -70,7 +72,7 @@ class CardReadViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val result = DesfireCardReader.read(tag)
             // Чтение ASOP identity (нужна отдельная IsoDep-сессия)
-            val identity = if (result.isDesfire && result.applications.any { it == aidHex }) {
+            val rawIdentity = if (result.isDesfire && result.applications.any { it.replace(" ", "") == aidHex }) {
                 _state.update { it.copy(identityLoading = true) }
                 val keys = terminalKeyDao.getActive(10)
                     .mapNotNull { e ->
@@ -79,6 +81,10 @@ class CardReadViewModel @Inject constructor(
                     }
                 DesfireCardReader.readAsopIdentity(tag, keys)
             } else null
+            val identity = if (rawIdentity != null && rawIdentity.protoBytes != null) {
+                val valid = signatureVerifier.verify(rawIdentity.protoBytes!!, rawIdentity.signatureBase64)
+                rawIdentity.copy(signatureValid = valid)
+            } else rawIdentity
 
             if (readId != readSequence) return@launch
             val current = _state.value.result

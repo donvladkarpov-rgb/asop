@@ -4,6 +4,13 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
+data class PublicKeyResponse(
+    @Json(name = "algorithm") val algorithm: String,
+    @Json(name = "format") val format: String,
+    @Json(name = "publicKeyBase64") val publicKeyBase64: String
+)
+
+@JsonClass(generateAdapter = true)
 data class AcceptedResponse(
     @Json(name = "eventId") val eventId: String,
     @Json(name = "topic") val topic: String,

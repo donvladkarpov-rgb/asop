@@ -41,7 +41,7 @@ class DesfireCardWriter {
      */
     fun writeIdentity(
         tag: Tag,
-        identityJson: ByteArray,
+        identityProto: ByteArray,
         signatureBase64: String,
         authKey: ByteArray,
         newKey: ByteArray
@@ -53,7 +53,6 @@ class DesfireCardWriter {
             iso.connect()
             iso.timeout = 3000
 
-            // 1. Auth в мастер PICC (AID 000000) текущим ключом слота 0.
             if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
                 return fail(steps, "SelectApplication(мастер PICC) не прошёл")
             }
@@ -63,22 +62,17 @@ class DesfireCardWriter {
             }
             steps += "authOK master PICC"
 
-            // 2. Смена ключа слота 0: authKey -> newKey.
             if (!changeKey(iso, newKey)) {
                 return fail(steps, "ChangeKey(slot0) не прошёл")
             }
             steps += "ChangeKey slot0 -> новый 3DES-ключ"
 
-            // 3. Создание ASOP-приложения AID 0xA05A01, 1 ключ, смена ключа разрешена.
-            // Если приложение уже существует (перерегистрация) — CreateApplication
-            // вернёт ошибку, и мы продолжаем (файлы/ключ могут быть обновлены).
             if (createApplication(iso, ASOP_AID)) {
                 steps += "ASOP-приложение создано"
             } else {
                 steps += "ASOP-приложение уже существует (создание пропущено)"
             }
 
-            // 4. Выбор ASOP-приложения + auth новым ключом.
             if (!selectApplication(iso, aidBytes(ASOP_AID))) {
                 return fail(steps, "SelectApplication(0xA05A01) не прошёл")
             }
@@ -87,18 +81,18 @@ class DesfireCardWriter {
             }
             steps += "authOK ASOP-приложение (newKey)"
 
-            // 5. Запись identity (file 0) и подписи (file 1).
-            // Создание файлов терпимо к уже существующим (перерегистрация).
-            if (createStdDataFile(iso, 0, IDENTITY_FILE_SIZE)) {
+            // File 0: proto card identity
+            if (createStdDataFile(iso, 0, PROTO_IDENTITY_FILE_SIZE)) {
                 steps += "file 0 создан"
             } else {
                 steps += "file 0 уже существует (создание пропущено)"
             }
-            if (!writeData(iso, 0, identityJson)) {
-                return fail(steps, "WriteData(file 0, identity) не прошёл")
+            if (!writeData(iso, 0, identityProto)) {
+                return fail(steps, "WriteData(file 0, identity proto) не прошёл")
             }
-            steps += "identity записан"
+            steps += "identity proto записан"
 
+            // File 1: signature (base64 of canonical JSON)
             if (createStdDataFile(iso, 1, SIGNATURE_FILE_SIZE)) {
                 steps += "file 1 создан"
             } else {
@@ -109,9 +103,9 @@ class DesfireCardWriter {
             }
             steps += "подпись записана"
 
-            // 6. Верификация чтением.
-            val readBackJson = readData(iso, 0)
-            if (readBackJson == null || !readBackJson.contentEquals(identityJson)) {
+            // Верификация чтением
+            val readBack = readData(iso, 0)
+            if (readBack == null || !readBack.contentEquals(identityProto)) {
                 return fail(steps, "верификация identity (file 0) не сошлась")
             }
             steps += "верификация identity OK"
@@ -205,10 +199,10 @@ class DesfireCardWriter {
      */
     fun reflashIdentity(
         iso: IsoDep,
-        identityJson: ByteArray,
+        identityProto: ByteArray,
         signatureBase64: String
     ): Boolean {
-        return writeData(iso, 0, identityJson) &&
+        return writeData(iso, 0, identityProto) &&
             writeData(iso, 1, signatureBase64.toByteArray(Charsets.UTF_8))
     }
 
@@ -219,7 +213,7 @@ class DesfireCardWriter {
      */
     fun reflashComplete(
         tag: Tag,
-        identityJson: ByteArray,
+        identityProto: ByteArray,
         signatureBase64: String,
         oldKey: ByteArray,
         newKey: ByteArray
@@ -231,20 +225,17 @@ class DesfireCardWriter {
             iso.connect()
             iso.timeout = 3000
 
-            // 1. мастер PICC auth рабочим ключом.
             if (!selectApplication(iso, byteArrayOf(0, 0, 0))) {
                 return fail(steps, "SelectApplication(мастер PICC) не прошёл")
             }
             if (!authenticate3k3des(iso, oldKey)) {
                 return fail(steps, "AuthenticateISO(рабочий ключ) не прошёл")
             }
-            // 2. Смена ключа мастера: рабочий → новейший 3DES.
             if (!changeKey(iso, newKey)) {
                 return fail(steps, "ChangeKey(мастер PICC) не прошёл")
             }
             steps += "ChangeKey master -> newKey"
 
-            // 3. ASOP-приложение, auth новым ключом.
             if (!selectApplication(iso, aidBytes(ASOP_AID))) {
                 return fail(steps, "SelectApplication(0xA05A01) не прошёл")
             }
@@ -253,14 +244,13 @@ class DesfireCardWriter {
             }
             steps += "authOK ASOP (newKey)"
 
-            // 4. Перезапись file 0/file 1.
-            if (!writeData(iso, 0, identityJson)) {
+            if (!writeData(iso, 0, identityProto)) {
                 return fail(steps, "WriteData(file 0) не прошёл")
             }
             if (!writeData(iso, 1, signatureBase64.toByteArray(Charsets.UTF_8))) {
                 return fail(steps, "WriteData(file 1) не прошёл")
             }
-            steps += "identity и подпись перезаписаны"
+            steps += "identity proto и подпись перезаписаны"
 
             return WriteResult(true, steps, null)
         } catch (e: IOException) {
@@ -545,7 +535,7 @@ class DesfireCardWriter {
     companion object {
         private const val TAG = "DesfireCardWriter"
         const val ASOP_AID = 0xA05A01
-        const val IDENTITY_FILE_SIZE = 2048
+        const val PROTO_IDENTITY_FILE_SIZE = 1024
         const val SIGNATURE_FILE_SIZE = 1024
         const val FILE_READ_LIMIT = 4096
 

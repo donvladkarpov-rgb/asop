@@ -2,6 +2,7 @@ package ru.asop.terminal.network
 
 import retrofit2.Response
 import retrofit2.http.Body
+import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
@@ -65,6 +66,9 @@ interface SyncApi {
     suspend fun activateCard(
         @Body request: CardActivateRequest
     ): Response<CardActivateResponse>
+
+    @GET("api/v1/sync/cards/by-uid/{uid}")
+    suspend fun getCardByUid(@Path("uid") uid: String): Response<CardByUidResponse>
 
     @POST("api/v1/sync/auth/root")
     suspend fun rootLogin(

@@ -7,6 +7,7 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.security.SecureRandom
+import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -90,7 +91,9 @@ object DesfireCardReader {
 
     data class AsopIdentity(
         val identityJson: String,
-        val signatureBase64: String
+        val signatureBase64: String,
+        val protoBytes: ByteArray? = null,
+        val signatureValid: Boolean? = null
     )
 
     data class ReadResult(
@@ -132,13 +135,22 @@ object DesfireCardReader {
                 if (!selectApp(iso, aidBytes(ASOP_AID))) continue
                 // Аутентификация в ASOP-приложении тем же ключом
                 if (!authenticate3k3des(iso, key)) continue
-                // Читаем файлы
-                val jsonBytes = readFile(iso, 0)
+                // Читаем файлы: File 0 = proto CardIdentity, File 1 = signature base64
+                val file0bytes = readFile(iso, 0)
                 val sigBytes = readFile(iso, 1)
-                if (jsonBytes == null || sigBytes == null) return null
-                val identityJson = jsonBytes.toString(Charsets.UTF_8)
+                if (file0bytes == null || sigBytes == null) return null
                 val signatureBase64 = sigBytes.toString(Charsets.UTF_8)
-                return AsopIdentity(identityJson, signatureBase64)
+
+                // Пробуем proto (новый формат), fallback на JSON (старый формат)
+                val identityJson = try {
+                    val p = ProtoCardIdentity.parseFrom(file0bytes)
+                    val rolesStr = p.rolesList.joinToString(",") { "\"$it\"" }
+                    """{"cardId":"${p.cardId}","uid":"${p.uid}","regionId":"${p.regionId}","organizerId":"${p.organizerId}","carrierId":"${p.carrierId}","cardsDistributorId":"${p.cardsDistributorId}","auditServiceId":"${p.auditServiceId}","userId":"${p.userId}","roles":[$rolesStr]}"""
+                } catch (e: Exception) {
+                    // Fallback: старый формат (UTF-8 JSON)
+                    file0bytes.toString(Charsets.UTF_8)
+                }
+                return AsopIdentity(identityJson, signatureBase64, protoBytes = file0bytes)
             }
             return null
         } catch (e: Exception) {

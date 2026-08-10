@@ -317,6 +317,12 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                     }
                     Spacer(Modifier.height(6.dp))
                     InfoRow("Подпись (RSA-PSS)", "${identity.signatureBase64.take(40)}...")
+                    identity.signatureValid?.let { valid ->
+                        InfoRow(
+                            "Верификация",
+                            if (valid) "OK — подпись верна" else "FAIL — подпись неверна"
+                        )
+                    }
                 }
 
             } else {

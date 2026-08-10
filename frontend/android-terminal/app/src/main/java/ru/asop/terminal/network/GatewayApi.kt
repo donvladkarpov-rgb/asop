@@ -56,4 +56,7 @@ interface GatewayApi {
 
     @GET("api/v1/sync/references/{eventId}/download")
     suspend fun downloadFullDump(@Path("eventId") eventId: String): Response<ResponseBody>
+
+    @GET("api/v1/keys/public")
+    suspend fun getPublicKey(): Response<PublicKeyResponse>
 }

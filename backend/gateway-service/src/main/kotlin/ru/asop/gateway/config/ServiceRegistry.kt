@@ -31,6 +31,7 @@ class ServiceRegistry {
         "fiscal" to svc("fiscal-service", 8090),
         "crypto" to svc("crypto-service", 8081),
         "smart-cards" to svc("crypto-service", 8081),
+        "keys" to svc("crypto-service", 8081),
         "regions" to svc("admin-service", 8091),
         "territories" to svc("admin-service", 8091),
         "organizers" to svc("admin-service", 8091),

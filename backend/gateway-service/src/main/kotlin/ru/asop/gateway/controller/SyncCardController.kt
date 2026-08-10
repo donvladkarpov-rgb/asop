@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
@@ -40,6 +42,13 @@ class SyncCardController(
         return proxy("cards", "/api/v1/cards/activate", body)
     }
 
+    @GetMapping("/api/v1/sync/cards/by-uid/{uid}")
+    fun getCardByUid(
+        @PathVariable uid: String
+    ): Mono<ResponseEntity<JsonNode>> {
+        return getProxy("cards", "/api/v1/cards/by-uid/$uid")
+    }
+
     private fun proxy(resource: String, path: String, body: JsonNode): Mono<ResponseEntity<JsonNode>> {
         val baseUrl = serviceRegistry.getBaseUrl(resource)
             ?: return Mono.just(ResponseEntity.notFound().build())
@@ -67,6 +76,36 @@ class SyncCardController(
             }
             .onErrorResume { err ->
                 log.error("Sync proxy failed {}: {}", targetUri, err.message)
+                Mono.just(ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                    .body(objectMapper.createObjectNode().put("error", err.message ?: "proxy failed")))
+            }
+    }
+
+    private fun getProxy(resource: String, path: String): Mono<ResponseEntity<JsonNode>> {
+        val baseUrl = serviceRegistry.getBaseUrl(resource)
+            ?: return Mono.just(ResponseEntity.notFound().build())
+        val targetUri = "$baseUrl$path"
+        log.debug("Proxying GET sync -> {}", targetUri)
+
+        return webClient.get()
+            .uri(targetUri)
+            .exchangeToMono { clientResponse ->
+                clientResponse.bodyToMono(String::class.java)
+                    .defaultIfEmpty("")
+                    .map { resp ->
+                        val status = clientResponse.statusCode()
+                        val node = if (resp.isNotBlank()) {
+                            runCatching { objectMapper.readTree(resp) }.getOrElse {
+                                objectMapper.createObjectNode().put("error", resp)
+                            }
+                        } else {
+                            objectMapper.createObjectNode()
+                        }
+                        ResponseEntity.status(status).body(node)
+                    }
+            }
+            .onErrorResume { err ->
+                log.error("Sync GET proxy failed {}: {}", targetUri, err.message)
                 Mono.just(ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                     .body(objectMapper.createObjectNode().put("error", err.message ?: "proxy failed")))
             }

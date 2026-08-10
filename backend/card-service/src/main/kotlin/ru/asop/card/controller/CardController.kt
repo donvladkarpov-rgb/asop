@@ -4,6 +4,7 @@ import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import org.springframework.data.relational.core.query.Criteria
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
@@ -16,6 +17,8 @@ import ru.asop.api.card.dto.response.CardActivateResponse
 import ru.asop.api.card.dto.response.CardResponse
 import ru.asop.card.config.DeltaSupport
 import ru.asop.card.model.CardEntity
+import ru.asop.card.model.CardMifareEntity
+import ru.asop.card.repository.CardMifareRepository
 import ru.asop.card.service.CardActivationService
 import ru.asop.card.service.CardService
 import java.security.Principal
@@ -25,7 +28,8 @@ import java.util.UUID
 class CardController(
     private val cardService: CardService,
     private val cardActivationService: CardActivationService,
-    private val template: R2dbcEntityTemplate
+    private val template: R2dbcEntityTemplate,
+    private val cardMifareRepository: CardMifareRepository
 ) : CardApi {
 
     override fun registerCard(
@@ -57,6 +61,20 @@ class CardController(
             .map { ResponseEntity.ok(it) }
     }
 
+    @GetMapping("/by-uid/{uid}")
+    fun getCardByUid(@PathVariable uid: String): Mono<ResponseEntity<CardByUidResponse>> {
+        val uidBytes = try {
+            val hex = uid.filter { it !in setOf(' ', '-') }
+            if (hex.length % 2 != 0) return Mono.just(ResponseEntity.badRequest().build())
+            hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        } catch (e: Exception) {
+            return Mono.just(ResponseEntity.badRequest().build())
+        }
+        return cardMifareRepository.findByUid(uidBytes)
+            .map { mifare -> ResponseEntity.ok(CardByUidResponse(mifare.cardId.toString(), uid)) }
+            .switchIfEmpty(Mono.just(ResponseEntity.notFound().build()))
+    }
+
     @GetMapping("/delta")
     fun listDelta(
         @RequestParam(required = false) versionSince: Long?,
@@ -74,3 +92,8 @@ class CardController(
             .all()
     }
 }
+
+data class CardByUidResponse(
+    val cardId: String,
+    val uid: String
+)

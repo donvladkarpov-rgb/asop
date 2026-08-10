@@ -22,6 +22,7 @@ class SyncPreferences(private val context: Context) {
         private val KEY_REGION_ID = stringPreferencesKey("region_id")
         private val KEY_TIMEZONE = stringPreferencesKey("timezone")
         private val KEY_DELTA_JOBS_ENABLED = booleanPreferencesKey("delta_jobs_enabled")
+        private val KEY_SERVER_PUBLIC_KEY = stringPreferencesKey("server_public_key")
     }
 
     val lastSyncTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
@@ -55,6 +56,10 @@ class SyncPreferences(private val context: Context) {
 
     val timezone: Flow<String?> = context.syncDataStore.data.map { prefs ->
         prefs[KEY_TIMEZONE]
+    }
+
+    val serverPublicKey: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_SERVER_PUBLIC_KEY]
     }
 
     suspend fun setLastSyncTime(time: Long) {
@@ -106,6 +111,12 @@ class SyncPreferences(private val context: Context) {
         context.syncDataStore.edit { prefs ->
             if (tz != null) prefs[KEY_TIMEZONE] = tz
             else prefs.remove(KEY_TIMEZONE)
+        }
+    }
+
+    suspend fun setServerPublicKey(pem: String) {
+        context.syncDataStore.edit { prefs ->
+            prefs[KEY_SERVER_PUBLIC_KEY] = pem
         }
     }
 }

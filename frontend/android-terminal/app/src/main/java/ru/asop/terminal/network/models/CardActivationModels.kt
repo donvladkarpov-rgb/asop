@@ -53,3 +53,9 @@ data class RootLoginRequest(
 data class RootLoginResponse(
     @Json(name = "userId") val userId: String
 )
+
+@JsonClass(generateAdapter = true)
+data class CardByUidResponse(
+    @Json(name = "cardId") val cardId: String,
+    @Json(name = "uid") val uid: String
+)

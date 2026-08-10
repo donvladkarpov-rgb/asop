@@ -21,6 +21,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.asop.terminal.activation.AsopCardType
 import ru.asop.terminal.activation.CardActivationMatrix
+import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
+import ru.asop.terminal.db.CardIdentityCodec
 import ru.asop.terminal.db.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.TerminalKeyDao
@@ -275,7 +277,10 @@ class CardActivationViewModel @Inject constructor(
             val identity = try {
                 if (writer.selectAsop(iso) && writer.authenticateAsop(iso, key)) {
                     writer.readStd(iso, 0)?.let { data ->
-                        runCatching { JSONObject(String(data, Charsets.UTF_8)) }.getOrNull()
+                        runCatching {
+                            val p = ProtoCardIdentity.parseFrom(data)
+                            CardIdentityCodec.toJson(p)
+                        }.getOrNull()
                     }
                 } else null
             } catch (e: Exception) { null }
@@ -698,6 +703,17 @@ class CardActivationViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 _state.update { it.copy(busy = true, message = "Формирование подписи…") }
+                val s1 = _state.value
+                // Для existing карт: получаем cardId с сервера
+                val serverCardId = if (s1.targetCardMode == "existing") {
+                    runCatching {
+                        val resp = syncApi.getCardByUid(s1.targetCardUid ?: "")
+                        if (resp.isSuccessful) resp.body()?.cardId else null
+                    }.getOrNull()
+                } else null
+                if (serverCardId != null) {
+                    _state.update { it.copy(previousIdentityJson = """{"cardId":"$serverCardId"}""") }
+                }
                 val identity = buildCanonicalIdentity(_state.value)
                 val canonical = canonicalString(identity)
 
@@ -735,7 +751,9 @@ class CardActivationViewModel @Inject constructor(
                 _state.update { it.copy(serverRegistered = true, message = "Карта зарегистрирована на сервере. Прошивка…") }
 
                 // 3. Прошивка карты.
-                val writeResult = provisionCard(canonical.toByteArray(Charsets.UTF_8), signatureBase64)
+                val identityJson = JSONObject(canonical)
+                val identityProto = CardIdentityCodec.fromJson(identityJson)
+                val writeResult = provisionCard(identityProto.toByteArray(), signatureBase64)
                 val ok = writeResult == null
                 val msg = when {
                     writeResult == null -> "Карта ${role} успешно активирована"

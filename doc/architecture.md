@@ -376,6 +376,31 @@ DRIVER: "CN={cardId}, OU=DRIVER:{carrierId}, O=ASOP"
 CONTROLLER: "CN={cardId}, OU=CONTROLLER:{carrierId}, O=ASOP"
 ```
 
+### Верификация подписей карт на терминале
+
+При регистрации терминала (cert-sign saga) терминал загружает публичный RSA-PSS ключ сервера:
+
+```
+CertificateService.provision()
+  → mtlsManager.generateKeyPair()
+  → POST /api/v1/terminals/cert-sign → polling → store cert
+  → GET /api/v1/keys/public → store PEM в SyncPreferences (DataStore)
+```
+
+Ключ хранится в DataStore (синхронное/preferences хранилище), загружается при старте.
+Формат: base64-encoded DER (X.509 SubjectPublicKeyInfo) в PEM-обёртке.
+Endpoint `GET /api/v1/keys/public` проксируется gateway → crypto-service (ServiceRegistry: keys).
+
+При чтении зарегистрированной карты (CardReadScreen) терминал:
+
+1. Читает File 0 (proto CardIdentity) и File 1 (RSA-PSS-SHA256 подпись)
+2. Строит canonical JSON из proto (тот же порядок ключей, что у сервера)
+3. Загружает публичный ключ из SyncPreferences
+4. Верифицирует подпись: `Signature.getInstance("RSASSA-PSS")` с `PSSParameterSpec("SHA-256","MGF1",MGF1ParameterSpec.SHA256,32,1)`
+5. Результат (`signatureValid: Boolean?`) отображается в UI
+
+Верификация НЕ выполняется при активации/регистрации карты (write-операция).
+
 ### 3DES-ключи на терминале (локальное AES-шифрование)
 
 3DES-ключи доставляются на терминал через дельту/полную выкачку (поле `asop_3des_keys = 43` в `DeltaChunk`). На устройстве они **перешифровываются** локальным AES-ключом, чтобы не хранить plaintext 3DES-материал в Room:
