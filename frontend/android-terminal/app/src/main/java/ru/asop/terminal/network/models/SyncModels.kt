@@ -23,11 +23,15 @@ data class SessionOpenRequest(
     @Json(name = "sessionTypeId") val sessionTypeId: String,
     @Json(name = "parentSessionId") val parentSessionId: String? = null,
     @Json(name = "terminalId") val terminalId: String? = null,
+    @Json(name = "tidId") val tidId: String? = null,                       // промпт 011
     @Json(name = "pathId") val pathId: String? = null,
     @Json(name = "vehicleId") val vehicleId: String? = null,
+    @Json(name = "openedByUserId") val openedByUserId: String? = null,     // промпт 011
+    @Json(name = "cardId") val cardId: String? = null,                     // VCM1 (промпт 008) + промпт 011
+    @Json(name = "carrierId") val carrierId: String? = null,               // промпт 011
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "timezone") val timezone: String? = null,
-    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008): cardId последней приложенной карты
+    @Json(name = "attributes") val attributes: String? = null              // JSON: {carry extra context}
 )
 
 @JsonClass(generateAdapter = true)
@@ -35,7 +39,7 @@ data class SessionCloseRequest(
     @Json(name = "reason") val reason: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "timezone") val timezone: String? = null,
-    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
+    @Json(name = "cardId") val cardId: String? = null              // карта-ключ того, кто закрывает смену
 )
 
 @JsonClass(generateAdapter = true)

@@ -22,7 +22,8 @@ import java.util.Locale
 fun MainScreen(
     terminalViewModel: TerminalViewModel = hiltViewModel(),
     syncViewModel: SyncViewModel = hiltViewModel(),
-    referenceSyncViewModel: ReferenceSyncViewModel = hiltViewModel()
+    referenceSyncViewModel: ReferenceSyncViewModel = hiltViewModel(),
+    sessionFlowViewModel: SessionFlowViewModel = hiltViewModel()
 ) {
     val terminalState by terminalViewModel.state.collectAsState()
     val terminal by terminalViewModel.terminalInfo.collectAsState()
@@ -33,6 +34,7 @@ fun MainScreen(
     val activeReferenceCount by referenceSyncViewModel.activeReferenceCount.collectAsState()
     val pendingDeltaCount by referenceSyncViewModel.pendingDeltaCount.collectAsState()
     val deltaProgress by referenceSyncViewModel.deltaProgress.collectAsState()
+    val sessionState by sessionFlowViewModel.state.collectAsState()
 
     LaunchedEffect(terminalId) {
         if (terminalId != null && terminal == null) {
@@ -62,62 +64,66 @@ fun MainScreen(
             )
         },
         bottomBar = {
-            val syncActive = pendingDeltaCount > 0 || deltaProgress != null
-            AnimatedVisibility(
-                visible = syncActive,
-                enter = slideInVertically { it },
-                exit = slideOutVertically { it }
-            ) {
-                Surface(
-                    tonalElevation = 2.dp,
-                    modifier = Modifier.fillMaxWidth()
+            Column {
+                // Промпт 011: постоянный informer о состоянии смены/рейса (поверх sync progress)
+                ShiftTripInformer(state = sessionState)
+                val syncActive = pendingDeltaCount > 0 || deltaProgress != null
+                AnimatedVisibility(
+                    visible = syncActive,
+                    enter = slideInVertically { it },
+                    exit = slideOutVertically { it }
                 ) {
-                    Column {
-                        val p = deltaProgress
-                        if (p != null && p.totalChunks > 0) {
-                            LinearProgressIndicator(
-                                progress = { p.fraction },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        } else {
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            if (p != null && p.totalChunks > 0 && p.fraction > 0f) {
-                                val estimated = (activeReferenceCount / p.fraction).toInt()
-                                Text(
-                                    text = "Справочники: $activeReferenceCount/$estimated строк",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "${p.currentChunk}/${p.totalChunks}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            } else if (pendingDeltaCount > 0) {
-                                Text(
-                                    text = "Справочники: $activeReferenceCount строк",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "Загрузка...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
+                    Surface(
+                        tonalElevation = 2.dp,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column {
+                            val p = deltaProgress
+                            if (p != null && p.totalChunks > 0) {
+                                LinearProgressIndicator(
+                                    progress = { p.fraction },
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             } else {
-                                Text(
-                                    text = "Справочники: $activeReferenceCount строк",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                if (p != null && p.totalChunks > 0 && p.fraction > 0f) {
+                                    val estimated = (activeReferenceCount / p.fraction).toInt()
+                                    Text(
+                                        text = "Справочники: $activeReferenceCount/$estimated строк",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "${p.currentChunk}/${p.totalChunks}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else if (pendingDeltaCount > 0) {
+                                    Text(
+                                        text = "Справочники: $activeReferenceCount строк",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "Загрузка...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Text(
+                                        text = "Справочники: $activeReferenceCount строк",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
                         }
                     }
@@ -266,6 +272,42 @@ internal fun InfoRow(label: String, value: String) {
         Text(
             text = value,
             style = MaterialTheme.typography.bodyLarge
+        )
+    }
+}
+
+/**
+ * Промпт 011: постоянный informer внизу экрана.
+ *  - SHIFT OPEN, TRIP CLOSED  → зелёный  «Смена открыта: {userFullName}».
+ *  - SHIFT OPEN, TRIP OPEN    → зелёный  «Рейс открыт: tid=…, vehicle=…».
+ *  - обе CLOSED               → серый    «Смена закрыта. Откройте смену».
+ */
+@Composable
+private fun ShiftTripInformer(state: SessionFlowViewModel.State) {
+    val shift = state.openShift
+    val trip = state.openTrip
+    val bg = when {
+        trip != null -> androidx.compose.ui.graphics.Color(0xFFD7F8D7)
+        shift != null -> androidx.compose.ui.graphics.Color(0xFFFFE8C5) // light amber
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val msg = when {
+        trip != null && shift != null -> "Рейс открыт: vehicle=${trip.vehicleId?.take(8) ?: "—"}, path=${trip.pathId?.take(8) ?: "—"}"
+        shift != null -> "Смена открыта: ${shift.openedByUserId?.take(8) ?: "—"}"
+        else -> "Смена закрыта. Откройте смену через меню."
+    }
+    Surface(
+        tonalElevation = 3.dp,
+        modifier = Modifier.fillMaxWidth(),
+        color = bg
+    ) {
+        Text(
+            text = msg,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            color = MaterialTheme.colorScheme.onSurface
         )
     }
 }

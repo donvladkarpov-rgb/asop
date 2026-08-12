@@ -604,9 +604,29 @@ Root CA (self-signed, ECC P-256, 10 лет)
 - Sync-CRUD (R2DBC, `R2dbcEntityTemplate.insert()` для новых), без Kafka. Gateway `ServiceRegistry` маппит `tids` → `carrier-service:8087`, `ProxyController` пересылает.
 
 **Транзакции:**
-- `ASOP_SESSIONS` — сессии (иерархические)
-- `ASOP_TRANSACTIONS` — финансовые проводки
+- `ASOP_SESSIONS` — сессии (иерархические, parent=shift, child=TRIP, parent=NULL=SHIFT)
+- `ASOP_TRANSACTIONS` — финансовые проводки (промпт 011: VALIDATION_ONLY result, amount=0)
 - `ASOP_CARD_DEBTS` — долги
+
+### Сессии водителя (промпт 011)
+
+Иерархия `3 уровня`: SHIFT → TRIP → TRANSACTIONS. `SESSION_TYPE_CODE` принимает значения:
+`SHIFT` (`…0601`), `BREAK` (`…0602`), `TRIP` (`…0603`).
+`TRANSACTION_TYPE_CODE='VALIDATION'` (`…0803`) +
+`TRANSACTION_RESULT_CODE='VALIDATION_ONLY'` (`…0903`) для MVP без списания.
+
+Идемпотентность: client генерирует UUIDv7 для sessionId/tripPaymentId → server
+`INSERT … ON CONFLICT (SESSION_ID) DO NOTHING` → нет дублей при offline retry.
+
+Матрица авторизации (prompt 011 §4 закрытие смены):
+- DRIVER (открыватель — он же)
+- DRIVER_B (любой водитель carrier_id == session.carrier_id)
+- CARRIER_DISPATCHER/KRS_DISPATCHER/CARRIER_ADMIN (того же carrier_id)
+- ORGANIZER_ADMIN (cascade через organizторов)
+- KRS_ADMIN (cascade через auditServiceId)
+- REGION_ADMIN/ADMIN/SUPER_ADMIN (глобальные)
+
+`ASOP_SESSIONS.ATTRIBUTES JSONB` хранит `carrierId/regionId/timezone`.
 
 **КРС:**
 - `ASOP_AUDIT_TASKS` — задания

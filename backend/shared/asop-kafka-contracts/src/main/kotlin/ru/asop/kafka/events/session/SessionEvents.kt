@@ -5,16 +5,20 @@ import java.time.Instant
 import java.util.UUID
 
 /**
- * Событие открытия сессии.
+ * Событие открытия сессии. Промпт 011: расширено parentSessionId, tidId, cardId, attributes.
  */
 data class SessionOpenedEvent(
     val sessionId: UUID,
     val sessionTypeId: UUID,
-    val terminalId: UUID?,
-    val pathId: UUID?,
-    val vehicleId: UUID?,
-    val openedByUserId: UUID?,
+    val parentSessionId: UUID? = null,
+    val terminalId: UUID? = null,
+    val tidId: UUID? = null,
+    val pathId: UUID? = null,
+    val vehicleId: UUID? = null,
+    val openedByUserId: UUID? = null,
+    val cardId: UUID? = null,
     val startedAt: Instant,
+    val attributes: String? = null,    // JSON: {carrierId, regionId, timezone, ...}
 
     override val aggregateType: String = "Session",
     override val causationId: UUID? = null,
@@ -33,7 +37,7 @@ data class SessionOpenedEvent(
 )
 
 /**
- * Событие закрытия сессии.
+ * Событие закрытия сессии. Промпт 011: расширено closedByUserId.
  */
 data class SessionClosedEvent(
     val sessionId: UUID,

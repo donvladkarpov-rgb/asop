@@ -71,10 +71,13 @@ class GpsTrackingService : android.app.Service() {
         override fun onLocationResult(result: LocationResult) {
             val location = result.lastLocation ?: return
             serviceScope.launch {
-                val session = sessionDao.getSessionForGps()
-                val sessionId = session?.id
-                val vehicleId = session?.vehicleId ?: ""
-                val pathId = session?.pathId ?: ""
+                // Промпт 011: GPS привязывается к SHIFT (parent root session), не к TRIP,
+                // чтобы отчёты оставались согласованными между открытыми/закрытыми рейсами в одной смене.
+                val shift = sessionDao.getCurrentOpenShift()
+                val trip = shift?.let { sessionDao.getCurrentOpenTrip(it.id) }
+                val sessionId = shift?.id
+                val vehicleId = trip?.vehicleId ?: ""
+                val pathId = trip?.pathId ?: ""
                 val report = GpsPositionReport(
                     vehicleId = vehicleId,
                     pathId = pathId,

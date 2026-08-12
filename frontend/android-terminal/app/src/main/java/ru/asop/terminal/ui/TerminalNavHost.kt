@@ -38,6 +38,10 @@ import kotlinx.coroutines.launch
 import ru.asop.terminal.ui.screen.AssignCarrierScreen
 import ru.asop.terminal.ui.screen.CardActivationScreen
 import ru.asop.terminal.ui.screen.CardReadScreen
+import ru.asop.terminal.ui.screen.OpenShiftScreen
+import ru.asop.terminal.ui.screen.CloseShiftScreen
+import ru.asop.terminal.ui.screen.OpenTripScreen
+import ru.asop.terminal.ui.screen.CloseTripScreen
 import ru.asop.terminal.ui.screen.MainScreen
 import ru.asop.terminal.ui.screen.ProvisioningScreen
 import ru.asop.terminal.ui.screen.ReferenceSyncViewModel
@@ -220,22 +224,34 @@ fun TerminalNavHost() {
                 NavigationDrawerItem(
                     label = { Text("Открыть смену") },
                     selected = false,
-                    onClick = { scope.launch { drawerState.close() } }
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("open-shift")
+                    }
                 )
                 NavigationDrawerItem(
                     label = { Text("Закрыть смену") },
                     selected = false,
-                    onClick = { scope.launch { drawerState.close() } }
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("close-shift")
+                    }
                 )
                 NavigationDrawerItem(
                     label = { Text("Открыть рейс") },
                     selected = false,
-                    onClick = { scope.launch { drawerState.close() } }
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("open-trip")
+                    }
                 )
                 NavigationDrawerItem(
                     label = { Text("Закрыть рейс") },
                     selected = false,
-                    onClick = { scope.launch { drawerState.close() } }
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("close-trip")
+                    }
                 )
             }
         }
@@ -284,6 +300,19 @@ fun TerminalNavHost() {
                     CardActivationScreen(
                         onBack = { navController.popBackStack() }
                     )
+                }
+                // Промпт 011: 4 сессионных экрана
+                composable("open-shift") {
+                    OpenShiftScreen(onConfirmed = { navController.popBackStack() })
+                }
+                composable("close-shift") {
+                    CloseShiftScreen(onConfirmed = { navController.popBackStack() })
+                }
+                composable("open-trip") {
+                    OpenTripScreen(onConfirmed = { navController.popBackStack() })
+                }
+                composable("close-trip") {
+                    CloseTripScreen(onConfirmed = { navController.popBackStack() })
                 }
             }
         }

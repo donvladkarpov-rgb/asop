@@ -169,6 +169,10 @@ object AppModule {
     @Singleton
     fun provideTerminalKeyDao(db: AppDatabase): TerminalKeyDao = db.terminalKeyDao()
 
+    @Provides
+    @Singleton
+    fun provideTripPaymentDao(db: AppDatabase): TripPaymentDao = db.tripPaymentDao()
+
     // --- DataStore ---
 
     @Provides

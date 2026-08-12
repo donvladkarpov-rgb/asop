@@ -9,6 +9,7 @@ import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.dao.SyncMetaDao
 import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.dao.TransactionDao
+import ru.asop.terminal.db.dao.TripPaymentDao
 import ru.asop.terminal.db.entity.DeltaSyncJobEntity
 import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.entity.ReferenceRowEntity
@@ -16,6 +17,7 @@ import ru.asop.terminal.db.entity.SessionEntity
 import ru.asop.terminal.db.entity.SyncMetaEntity
 import ru.asop.terminal.db.entity.TerminalKeyEntity
 import ru.asop.terminal.db.entity.TransactionEntity
+import ru.asop.terminal.db.entity.TripPaymentEntity
 
 @Database(
     entities = [
@@ -25,9 +27,10 @@ import ru.asop.terminal.db.entity.TransactionEntity
         SyncMetaEntity::class,
         DeltaSyncJobEntity::class,
         ReferenceRowEntity::class,
-        TerminalKeyEntity::class
+        TerminalKeyEntity::class,
+        TripPaymentEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +41,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun deltaSyncJobDao(): DeltaSyncJobDao
     abstract fun referenceRowDao(): ReferenceRowDao
     abstract fun terminalKeyDao(): TerminalKeyDao
+    abstract fun tripPaymentDao(): TripPaymentDao
 
     companion object {
         @Volatile

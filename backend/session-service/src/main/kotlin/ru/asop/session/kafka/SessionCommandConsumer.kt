@@ -59,43 +59,85 @@ class SessionCommandConsumer(
     private fun handleSessionOpened(event: SessionOpenedEvent, eventId: UUID) {
         log.info("Processing SessionOpenedEvent: sessionId={}", event.sessionId)
 
-        val sql = """INSERT INTO ASOP_SESSIONS 
-            (SESSION_ID, SESSION_TYPE_ID, PARENT_SESSION_ID, TERMINAL_ID, PATH_ID, VEHICLE_ID, 
-             STARTED_AT, CLOSED_AT, STARTED_AT_LOCAL, CLOSED_AT_LOCAL, EXPIRATION_TIME, STATUS) 
-            VALUES (:sessionId, :sessionTypeId, :parentSessionId, :terminalId, :pathId, :vehicleId, 
-                    :startedAt, NULL, :startedAtLocal, NULL, :expirationTime, :status)"""
+        // Промпт 011: 409 Conflict guard если открывается TRIP/рейс при наличии открытого TRIP
+        // в той же родительской SHIFT-смене. Проверяем, что нет уже открытой TRIP-сессии.
+        val parent0: UUID? = event.parentSessionId
+        val conflictCheckFuture: reactor.core.publisher.Mono<Void> = if (parent0 != null) {
+            val pid = parent0
+            db.sql("""
+                SELECT 1 FROM ASOP_SESSIONS
+                WHERE PARENT_SESSION_ID = :parentSessionId
+                  AND STATUS = 'IN_PROGRESS'
+                LIMIT 1
+            """)
+                .bind("parentSessionId", pid)
+                .fetch()
+                .rowsUpdated()
+                .flatMap { count ->
+                    if (count > 0L) {
+                        Mono.error<Void>(IllegalStateException(
+                            "409 Conflict: open TRIP/session already exists under parent=$pid"
+                        ))
+                    } else {
+                        Mono.empty<Void>()
+                    }
+                }
+        } else {
+            Mono.empty()
+        }
 
         val startedAt = event.startedAt
         val expirationTime = startedAt.plus(Duration.ofHours(8))
 
-        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
-            .bind("sessionId", event.sessionId)
-            .bind("sessionTypeId", event.sessionTypeId)
-            .bind("startedAt", startedAt)
-            .bind("startedAtLocal", startedAt)
-            .bind("expirationTime", expirationTime)
-            .bind("status", "IN_PROGRESS")
+        val insertSql = """INSERT INTO ASOP_SESSIONS 
+            (SESSION_ID, SESSION_TYPE_ID, PARENT_SESSION_ID, TERMINAL_ID, TID_ID, 
+             OPENED_BY_USER_ID, CARD_ID, PATH_ID, VEHICLE_ID, 
+             ATTRIBUTES, STARTED_AT, CLOSED_AT, STARTED_AT_LOCAL, CLOSED_AT_LOCAL, EXPIRATION_TIME, STATUS) 
+            VALUES (:sessionId, :sessionTypeId, :parentSessionId, :terminalId, :tidId, 
+                    :openedByUserId, :cardId, :pathId, :vehicleId, 
+                    :attributes, :startedAt, NULL, :startedAtLocal, NULL, :expirationTime, :status)
+            ON CONFLICT (SESSION_ID) DO NOTHING"""
 
-        val terminalId = event.terminalId
-        val pathId = event.pathId
-        val vehicleId = event.vehicleId
+        val builder: (DatabaseClient.GenericExecuteSpec) -> DatabaseClient.GenericExecuteSpec = { base ->
+            var spec = base
+                .bind("sessionId", event.sessionId)
+                .bind("sessionTypeId", event.sessionTypeId)
+                .bind("startedAt", startedAt)
+                .bind("startedAtLocal", startedAt)
+                .bind("expirationTime", expirationTime)
+                .bind("status", "IN_PROGRESS")
 
-        spec = if (terminalId != null) spec.bind("terminalId", terminalId)
-        else spec.bindNull("terminalId", UUID::class.java)
-        spec = if (pathId != null) spec.bind("pathId", pathId)
-        else spec.bindNull("pathId", UUID::class.java)
-        spec = if (vehicleId != null) spec.bind("vehicleId", vehicleId)
-        else spec.bindNull("vehicleId", UUID::class.java)
-        spec = spec.bindNull("parentSessionId", UUID::class.java)
+            val parent: UUID? = event.parentSessionId
+            val terminal: UUID? = event.terminalId
+            val tid: UUID? = event.tidId
+            val openedBy: UUID? = event.openedByUserId
+            val card: UUID? = event.cardId
+            val path: UUID? = event.pathId
+            val vehicle: UUID? = event.vehicleId
+            val attr: String? = event.attributes
 
-        spec.fetch().rowsUpdated()
+            spec = if (parent != null) spec.bind("parentSessionId", parent) else spec.bindNull("parentSessionId", UUID::class.java)
+            spec = if (terminal != null) spec.bind("terminalId", terminal) else spec.bindNull("terminalId", UUID::class.java)
+            spec = if (tid != null) spec.bind("tidId", tid) else spec.bindNull("tidId", UUID::class.java)
+            spec = if (openedBy != null) spec.bind("openedByUserId", openedBy) else spec.bindNull("openedByUserId", UUID::class.java)
+            spec = if (card != null) spec.bind("cardId", card) else spec.bindNull("cardId", UUID::class.java)
+            spec = if (path != null) spec.bind("pathId", path) else spec.bindNull("pathId", UUID::class.java)
+            spec = if (vehicle != null) spec.bind("vehicleId", vehicle) else spec.bindNull("vehicleId", UUID::class.java)
+            spec = if (attr != null) spec.bind("attributes", attr) else spec.bindNull("attributes", String::class.java)
+            spec
+        }
+
+        conflictCheckFuture.flatMap { _ ->
+            db.sql(insertSql).let(builder).fetch().rowsUpdated()
+        }
             .doOnSuccess {
                 log.info("Session saved: {}", event.sessionId)
                 publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "IN_PROGRESS"))
             }
             .doOnError { e ->
                 log.error("Failed to save session: {}", e.message, e)
-                publishFailed(eventId, e.message ?: "Save error")
+                val msg = e.message ?: "Save error"
+                publishFailed(eventId, if (msg.startsWith("409")) msg else msg)
             }
             .subscribe()
     }
@@ -105,14 +147,20 @@ class SessionCommandConsumer(
 
         sessionRepository.findById(event.sessionId)
             .switchIfEmpty(Mono.error(IllegalStateException("Session not found: ${event.sessionId}")))
-            .flatMap { existing ->
+            .flatMap { _ ->
                 val sql = """UPDATE ASOP_SESSIONS 
-                    SET STATUS = 'CLOSED', CLOSED_AT = :closedAt, CLOSED_AT_LOCAL = :closedAt 
-                    WHERE SESSION_ID = :sessionId"""
-                db.sql(sql)
+                    SET STATUS = 'CLOSED', 
+                        CLOSED_AT = :closedAt, 
+                        CLOSED_AT_LOCAL = :closedAt,
+                        CLOSED_BY_USER_ID = :closedByUserId
+                    WHERE SESSION_ID = :sessionId AND STATUS <> 'CLOSED'"""
+                val spec = db.sql(sql)
                     .bind("closedAt", event.closedAt)
                     .bind("sessionId", event.sessionId)
-                    .fetch().rowsUpdated()
+                val closed: UUID? = event.closedByUserId
+                val finalSpec = if (closed != null) spec.bind("closedByUserId", closed)
+                else spec.bindNull("closedByUserId", UUID::class.java)
+                finalSpec.fetch().rowsUpdated()
             }
             .doOnSuccess {
                 log.info("Session closed: {}", event.sessionId)

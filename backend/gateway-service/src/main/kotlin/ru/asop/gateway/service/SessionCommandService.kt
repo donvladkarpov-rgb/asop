@@ -39,11 +39,15 @@ class SessionCommandService(
             val event = SessionOpenedEvent(
                 sessionId = sessionId,
                 sessionTypeId = request.sessionTypeId,
+                parentSessionId = request.parentSessionId,
                 terminalId = request.terminalId,
+                tidId = request.tidId,
                 pathId = request.pathId,
                 vehicleId = request.vehicleId,
-                openedByUserId = null,
+                cardId = request.cardId,
+                openedByUserId = request.openedByUserId,
                 startedAt = Instant.now(),
+                attributes = request.attributes,
                 correlationId = correlationId
             )
 
@@ -81,6 +85,7 @@ class SessionCommandService(
             val event = SessionClosedEvent(
                 sessionId = id,
                 status = "CLOSED",
+                closedByUserId = principal?.name?.let { runCatching { UUID.fromString(it) }.getOrNull() },
                 reason = request.reason,
                 closedAt = Instant.now(),
                 correlationId = correlationId

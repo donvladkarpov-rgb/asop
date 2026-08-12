@@ -34,4 +34,50 @@ interface ReferenceRowDao {
 
     @Query("DELETE FROM reference_rows WHERE table_name = :tableName")
     suspend fun deleteByTable(tableName: String)
+
+    /**
+     * Промпт 011: lookup carrier_id для userId через таблицу user_carriers
+     * (joined into asop_user_carriers delta + applyChunk — payload JSON содержит {"userId":"...","carrierId":"..."}).
+     */
+    @Query("SELECT payload_json FROM reference_rows WHERE table_name = 'asop_user_carriers' AND deleted_at IS NULL AND payload_json LIKE '%' || :userId || '%' LIMIT 1")
+    suspend fun findUserCarrierRowRaw(userId: String): String?
+
+    /**
+     * SELECTs first carrier_id for given user from asop_user_carriers rows.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_user_carriers'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%' || :userId || '%'
+        LIMIT 1
+    """)
+    suspend fun rawUserCarriersFor(userId: String): String?
+
+/**
+     * Full name for user via asop_users row.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_users'
+          AND row_id = :userId
+          AND deleted_at IS NULL
+          LIMIT 1
+    """)
+    suspend fun rawUserByIdRow(userId: String): String?
+
+    /**
+     * Промпт 011: первый привязанный carrier для user (lookup через asop_user_carriers payload).
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_user_carriers'
+          AND deleted_at IS NULL
+          AND row_id LIKE :userId || '|%'
+        LIMIT 1
+    """)
+    suspend fun firstUserCarrierRow(userId: String): String?
 }

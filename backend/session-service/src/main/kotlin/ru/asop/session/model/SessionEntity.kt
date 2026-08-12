@@ -12,6 +12,10 @@ data class SessionEntity(
     val sessionTypeId: UUID,
     val parentSessionId: UUID? = null,
     val terminalId: UUID? = null,
+    val tidId: UUID? = null,
+    val openedByUserId: UUID? = null,
+    val closedByUserId: UUID? = null,
+    val cardId: UUID? = null,
     val pathId: UUID? = null,
     val vehicleId: UUID? = null,
     val status: String = "IN_PROGRESS",
@@ -19,5 +23,6 @@ data class SessionEntity(
     val closedAt: Instant? = null,
     val startedAtLocal: Instant = startedAt,
     val closedAtLocal: Instant? = null,
-    val expirationTime: Instant = startedAt.plus(java.time.Duration.ofHours(8))
+    val expirationTime: Instant = startedAt.plus(java.time.Duration.ofHours(8)),
+    val attributes: String? = null  // JSONB cast to String; carrierId/regionId stored in JSON
 )
