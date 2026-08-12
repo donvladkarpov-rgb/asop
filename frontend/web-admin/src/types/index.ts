@@ -24,10 +24,18 @@ export interface Card {
   id: string;
   uid: string;
   type: 'MIFARE' | 'bank';
+  /** Технология NFC-карты (промпт 007): "DESFIRE" (по умолчанию) или "CLASSIC". */
+  cardTech?: 'DESFIRE' | 'CLASSIC';
   status: 'active' | 'blocked' | 'expired';
   holderName?: string;
   issuedAt: string;
   expiresAt?: string;
+  /**
+   * VCM1 bitmask (промпт 008) для CLASSIC карт. Decoded из
+   * ASOP_CARD_MIFARES.IDENTITY_JSON (новый формат `format: VCM1`).
+   * Bit-0 = SUPER_ADMIN, Bit-1 = REGION_ADMIN, etc.
+   */
+  bitmask?: number;
 }
 
 export interface Session {

@@ -3,5 +3,5 @@ export * from './terminals';
 export * from './cards';
 export * from './reference';
 export * from './routes';
-export * from './threeDesKeys';
+export * from './asopKeys';
 export * from './configParams';

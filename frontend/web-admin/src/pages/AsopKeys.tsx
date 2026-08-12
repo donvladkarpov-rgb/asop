@@ -1,34 +1,34 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getThreeDesKeys, generateThreeDesKey, deleteThreeDesKey } from '../api/threeDesKeys';
-import type { ThreeDesKey } from '../types/reference';
+import { getAsopKeys, generateAsopKey, deleteAsopKey } from '../api/asopKeys';
+import type { AsopKey } from '../types/reference';
 
-export function ThreeDesKeysPage() {
+export function AsopKeysPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['three-des-keys'], queryFn: getThreeDesKeys });
+  const { data, isLoading, error } = useQuery({ queryKey: ['asop-keys'], queryFn: getAsopKeys });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const generateMut = useMutation({
-    mutationFn: generateThreeDesKey,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['three-des-keys'] }); setErrorMsg(null); },
+    mutationFn: generateAsopKey,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['asop-keys'] }); setErrorMsg(null); },
     onError: (e: any) => setErrorMsg(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'Ошибка генерации ключа'),
   });
   const deleteMut = useMutation({
-    mutationFn: deleteThreeDesKey,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['three-des-keys'] }),
+    mutationFn: deleteAsopKey,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['asop-keys'] }),
     onError: (e: any) => setErrorMsg(e?.response?.data?.error || e?.response?.data?.message || e?.message || 'Ошибка удаления'),
   });
 
   if (isLoading) return <div>Загрузка...</div>;
   if (error) return <div>Ошибка: {(error as Error).message}</div>;
 
-  const display = (d: ThreeDesKey) =>
+  const display = (d: AsopKey) =>
     d.keyMaterial && d.keyMaterial.length > 18 ? `${d.keyMaterial.slice(0, 12)}…${d.keyMaterial.slice(-8)}` : (d.keyMaterial || '—');
 
   return (
     <div>
       <div className="page-header">
-        <h1>3DES-ключи карт</h1>
+        <h1>Ключи АСОП</h1>
         <button className="btn-primary" onClick={() => generateMut.mutate()} disabled={generateMut.isPending}>
           {generateMut.isPending ? 'Генерация…' : '+ Сгенерировать'}
         </button>

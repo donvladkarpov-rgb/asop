@@ -152,7 +152,7 @@ export interface BenefitStep {
   periodType: string;
 }
 
-export interface ThreeDesKey {
+export interface AsopKey {
   keyId: string;
   keyMaterial: string;
   createdAt: string;

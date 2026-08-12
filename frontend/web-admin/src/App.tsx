@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DashboardLayout } from './layouts/DashboardLayout';
 import { DashboardPage } from './pages/Dashboard';
-import { UsersPage } from './pages/Users';
 import { TerminalsPage } from './pages/Terminals';
 import { CardsPage } from './pages/Cards';
 import { RegionsPage } from './pages/Regions';
@@ -42,7 +41,7 @@ import { UserRegionsPage } from './pages/security/UserRegionsPage';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
-import { ThreeDesKeysPage } from './pages/ThreeDesKeys';
+import { AsopKeysPage } from './pages/AsopKeys';
 import { ConfigParamsPage } from './pages/ConfigParams';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
@@ -82,7 +81,6 @@ function AppRoutes() {
         }
       >
         <Route index element={<DashboardPage />} />
-        <Route path="users" element={<UsersPage />} />
         <Route path="terminals" element={<TerminalsPage />} />
         <Route path="cards" element={<CardsPage />} />
         <Route path="regions" element={<RegionsPage />} />
@@ -119,7 +117,7 @@ function AppRoutes() {
         <Route path="user-roles" element={<UserRolesPage />} />
         <Route path="user-carriers" element={<UserCarriersPage />} />
         <Route path="user-regions" element={<UserRegionsPage />} />
-        <Route path="three-des-keys" element={<ThreeDesKeysPage />} />
+        <Route path="asop-keys" element={<AsopKeysPage />} />
         <Route path="config-params" element={<ConfigParamsPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>

@@ -5,7 +5,6 @@ import { useAuth } from '../auth/useAuth';
 
 const navItems = [
   { to: '/', label: 'Панель управления', icon: '📊' },
-  { to: '/users', label: 'Пользователи', icon: '👥' },
   { to: '/terminals', label: 'Терминалы', icon: '💳' },
   { to: '/cards', label: 'Карты', icon: '🪪' },
   { to: '/sessions', label: 'Смены', icon: '🔐' },
@@ -46,7 +45,7 @@ const refItems = [
 ];
 
 const keyItems = [
-  { to: '/three-des-keys', label: '3DES-ключи', icon: '🔐' },
+  { to: '/asop-keys', label: 'Ключи АСОП', icon: '🔐' },
   { to: '/config-params', label: 'Параметры АСОП', icon: '⚙️' },
 ];
 
