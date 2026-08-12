@@ -96,6 +96,36 @@ object DesfireCardReader {
         val signatureValid: Boolean? = null
     )
 
+    data class ClassicInfo(
+        val sectorCount: Int,
+        val typeLabel: String,
+        val keyFoundFirstBytes: String?,
+        val block0Content: String?,
+        /**
+         * Полный дамп sectors 1..15 (Classic 1K) или 1..15 (Classic 4K, sectors 0 пропущены —
+         * manufacturer block). Каждый sector — список блоков 16-байт hex.
+         * Если сектор не удалось auth прочитать, его секция пустая + сообщение в `notes`.
+         * Auth-логика как в `MifareClassicCardWriter.readStream`: factory → ASOP (key A/B).
+         */
+        val allBlocks: Map<Int, List<String>> = emptyMap(),
+        /**
+         * Лейбл ключа, которым прочитан trailer каждого сектора. Ключ карты — sector,
+         * value — "factory FF" / "factory A0" / "factory D3F7" / "ASOP 00 01 …".
+         * Если auth не прошёл, entry отсутствует.
+         */
+        val trailerKeyLabels: Map<Int, String> = emptyMap(),
+        /**
+         * Расшифрованный VCM1-ASOP cardIdentity (промпт 008), если получилось прочитать
+         * sector 1 block 0..2 и валидный "VCM1" magic. VCM1 — unsigned формат: сервер-side
+         * cardId whitelist в `/sync/cardauth` обеспечивает protection.
+         *
+         * Legacy: для backward-compat `sac1Identity` оставлено как alias — оно null для VCM1.
+         */
+        @Deprecated("Use vcm1Identity — SAC1 is no longer used for Classic cards (промпт 008)")
+        val sac1Identity: AsopIdentity? = null,
+        val vcm1Identity: ru.asop.terminal.activation.CardIdentityVcm1? = null
+    )
+
     data class ReadResult(
         val techs: List<String>,
         val uid: String,
@@ -111,7 +141,9 @@ object DesfireCardReader {
         val auth: DesfireAuthProbe.AuthResult? = null,
         val identity: AsopIdentity? = null,
         val notes: List<String>,
-        val error: String?
+        val error: String?,
+        val isClassic: Boolean = false,
+        val classicInfo: ClassicInfo? = null
     ) {
         val isDesfire: Boolean get() = version != null
     }

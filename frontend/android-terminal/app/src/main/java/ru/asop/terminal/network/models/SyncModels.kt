@@ -26,14 +26,16 @@ data class SessionOpenRequest(
     @Json(name = "pathId") val pathId: String? = null,
     @Json(name = "vehicleId") val vehicleId: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008): cardId последней приложенной карты
 )
 
 @JsonClass(generateAdapter = true)
 data class SessionCloseRequest(
     @Json(name = "reason") val reason: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )
 
 @JsonClass(generateAdapter = true)
@@ -65,7 +67,8 @@ data class CardBlockRequest(
     @Json(name = "reason") val reason: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "carrierId") val carrierId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )
 
 @JsonClass(generateAdapter = true)
@@ -83,7 +86,8 @@ data class DebtCreateRequest(
 data class DebtRecoverRequest(
     @Json(name = "carrierId") val carrierId: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )
 
 @JsonClass(generateAdapter = true)
@@ -93,7 +97,8 @@ data class FiscalReceiptRequest(
     @Json(name = "description") val description: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "carrierId") val carrierId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )
 
 @JsonClass(generateAdapter = true)
@@ -103,7 +108,8 @@ data class AuditTaskCreateRequest(
     @Json(name = "carrierId") val carrierId: String? = null,
     @Json(name = "description") val description: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )
 
 @JsonClass(generateAdapter = true)
@@ -117,5 +123,6 @@ data class GpsPositionReport(
     @Json(name = "recordedAt") val recordedAt: String,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "carrierId") val carrierId: String? = null,
-    @Json(name = "timezone") val timezone: String? = null
+    @Json(name = "timezone") val timezone: String? = null,
+    @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )

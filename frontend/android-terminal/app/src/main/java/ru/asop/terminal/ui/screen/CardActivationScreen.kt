@@ -8,18 +8,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Nfc
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -31,7 +36,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -57,6 +64,8 @@ fun CardActivationScreen(
 
     // Reader mode держим включённым на всех шагах, где может понадобиться NFC:
     // авторизация картой, прикладывание целевой карты, прошивка.
+    // В Step.Success — отключаем NFC-reader, чтобы любое новое прикладывание
+    // карты не обрабатывалось (активация уже завершена).
     val needsNfc = state.step == CardActivationViewModel.Step.AuthForm ||
         state.step == CardActivationViewModel.Step.TargetCard ||
         state.step == CardActivationViewModel.Step.ReferenceForm ||
@@ -119,8 +128,9 @@ fun CardActivationScreen(
                     CardActivationViewModel.Step.NetworkCheck -> NfcListeningCard(state, viewModel)
                     CardActivationViewModel.Step.ReferenceForm -> ReferenceForm(state, viewModel)
                     CardActivationViewModel.Step.Busy -> BusyCard(state)
-                    CardActivationViewModel.Step.Error -> ErrorCard(state.message, viewModel)
+                    CardActivationViewModel.Step.Error -> ErrorCard(state, viewModel)
                     CardActivationViewModel.Step.Done -> DoneCard(state, viewModel)
+                    CardActivationViewModel.Step.Success -> SuccessCard(state, viewModel)
                 }
             }
         }
@@ -312,12 +322,27 @@ private fun ReferenceForm(
         state.message.takeIf { it.isNotBlank() }?.let {
             Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        // Промпт 009 AC2: блокировка "Активировать карту" если cascade пустой
+        // (selectedUserId == null и роли требуют userId). PASSENGER_ANONYMOUS — исключение,
+        // entity=null допустимо без user search.
+        val isAnonymousPassenger = state.cardType == AsopCardType.PASSENGER_ANONYMOUS
+        val requiresUserId = !isAnonymousPassenger
+        val userSelected = !state.selectedUserId.isNullOrBlank()
+        val canActivate = !state.busy && (isAnonymousPassenger || userSelected)
         Button(
             onClick = viewModel::runActivation,
             modifier = Modifier.fillMaxWidth(),
-            enabled = !state.busy
+            enabled = canActivate
         ) {
             Text(if (state.targetCardMode == "existing") "Перезаписать карту" else "Активировать карту")
+        }
+        if (requiresUserId && !userSelected) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "⚠ Выберите сотрудника (userId) из списка выше — обязательное поле для роли ${state.cardType?.role ?: "?"}",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }
@@ -327,7 +352,28 @@ private fun UserSearchField(
     state: CardActivationViewModel.UiState,
     viewModel: CardActivationViewModel
 ) {
+    val focusManager = LocalFocusManager.current
+    val allUsers = viewModel.filteredUsers()
+    val selected = allUsers.firstOrNull { it.id == state.selectedUserId }
+
     Column {
+        if (selected != null) {
+            // Визуальное подтверждение выбора — chip над полем поиска.
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AssistChip(
+                    onClick = {},
+                    label = { Text("👤 ${selected.label}") },
+                    leadingIcon = { Icon(Icons.Default.Check, contentDescription = null) },
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                IconButton(onClick = { viewModel.selectUser("") /* пустой id = сброс */ }) {
+                    Icon(Icons.Default.Close, contentDescription = "Сбросить выбор")
+                }
+            }
+        }
         OutlinedTextField(
             value = state.userQuery,
             onValueChange = viewModel::onUserQueryChanged,
@@ -335,21 +381,45 @@ private fun UserSearchField(
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
-        val filtered = viewModel.filteredUsers().filter {
+        val filtered = allUsers.filter {
             state.userQuery.isBlank() || it.label.contains(state.userQuery, ignoreCase = true)
-        }.take(20)
+        }.take(15)
         if (filtered.isNotEmpty()) {
-            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp)) {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 items(filtered.size) { i ->
                     val user = filtered[i]
-                    ListItem(
-                        headlineContent = { Text(user.label) },
+                    val isSelected = user.id == state.selectedUserId
+                    Card(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { viewModel.selectUser(user.id) }
-                    )
+                            .clickable {
+                                viewModel.selectUser(user.id)
+                                focusManager.clearFocus()
+                            },
+                        colors = if (isSelected) CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        ) else CardDefaults.cardColors()
+                    ) {
+                        ListItem(
+                            headlineContent = { Text(user.label) },
+                            trailingContent = if (isSelected) {
+                                { Icon(Icons.Default.Check, contentDescription = "Выбран") }
+                            } else null,
+                            colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+                        )
+                    }
                 }
             }
+        } else {
+            Text(
+                "Нет пользователей по запросу «${state.userQuery}»",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 8.dp)
+            )
         }
     }
 }
@@ -438,7 +508,7 @@ private fun DoneCard(state: CardActivationViewModel.UiState, viewModel: CardActi
 }
 
 @Composable
-private fun ErrorCard(message: String, viewModel: CardActivationViewModel) {
+private fun ErrorCard(state: CardActivationViewModel.UiState, viewModel: CardActivationViewModel) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(24.dp),
@@ -446,10 +516,116 @@ private fun ErrorCard(message: String, viewModel: CardActivationViewModel) {
         ) {
             Text("Ошибка", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(8.dp))
-            Text(message, style = MaterialTheme.typography.bodyMedium)
+            // Промпт 009 fix: показываем конкретную причину из finalResult/lastReceiptEntry,
+            // а не просто stuck busy-message типа "Регистрация VCM1 на сервере...".
+            val cause: String = state.finalResult?.takeIf { it.isNotBlank() }
+                ?: state.receiptEntries.lastOrNull()?.text?.takeIf { it.startsWith("Ошибка") }
+                ?: state.message.takeIf { it.isNotBlank() }
+                ?: "Неизвестная ошибка"
+            Text(cause, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(16.dp))
             Button(onClick = viewModel::reset) {
                 Text("Назад к выбору типа")
+            }
+        }
+    }
+}
+
+/**
+ * Финальный success-state после успешной прошивки карты:
+ *   1. Большая зелёная галочка (Check icon в successContainer)
+ *   2. Краткий текст "Карта успешно активирована"
+ *   3. Подробности (role + UID карты + кнопка "Активировать ещё одну" → reset())
+ *
+ * Здесь же выключается NFC-reader (`needsNfc = false` в CardActivationScreen)
+ * и `onTagDiscovered` игнорирует тап — чтобы случайное прикладывание карты
+ * не сбросило экран успеха.
+ */
+@Composable
+private fun SuccessCard(state: CardActivationViewModel.UiState, viewModel: CardActivationViewModel) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Default.CheckCircle,
+                contentDescription = "Карта успешно прошита",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(80.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Карта успешно активирована",
+                style = MaterialTheme.typography.headlineSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(4.dp))
+            state.targetCardUid?.let { uid ->
+                Text(
+                    "UID: $uid",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+            state.cardType?.let { type ->
+                Text("Роль: ${type.role}", style = MaterialTheme.typography.bodyMedium)
+            }
+
+            // Чек операции (промпт 008 UX).
+            if (state.receiptEntries.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                ReceiptCard(state.receiptEntries)
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = viewModel::reset) {
+                Text("Активировать ещё одну карту")
+            }
+        }
+    }
+}
+
+/**
+ * Промпт 008 UX: чек операции — список шагов с таймстампами, которые терминал
+ * прошёл во время активации. Рендерится на экране после успешной записи карты.
+ * Никаких промежуточных звуков — только один success-тон в конце.
+ */
+@Composable
+private fun ReceiptCard(entries: List<CardActivationViewModel.ReceiptEntry>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                "Чек операции",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(6.dp))
+            entries.forEach { entry ->
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    Text(
+                        entry.time,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        entry.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
         }
     }

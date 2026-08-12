@@ -84,6 +84,13 @@ class TerminalViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = UiState.Registering
             try {
+                // Авто-переподписать сертификат если PEM потерян (например после uninstall).
+                // keyPair в AndroidKeyStore сохранён, но PEM-сертификат — в SharedPreferences.
+                if (!mtlsManager.hasCertificate() && mtlsManager.hasKeyPair()) {
+                    certificateService.refreshCertificate(androidId)
+                } else if (!mtlsManager.hasCertificate()) {
+                    certificateService.provision(androidId)
+                }
                 val savedTerminalId = terminalId.value
                 val registerResponse = gatewayApi.registerTerminal(
                     TerminalRegisterRequest(

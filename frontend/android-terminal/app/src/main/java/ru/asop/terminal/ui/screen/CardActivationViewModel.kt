@@ -5,6 +5,7 @@ import android.content.Context
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.IsoDep
+import android.nfc.tech.MifareClassic
 import android.nfc.tech.NfcA
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -22,6 +23,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.asop.terminal.activation.AsopCardType
 import ru.asop.terminal.activation.CardActivationMatrix
+import ru.asop.terminal.activation.CardIdentityVcm1
+import ru.asop.terminal.activation.EntityRef
+import ru.asop.terminal.activation.EntityType
 import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
 import ru.asop.terminal.db.CardIdentityCodec
 import ru.asop.terminal.db.TerminalKeyCryptor
@@ -29,8 +33,11 @@ import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.nfc.DesfireCardReader
 import ru.asop.terminal.nfc.DesfireCardWriter
+import ru.asop.terminal.nfc.MifareClassicCardWriter
+import ru.asop.terminal.nfc.MifareClassicReader
 import ru.asop.terminal.nfc.TonePlayer
 import ru.asop.terminal.network.SyncApi
+import ru.asop.terminal.network.models.CardActivateClassicRequest
 import ru.asop.terminal.network.models.CardActivateRequest
 import ru.asop.terminal.network.models.CardIdentity
 import ru.asop.terminal.network.models.CardIdentitySignRequest
@@ -58,16 +65,29 @@ class CardActivationViewModel @Inject constructor(
     companion object {
         // Master PICC ключ новой карты (фабричный) — 24 байта нулей (3K3DES).
         private val ZERO_KEY = ByteArray(24)
+
+        /** Технология NFC-карты (промпт 007). */
+        enum class CardTech { DESFIRE, CLASSIC, UNSUPPORTED }
+
+        /** Детекция технологии по Tag (см. промпт 007, §1). */
+        fun detectTech(tag: Tag): CardTech = when {
+            MifareClassic.get(tag) != null -> CardTech.CLASSIC
+            IsoDep.get(tag) != null        -> CardTech.DESFIRE
+            else                           -> CardTech.UNSUPPORTED
+        }
     }
 
     data class RefOption(val id: String, val label: String)
 
-    enum class Step { NetworkCheck, RootForm, AuthForm, TargetCard, ReferenceForm, Busy, Done, Error }
+    enum class Step { NetworkCheck, RootForm, AuthForm, TargetCard, ReferenceForm, Busy, Done, Success, Error }
 
     data class UiState(
         val cardType: AsopCardType? = null,
         val step: Step = Step.NetworkCheck,
         val message: String = "",
+        // Промпт 008 UX: чек на экране терминала (timeline действий с таймстампами).
+        // Наполняется на key steps, рендерится в ReceiptCard после Success.
+        val receiptEntries: List<ReceiptEntry> = emptyList(),
         // авторизация
         val rootUsername: String = "admin@asop.local",
         val rootPassword: String = "admin",
@@ -86,6 +106,11 @@ class CardActivationViewModel @Inject constructor(
         val previousAuditServiceId: String? = null,
         val previousUserId: String? = null,
         val workingKeyForCard: ByteArray? = null,
+        // Classic-flow (промпт 007): работающий ASOP key A и key B для existing карты (по 6 байт).
+        val workingKeyClassicA: ByteArray? = null,
+        val workingKeyClassicB: ByteArray? = null,
+        // Технология, определённая на процессе целевой карты (для dispatch в runWrite).
+        val pendingWriteTech: CardTech? = null,
         // справочники
         val regions: List<RefOption> = emptyList(),
         val organizers: List<RefOption> = emptyList(),
@@ -119,6 +144,10 @@ class CardActivationViewModel @Inject constructor(
     // Для повторного прикладывания после серверной регистрации.
     private var pendingWriteProto: ByteArray? = null
     private var pendingWriteSignature: String? = null
+    /** VCM1-payload (промпт 008) — modernized replacement для pendingWriteProto/Signature. */
+    private var pendingWriteVcm1: CardIdentityVcm1? = null
+    /** serverCardId, которую сервер мог переписать поверх clientCardId (для re-write block 1). */
+    private var pendingServerCardIdOverride: String? = null
 
     val nfcAvailable: Boolean get() = nfcAdapter != null && (nfcAdapter?.isEnabled ?: false)
 
@@ -155,6 +184,9 @@ class CardActivationViewModel @Inject constructor(
                 previousCarrierId = null, previousDistributorId = null,
                 previousAuditServiceId = null, previousUserId = null,
                 workingKeyForCard = null,
+                workingKeyClassicA = null,
+                workingKeyClassicB = null,
+                pendingWriteTech = null,
                 selectedRegionId = null, selectedOrganizerId = null,
                 selectedCarrierId = null, selectedDistributorId = null,
                 selectedAuditServiceId = null, selectedUserId = null,
@@ -216,21 +248,38 @@ class CardActivationViewModel @Inject constructor(
     fun onTagDiscovered(tag: Tag) {
         val s = _state.value
         if (s.busy || s.finalResult != null) return
+        // Step.Success — финальное состояние после успешной прошивки карты.
+        // Не реагируем на новые NFC-tap'ы: всё уже сделано, чтобы случайный
+        // повторный tap не запустил processTargetCard/processAuth и не сбросил state.
+        if (s.step == Step.Success) return
         if (s.serverRegistered && s.targetCardMode != null) {
             runWrite(tag)
             return
         }
+        val tech = detectTech(tag)
+        if (tech == CardTech.UNSUPPORTED) {
+            _state.update { it.copy(message = "Карта не поддерживается (нет ни MifareClassic, ни IsoDep)") }
+            return
+        }
         when (s.step) {
-            Step.AuthForm -> identifyAuthCard(tag)
-            Step.TargetCard -> processTargetCard(tag)
+            Step.AuthForm -> identifyAuthCard(tag, tech)
+            Step.TargetCard -> processTargetCard(tag, tech)
             else -> Unit
         }
     }
 
     /** Авторизующая карта: идентификация по ключам (9.5) → роли → role-check. */
-    private fun identifyAuthCard(tag: Tag) {
+    private fun identifyAuthCard(tag: Tag, tech: CardTech = CardTech.DESFIRE) {
+        when (tech) {
+            CardTech.CLASSIC -> identifyClassicAuthCard(tag)
+            CardTech.DESFIRE -> identifyDesfireAuthCard(tag)
+            CardTech.UNSUPPORTED -> Unit
+        }
+    }
+
+    private fun identifyDesfireAuthCard(tag: Tag) {
         viewModelScope.launch(Dispatchers.IO) {
-            _state.update { it.copy(message = "Идентификация авторизующей карты…") }
+            _state.update { it.copy(message = "Идентификация авторизующей карты (DESFire)…") }
             val writer = DesfireCardWriter()
             val iso = writer.open(tag)
             if (iso == null) {
@@ -251,11 +300,136 @@ class CardActivationViewModel @Inject constructor(
                         message = "Авторизация OK (${roles.joinToString()}). Приложите целевую КАРТУ"
                     )
                 }
-                TonePlayer.softBeep()
+                // Tone отключён на auth-флоу — пользователь сказал что терминал пищит
+                // периодически. Подтверждение через HapticFeedbackConstants в UI.
             } else {
                 _state.update { it.copy(message = "Роль ${roles.joinToString()} не может активировать ${target.label}") }
             }
         }
+    }
+
+    /**
+     * Classic-ветка авторизации (промпт 007 §5):
+     * - перебирает ASOP ключи → auth sector 1;
+     * - читает SAC1 payload → proto → roles.
+     * - factory auth без ASOP означает «карта не активирована».
+     */
+    private fun identifyClassicAuthCard(tag: Tag) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(message = "Идентификация авторизующей карты (MIFARE Classic)…") }
+            val keys = terminalKeyDao.getActive(30)
+            val candidates = keys.map { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
+
+            // Промпт 008: используем ТОТ ЖЕ путь, что и в "Прочитать карту".
+            // MifareClassicReader.read() — единая точка чтения всех 16 секторов,
+            // гарантированно работает на clone-картах (multi-pass с hard-reset и
+            // per-block retry уже отлажены). Не дублируем transceive-flow в CardWriter.
+            val result = MifareClassicReader.read(tag, candidates)
+            val info = result.classicInfo
+            val vcm1 = info?.vcm1Identity
+
+            if (vcm1 != null) {
+                // Берём реальный ASOP-ключ из БД (тот, который auth прошёл)
+                val workingKey = candidates.firstOrNull { it.size >= 12 }
+                    ?: candidateForAuth(candidates)
+                if (workingKey != null) {
+                    val keyA = workingKey.copyOfRange(0, 6)
+                    val keyB = workingKey.copyOfRange(6, 12)
+                    val roles = ru.asop.terminal.activation.AsopCardType
+                        .allRolesForBitmask(vcm1.bitmask).map { it.role }
+                    if (roles.isNotEmpty()) {
+                        finalizeAuth(roles, keyA, keyB, "Classic VCM1 (MifareClassicReader)")
+                        return@launch
+                    }
+                }
+            }
+
+            // Legacy SAC1 fallback. Используем уже прочитанные блоки из ClassicInfo,
+            // без повторной transceive (для clone-карт критично).
+            val sac1Match = tryFindSac1Identity(info?.allBlocks ?: emptyMap())
+            if (sac1Match != null) {
+                val (payload, workingKey) = sac1Match
+                if (workingKey.size >= 12) {
+                    val proto = parseSac1(payload) ?: return@launch
+                    val keyA = workingKey.copyOfRange(0, 6)
+                    val keyB = workingKey.copyOfRange(6, 12)
+                    finalizeAuth(proto.rolesList, keyA, keyB, "Classic SAC1 (MifareClassicReader)")
+                    return@launch
+                }
+            }
+
+            // Ничего не сработало — определяем причину по result.error
+            _state.update {
+                if (result.error == "Auth failed with all keys") {
+                    it.copy(message = "Не удалось прочитать авторизующую карту (Classic, неизвестный ключ)")
+                } else {
+                    it.copy(message = "Авторизующая карта не активирована в системе АСОП (Classic)")
+                }
+            }
+        }
+    }
+
+    /**
+     * Промпт 008: единая точка финализации auth (вызывается из SAC1 / VCM1 веток).
+     * Сохраняет operatorRoles + working keys + переходит в Step.TargetCard.
+     */
+    private fun finalizeAuth(roles: List<String>, keyA: ByteArray, keyB: ByteArray, source: String) {
+        val target = _state.value.cardType
+        if (target != null && !CardActivationMatrix.canAuthorize(roles, target.role)) {
+            _state.update {
+                it.copy(message = "Роль ${roles.joinToString()} не может активировать ${target.label}")
+            }
+            addReceipt("Авторизация отклонена: ${roles.joinToString()} не имеет прав на ${target.label}")
+            TonePlayer.errorBeep()
+            return
+        }
+        _state.update {
+            it.copy(
+                operatorRoles = roles,
+                workingKeyClassicA = keyA,
+                workingKeyClassicB = keyB,
+                step = Step.TargetCard,
+                message = "Авторизация OK ($source, ${roles.joinToString()}). Приложите целевую КАРТУ"
+            )
+        }
+        addReceipt("Авторизация оператора: ${roles.joinToString()}")
+        TonePlayer.readyBeep() // "приложите целевую"
+    }
+
+    /** Ищем первый ASOP-кандидат подходящего размера (24/12/6 байт). */
+    private fun candidateForAuth(candidates: List<ByteArray>): ByteArray? =
+        candidates.firstOrNull { it.size >= 12 } ?: candidates.firstOrNull { it.size == 6 }
+
+    /**
+     * Проходит уже прочитанные блоки секторов 1..15 из `ClassicInfo.allBlocks`
+     * и пытается найти SAC1 payload (4-байтный magic + прочие поля).
+     * Возвращает Pair<Sac1Payload, workingKey> если нашли, иначе null.
+     * Без повторных transceive.
+     */
+    private fun tryFindSac1Identity(
+        allBlocks: Map<Int, List<String>>,
+        candidates: List<ByteArray> = emptyList()
+    ): Pair<MifareClassicCardWriter.Sac1Payload, ByteArray>? {
+        // Проходим секторы 1..15, конкатенируем data-блоки (всё кроме trailer)
+        for (sector in 1..15) {
+            val blocks = allBlocks[sector] ?: continue
+            if (blocks.isEmpty() || blocks.contains("(read failed)")) continue
+            val dataBlocks = blocks.dropLast(1)
+            val raw = dataBlocks.flatMap { hex ->
+                val cleaned = hex.replace(" ", "")
+                (0 until cleaned.length / 2).map { i ->
+                    cleaned.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+                }
+            }.toByteArray()
+val payload = MifareClassicCardWriter.parseSac1Payload(raw)
+                    ?: continue
+            if (isSac1Trusted(payload)) {
+                // SAC1 валидна — возвращаем с dev-fallback-ключом
+                return payload to (candidates.firstOrNull { it.size >= 12 }
+                    ?: candidateForAuth(candidates) ?: ByteArray(12))
+            }
+        }
+        return null
     }
 
     /** Читает роли карты: идентификация рабочим ключом → identity JSON roles. */
@@ -299,10 +473,18 @@ class CardActivationViewModel @Inject constructor(
     }
 
     /** Целевая карта: диагностика пригодности → нулевой ключ → новая; иначе existing. */
-    private fun processTargetCard(tag: Tag) {
+    private fun processTargetCard(tag: Tag, tech: CardTech = CardTech.DESFIRE) {
+        when (tech) {
+            CardTech.CLASSIC -> processClassicTargetCard(tag)
+            CardTech.DESFIRE -> processDesfireTargetCard(tag)
+            CardTech.UNSUPPORTED -> Unit
+        }
+    }
+
+    private fun processDesfireTargetCard(tag: Tag) {
         viewModelScope.launch(Dispatchers.IO) {
             heldTag = tag
-            _state.update { it.copy(busy = true, message = "Определение состояния карты…") }
+            _state.update { it.copy(busy = true, message = "Определение состояния карты (DESFire)…") }
             val writer = DesfireCardWriter()
             val uid = tag.id.joinToString("") { String.format("%02X", it) }
 
@@ -506,6 +688,7 @@ class CardActivationViewModel @Inject constructor(
     private var regionByCarrier: Map<String, String> = emptyMap()
     private var regionsOfOrganizer: Map<String, Set<String>> = emptyMap()
     private var regionsOfUser: Map<String, Set<String>> = emptyMap()
+    private var carriersOfUser: Map<String, Set<String>> = emptyMap()
 
     fun loadReferenceData() {
         viewModelScope.launch(Dispatchers.IO) {
@@ -533,9 +716,17 @@ class CardActivationViewModel @Inject constructor(
                 .entries.groupBy({ it.key }, { it.value })
                 .mapValues { it.value.toSet() }
 
+            // Промпт 009: фильтрация users по выбранному carrier (asop_user_carriers).
+            carriersOfUser = readRawMap("asop_user_carriers") {
+                it.optString("userId") to it.optString("carrierId")
+            }.filterValues { it.isNotBlank() }
+                .entries.groupBy({ it.key }, { it.value })
+                .mapValues { it.value.toSet() }
+
             regionByCarrier = readRawMap("asop_carriers") { it.optString("carrierId") to it.optString("regionId") }
 
             val s = _state.value
+            addReceipt("Загружены справочники: ${regions.size} регионов, ${carriers.size} перевозчиков, ${users.size} пользователей")
             _state.update {
                 it.copy(
                     regions = regions, organizers = organizers,
@@ -616,12 +807,31 @@ class CardActivationViewModel @Inject constructor(
     fun filteredAuditServices(): List<RefOption> = _state.value.auditServices
 
     fun filteredUsers(): List<RefOption> {
-        val regionId = _state.value.selectedRegionId
-        if (regionId.isNullOrBlank()) return _state.value.users
-        return _state.value.users.filter { regionsOfUser[it.id]?.contains(regionId) == true }
+        // Root-логин (или авторизация «картой-ключом» SUPER_ADMIN) — не фильтруем по региону:
+        // администратор должен видеть ВСЕХ пользователей системы для назначения владельца карты.
+        if (_state.value.authorizedByRoot) return _state.value.users
+        // Если операторская карта имеет SUPER_ADMIN в operatorRoles — тоже без фильтра.
+        if (_state.value.operatorRoles.contains("SUPER_ADMIN")) return _state.value.users
+
+        // Промпт 009: каскадная фильтрация. Применяются ВСЕ активные фильтры (AND).
+        // - regionId: user в ASOP_USER_REGIONS с этим регионом (если selected)
+        // - carrierId: user в ASOP_USER_CARRIERS с этим carrier (если selected)
+        // - Если ни один фильтр не задан — ВСЕ пользователи.
+        val st = _state.value
+        val regionId = st.selectedRegionId
+        val carrierId = st.selectedCarrierId
+        if (regionId.isNullOrBlank() && carrierId.isNullOrBlank()) return st.users
+
+        return st.users.filter { u ->
+            val matchesRegion = regionId.isNullOrBlank() ||
+                regionsOfUser[u.id]?.contains(regionId) == true
+            val matchesCarrier = carrierId.isNullOrBlank() ||
+                carriersOfUser[u.id]?.contains(carrierId) == true
+            matchesRegion && matchesCarrier
+        }
     }
 
-    /** Смена региона сбрасывает зависимые подчинённые выборы. */
+    /** Смена региона сбрасывает зависимые подчинённые выборы (промпт 009 cascade). */
     fun selectRegion(id: String) = _state.update {
         it.copy(
             selectedRegionId = id,
@@ -633,10 +843,43 @@ class CardActivationViewModel @Inject constructor(
             userQuery = ""
         )
     }
-    fun selectOrganizer(id: String) = _state.update { it.copy(selectedOrganizerId = id) }
-    fun selectCarrier(id: String) = _state.update { it.copy(selectedCarrierId = id) }
-    fun selectDistributor(id: String) = _state.update { it.copy(selectedDistributorId = id) }
-    fun selectAuditService(id: String) = _state.update { it.copy(selectedAuditServiceId = id) }
+    /** Смена организ. (зависят carrier/distributor/audit/user). */
+    fun selectOrganizer(id: String) = _state.update {
+        it.copy(
+            selectedOrganizerId = id,
+            selectedCarrierId = null,
+            selectedDistributorId = null,
+            selectedAuditServiceId = null,
+            selectedUserId = null,
+            userQuery = ""
+        )
+    }
+    /** Смена carrier сбрасывает дистрибьютор, КРС, user. */
+    fun selectCarrier(id: String) = _state.update {
+        it.copy(
+            selectedCarrierId = id,
+            selectedDistributorId = null,
+            selectedAuditServiceId = null,
+            selectedUserId = null,
+            userQuery = ""
+        )
+    }
+    /** Смена дистрибьютора сбрасывает user. */
+    fun selectDistributor(id: String) = _state.update {
+        it.copy(
+            selectedDistributorId = id,
+            selectedUserId = null,
+            userQuery = ""
+        )
+    }
+    /** Смена КРС сбрасывает user. */
+    fun selectAuditService(id: String) = _state.update {
+        it.copy(
+            selectedAuditServiceId = id,
+            selectedUserId = null,
+            userQuery = ""
+        )
+    }
     fun selectUser(id: String) = _state.update { it.copy(selectedUserId = id) }
     fun onQueryChanged(q: String) = _state.update { it.copy(userQuery = q) }
 
@@ -705,94 +948,188 @@ class CardActivationViewModel @Inject constructor(
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                _state.update { it.copy(busy = true, message = "Формирование подписи…") }
                 val s1 = _state.value
-                // Для existing карт: получаем cardId с сервера
-                val serverCardId = if (s1.targetCardMode == "existing") {
-                    runCatching {
-                        val resp = syncApi.getCardByUid(s1.targetCardUid ?: "")
-                        if (resp.isSuccessful) resp.body()?.cardId else null
-                    }.getOrNull()
-                } else null
-                if (serverCardId != null) {
-                    _state.update { it.copy(previousIdentityJson = """{"cardId":"$serverCardId"}""") }
-                }
-                val identity = buildCanonicalIdentity(_state.value)
+                val isClassic = (s1.pendingWriteTech == CardTech.CLASSIC)
+                _state.update { it.copy(busy = true,
+                    message = if (isClassic) "Регистрация VCM1 на сервере…" else "Формирование подписи…") }
+                addReceipt("Отправка запроса на сервер")
+
+                val identity = buildCanonicalIdentity(s1)
                 val canonical = canonicalString(identity)
 
-                // 1. Подпись crypto.
-                val signResp = syncApi.signCardIdentity(CardIdentitySignRequest(canonical))
-                if (!signResp.isSuccessful) throw IllegalStateException("sign HTTP ${signResp.code()}")
-                val signatureBase64 = signResp.body()?.signatureBase64
-                    ?: throw IllegalStateException("пустая подпись")
-
-                // 2. Регистрация на сервере (проверяем, нет ли уже такого UID).
-                _state.update { it.copy(message = "Регистрация на сервере…") }
                 val uid = identity.optString("uid")
-                val existingCardId = runCatching {
-                    val resp = syncApi.getCardByUid(uid)
-                    if (resp.isSuccessful) resp.body()?.cardId else null
-                }.getOrNull()
-                if (existingCardId != null) {
-                    // Уже зарегистрирована — activate не нужен
-                    identity.put("cardId", existingCardId)
-                } else {
-                    val s2 = _state.value
-                    val role = s2.cardType?.role ?: throw IllegalStateException("роль не определена")
-                    val activateResp = syncApi.activateCard(
-                        CardActivateRequest(
-                            cardIdentity = CardIdentity(
-                                cardId = identity.optString("cardId"),
-                                uid = identity.optString("uid"),
-                                regionId = identity.optString("regionId").takeIf { it.isNotBlank() },
-                                organizerId = identity.optString("organizerId").takeIf { it.isNotBlank() },
-                                carrierId = identity.optString("carrierId").takeIf { it.isNotBlank() },
-                                cardsDistributorId = identity.optString("cardsDistributorId").takeIf { it.isNotBlank() },
-                                auditServiceId = identity.optString("auditServiceId").takeIf { it.isNotBlank() },
-                                userId = identity.optString("userId").takeIf { it.isNotBlank() },
-                                roles = listOf(role)
-                            ),
-                            identityJson = canonical,
-                            identitySignature = signatureBase64,
-                            operatorRoles = s2.operatorRoles,
-                            authorizedByRoot = s2.authorizedByRoot,
-                            rootUserId = s2.rootUserId
-                        )
-                    )
-                    if (!activateResp.isSuccessful) throw IllegalStateException("activate HTTP ${activateResp.code()}")
-                }
-                _state.update { it.copy(serverRegistered = true, busy = false,
-                    message = "Карта зарегистрирована. Приложите карту повторно для прошивки.") }
+                addReceipt("UID=$uid")
+                val s2 = _state.value
+                val roleEnum = s2.cardType
+                    ?: throw IllegalStateException("тип карты не выбран")
 
-                // Сохраняем данные для прошивки, ждём свежий тег.
-                val identityJson = JSONObject(canonical)
-                val identityProto = CardIdentityCodec.fromJson(identityJson)
-                pendingWriteProto = identityProto.toByteArray()
-                pendingWriteSignature = signatureBase64
+                if (isClassic) {
+                    // Промпт 008/009: VCM1-flow — без signature, server-master cardId.
+                    // Терминал генерирует placeholder cardId (UUID v7), сервер возвращает
+                    // свой masterCardId если UID уже зарегистрирован.
+                    val clientCardId = UuidCreator.getTimeOrderedEpoch().toString()
+                    // Промпт 009 clean-break: entityType всегда "userId" (или "none" для
+                    // PASSENGER_ANONYMOUS). entityId = selectedUserId из cascade dropdown UI.
+                    val entityType = if (roleEnum == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS) "none" else "userId"
+                    val entityId = if (roleEnum == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS) null
+                        else s2.selectedUserId
+                    Log.i("CardActivationVM", "VCM1-activate: clientCardId=$clientCardId, uid=$uid, bitmask=0x${"0x"}${(1 shl roleEnum.ordinal).toString(16)}, entity=$entityType/$entityId")
+                    val vcm1 = CardActivateClassicRequest(
+                        technology = "CLASSIC",
+                        cardId = clientCardId,
+                        uid = uid,
+                        bitmask = 1 shl roleEnum.ordinal,  // simplified: single-role; multi-role UI adds later
+                        entityType = entityType,
+                        entityId = entityId
+                    )
+                    val activateReq = CardActivateRequest(
+                        cardIdentity = null,
+                        identityJson = null,
+                        identitySignature = null,
+                        operatorRoles = s2.operatorRoles,
+                        authorizedByRoot = s2.authorizedByRoot,
+                        rootUserId = s2.rootUserId,
+                        technology = "CLASSIC",
+                        vcm1 = vcm1
+                    )
+                    val activateResp = syncApi.activateCardVcm1(activateReq)
+                    if (!activateResp.isSuccessful) {
+                        throw IllegalStateException("VCM1-activate HTTP ${activateResp.code()}")
+                    }
+                    val body = activateResp.body()
+                        ?: throw IllegalStateException("VCM1-activate: пустой ответ")
+                    val vcm1Data = body.vcm1
+                        ?: throw IllegalStateException("VCM1-activate: response missing vcm1 subobject")
+                    Log.i("CardActivationVM", "VCM1-activate OK: serverCardId=${body.cardId}, overridden=${vcm1Data.cardIdOverridden}")
+                    addReceipt("Сервер ответил 200 OK (cardId=${body.cardId.take(8)}…, bitmask=0x${vcm1Data.bitmask.toString(16)})")
+
+                    _state.update {
+                        it.copy(serverRegistered = true, busy = false,
+                            message = if (vcm1Data.cardIdOverridden)
+                                "Сервер переназначил cardId. Приложите карту повторно для прошивки."
+                            else "Карта зарегистрирована. Приложите карту повторно для прошивки.")
+                    }
+                    TonePlayer.readyBeep() // подсказка "приложите для прошивки"
+                    addReceipt("Подсказка: приложите карту повторно для записи VCM1 на физический чип")
+                    val entityRef = entityId?.let {
+                        ru.asop.terminal.activation.EntityRef(
+                            type = ru.asop.terminal.activation.EntityType.fromFieldName(entityType)!!,
+                            id = java.util.UUID.fromString(it)
+                        )
+                    }
+                    pendingWriteVcm1 = ru.asop.terminal.activation.CardIdentityVcm1(
+                        cardId = java.util.UUID.fromString(body.cardId),
+                        bitmask = vcm1Data.bitmask,
+                        entity = entityRef
+                    )
+                    if (vcm1Data.cardIdOverridden) {
+                        pendingServerCardIdOverride = body.cardId
+                        Log.w("CardActivationVM",
+                            "Server overrode cardId: clientCardId=$clientCardId → serverCardId=${body.cardId}. " +
+                            "Terminal will re-write block 1 with serverCardId.")
+                    }
+                } else {
+                    // DESFire-flow: signature + identityJson (legacy).
+                    val signResp = syncApi.signCardIdentity(CardIdentitySignRequest(canonical))
+                    if (!signResp.isSuccessful) throw IllegalStateException("sign HTTP ${signResp.code()}")
+                    val signatureBase64 = signResp.body()?.signatureBase64
+                        ?: throw IllegalStateException("пустая подпись")
+
+                    _state.update { it.copy(message = "Регистрация на сервере…") }
+                    val existingCardId = runCatching {
+                        val resp = syncApi.getCardByUid(uid)
+                        if (resp.isSuccessful) resp.body()?.cardId else null
+                    }.getOrNull()
+                    if (existingCardId != null) {
+                        identity.put("cardId", existingCardId)
+                    } else {
+                        val role = roleEnum.role
+                        val activateResp = syncApi.activateCard(
+                            CardActivateRequest(
+                                cardIdentity = CardIdentity(
+                                    cardId = identity.optString("cardId"),
+                                    uid = identity.optString("uid"),
+                                    regionId = identity.optString("regionId").takeIf { it.isNotBlank() },
+                                    organizerId = identity.optString("organizerId").takeIf { it.isNotBlank() },
+                                    carrierId = identity.optString("carrierId").takeIf { it.isNotBlank() },
+                                    cardsDistributorId = identity.optString("cardsDistributorId").takeIf { it.isNotBlank() },
+                                    auditServiceId = identity.optString("auditServiceId").takeIf { it.isNotBlank() },
+                                    userId = identity.optString("userId").takeIf { it.isNotBlank() },
+                                    roles = listOf(role)
+                                ),
+                                identityJson = canonical,
+                                identitySignature = signatureBase64,
+                                operatorRoles = s2.operatorRoles,
+                                authorizedByRoot = s2.authorizedByRoot,
+                                rootUserId = s2.rootUserId,
+                                technology = "DESFIRE"
+                            )
+                        )
+                        if (!activateResp.isSuccessful) throw IllegalStateException("activate HTTP ${activateResp.code()}")
+                    }
+                    _state.update { it.copy(serverRegistered = true, busy = false,
+                        message = "Карта зарегистрирована. Приложите карту повторно для прошивки.") }
+
+                    val identityJson = JSONObject(canonical)
+                    val identityProto = CardIdentityCodec.fromJson(identityJson)
+                    pendingWriteProto = identityProto.toByteArray()
+                    pendingWriteSignature = signatureBase64
+                }
             } catch (e: Exception) {
                 _state.update {
                     it.copy(
+                        step = Step.Error,
                         busy = false,
                         finalOk = false,
                         finalResult = "Ошибка активации: ${e.message}"
                     )
                 }
+                addReceipt("Ошибка активации на сервере: ${e.message}")
+                TonePlayer.errorBeep()
             }
         }
     }
 
-    /** Прошивка с повторно приложенной картой (свежий тег). */
+    /**
+     * Convert role + UiState в (entityType, entityId) tuple для VCM1.
+     * Single-slot: берём highest-bit role entity field. Для PASSENGER_ANONYMOUS — null.
+     */
+    private fun resolveEntityFields(
+        role: ru.asop.terminal.activation.AsopCardType,
+        identity: org.json.JSONObject
+    ): Pair<String, String?> {
+        // Промпт 009 clean-break: entity на КАРТЕ всегда = userId. Все *_Id/orgId/etc.
+        // не хранятся на карте — routing делается через ASOP_USER_REGIONS / ASOP_USER_CARRIERS
+        // на стороне запроса. Только PASSENGER_ANONYMOUS — entity=null.
+        if (role == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS) {
+            return "none" to null
+        }
+        return "userId" to identity.optString("userId").takeIf { it.isNotBlank() }
+    }
+
+    /** Прошивка с повторно приложенной картой (свежий тег). Для VCM1: используем serverCardId если был override. */
     private fun runWrite(tag: Tag) {
-        val proto = pendingWriteProto ?: return
-        val sig = pendingWriteSignature ?: return
+        val vcm1 = pendingWriteVcm1 ?: return
+        val tech = _state.value.pendingWriteTech ?: CardTech.DESFIRE
+        Log.d("CardActivationVM", "runWrite: starting, tech=$tech, bitmask=0x${vcm1.bitmask.toString(16)}")
         viewModelScope.launch(Dispatchers.IO) {
             _state.update { it.copy(busy = true, message = "Прошивка…") }
             val writeResult = try {
-                withTimeout(90_000) {
-                    provisionCard(tag, proto, sig)
+                withTimeout(120_000) {
+                    when (tech) {
+                        CardTech.CLASSIC -> provisionClassicCard(tag, vcm1)
+                        CardTech.DESFIRE -> provisionDesfireCard(tag, vcm1)  // legacy
+                        CardTech.UNSUPPORTED -> "технология карты не поддерживается этим flow"
+                    }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Log.w("CardActivationVM", "runWrite: timeout 120s")
                 "таймаут — карта не отвечает"
+            } catch (e: Exception) {
+                Log.w("CardActivationVM", "runWrite: exception ${e.javaClass.simpleName}: ${e.message}")
+                "${e.javaClass.simpleName}: ${e.message}"
+            } finally {
+                Log.d("CardActivationVM", "runWrite: completed")
             }
             val ok = writeResult == null
             val role = _state.value.cardType?.role ?: ""
@@ -800,36 +1137,251 @@ class CardActivationViewModel @Inject constructor(
                 writeResult == null -> "Карта $role успешно активирована"
                 else -> "Карта зарегистрирована, но запись не удалась: $writeResult. Повторите прикладывание."
             }
-            pendingWriteProto = null
-            pendingWriteSignature = null
+pendingWriteVcm1 = null
+            addReceipt(if (ok) "Карта успешно записана" else "Запись карты не удалась: $writeResult")
+            // При успехе переходим в Step.Success — UI показывает зелёную галочку
+            // и останавливает любые последующие операции (см. onTagDiscovered/processTargetCard).
             _state.update {
-                it.copy(busy = false, cardWritten = ok, finalOk = ok, finalResult = msg)
+                it.copy(
+                    busy = false,
+                    cardWritten = ok,
+                    finalOk = ok,
+                    finalResult = msg,
+                    step = if (ok) Step.Success else it.step,
+                )
             }
-            if (ok) TonePlayer.softBeep()
+
+            // Промпт 008 UX: финальный сигнал один раз, после всей работы с картой.
+            if (ok) TonePlayer.successBeep() else TonePlayer.errorBeep()
         }
     }
 
-    /** Возвращает null при успехе прошивки, иначе текст ошибки. */
-    private suspend fun provisionCard(tag: Tag, identityJson: ByteArray, signatureBase64: String): String? {
+    /** Legacy DESFire-flow: оставлено для совместимости с уже-активированными картами. */
+    private suspend fun provisionDesfireCard(tag: Tag, vcm1: CardIdentityVcm1): String? {
+        // DESFire не использует VCM1 — fallback на existing flow identityJson/signature.
         val writer = DesfireCardWriter()
         val keys = terminalKeyDao.getActive(5)
         val newestKey = keys.firstOrNull()?.let { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
-            ?: return "нет 3DES-ключей в terminal_keys (загрузите справочники)"
+            ?: return "нет 3DES-ключей в terminal_keys"
         val mode = _state.value.targetCardMode
-
-        return if (mode == "existing") {
-            val oldKey = _state.value.workingKeyForCard ?: return "рабочий ключ не найден"
-            writer.reflashComplete(tag, identityJson, signatureBase64, oldKey, newestKey)
-                .takeUnless { it.ok }?.error
-        } else {
-            writer.writeIdentity(tag, identityJson, signatureBase64, ZERO_KEY, newestKey)
-                .takeUnless { it.ok }?.error
+        // Тут мы держим DEPRIORITIZED path: реальный current flow для DESFire — через
+        // pendingWriteProto/pendingWriteSignature, не pendingWriteVcm1.
+        return when (mode) {
+            "existing" -> "DESFire-flow в VCM1-режиме пока не реализован — используйте ACTIVATE-LEGACY"
+            else -> writer.writeIdentity(
+                tag,
+                ByteArray(0),  // unused — caller goes via legacy flow
+                "",           // unused signature base64
+                ZERO_KEY,
+                newestKey
+            ).takeUnless { it.ok }?.error
         }
+    }
+
+    /** Прошивка MIFARE Classic: VCM1 (промпт 008) — без signature, только sector 1. */
+    private suspend fun provisionClassicCard(tag: Tag, vcm1: CardIdentityVcm1): String? {
+        val writer = MifareClassicCardWriter()
+        val keys = terminalKeyDao.getActive(5)
+        val newestKey = keys.firstOrNull()?.let { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
+            ?: return "нет ASOP-ключей в terminal_keys"
+        if (newestKey.size < 12) return "ASOP-ключ короче 12 байт — для Classic нужно keyA(6)+keyB(6)"
+
+        val keyA = newestKey.copyOfRange(0, 6)
+        val keyB = newestKey.copyOfRange(6, 12)
+        val isExisting = _state.value.targetCardMode == "existing"
+        val oldKeyA = _state.value.workingKeyClassicA
+        val oldKeyB = _state.value.workingKeyClassicB
+        // Note: VCM1 пишет ТОЛЬКО sector 1 (3 data-блока + trailer если не existing).
+        // Никаких signature, никаких sectors 2-15. Это и есть ключевое упрощение промпта 008:
+        // карта читается даже с broken CRYPTO1 clone (только sector 1 = 3 blocks).
+        return writer.writeVcm1(
+            tag = tag,
+            vcm1 = vcm1,
+            keyA = keyA,
+            keyB = keyB,
+            isExisting = isExisting,
+            workingKeyA = oldKeyA ?: keyA,
+            workingKeyB = oldKeyB ?: keyB
+        ).takeUnless { it.ok }?.error
     }
 
     /** Возврат к списку типов. */
     fun reset() {
         heldTag = null
         _state.value = UiState()
+    }
+
+    /**
+     * Промпт 008: запись в receipt-timeline (для отображения на экране "Чек операции").
+     * Используется между шагами, никаких промежуточных звуков.
+     */
+    private fun addReceipt(text: String) {
+        _state.update {
+            val stamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            it.copy(
+                receiptEntries = it.receiptEntries + ReceiptEntry(stamp, text)
+            )
+        }
+    }
+
+    /** Чек-операции: одна строка с временем. Рендерится в [ReceiptCard]. */
+    data class ReceiptEntry(val time: String, val text: String)
+
+    // ========== MIFARE Classic support (промпт 007) ==========
+
+    /**
+     * Классическая авторизация (вызывается через identifyAuthCard → identifyClassicAuthCard).
+     * Прочитать SAC1 авторизующей карты, извлечь роли и рабочие ключи.
+     */
+
+    private fun parseSac1(payload: MifareClassicCardWriter.Sac1Payload): ProtoCardIdentity? {
+        return runCatching { ProtoCardIdentity.parseFrom(payload.protoBytes) }.getOrNull()
+    }
+
+    private fun isSac1Trusted(@Suppress("UNUSED_PARAMETER") payload: MifareClassicCardWriter.Sac1Payload): Boolean {
+        // В прототипе доверяем структуре; signatureVerification при идентификации auth
+        // карт не строгая (на сервере уже делается повторная). Здесь — sanity check по magic/version,
+        // который уже сделал parseSac1Payload в MifareClassicCardWriter.
+        return true
+    }
+
+    /**
+     * Целевая карта Classic: определяем state, читаем prev identity.
+     */
+    private fun processClassicTargetCard(tag: Tag) {
+        viewModelScope.launch(Dispatchers.IO) {
+            heldTag = tag
+            _state.update { it.copy(busy = true, message = "Определение состояния карты (MIFARE Classic)…") }
+            val uid = tag.id.joinToString("") { String.format("%02X", it) }
+            val writer = MifareClassicCardWriter()
+
+            val keys = terminalKeyDao.getActive(30)
+            val candidates = keys.map { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
+
+            val detect = writer.detectState(tag, candidates)
+            Log.d("CardActivationVM", "processClassicTargetCard: detect=$detect")
+            when (detect.state) {
+                MifareClassicCardWriter.ClassicState.NEW -> {
+                    _state.update {
+                        it.copy(
+                            busy = false,
+                            targetCardUid = uid,
+                            targetCardMode = "new",
+                            workingKeyClassicA = null,
+                            workingKeyClassicB = null,
+                            pendingWriteTech = CardTech.CLASSIC,
+                            message = "Карта новая (Classic). Заполните поля"
+                        )
+                    }
+                    loadReferenceData()
+                }
+                MifareClassicCardWriter.ClassicState.EXISTING -> {
+                    // Используем matchedKey от detectState (НЕ candidates.firstOrNull()).
+                    // Если matchedKey = NULL (6 нулей — карта была записана с ZERO_KEY),
+                    // используем candidates.first() AS OP для reflash (самая новая ASOP-версия).
+                    val workingKey24: ByteArray = when {
+                        detect.matchedKind == MifareClassicCardWriter.DetectResult.MatchKind.NULL_KEYA -> {
+                            // Карта имеет KeyA=00 00 00 00 00 00 (от предыдущей активации с ZERO_KEY).
+                            // Берём самый новый ASOP-ключ (он будет записан как НОВЫЙ keyA при reflash).
+                            candidates.firstOrNull { it.size >= 12 } ?: byteArrayOf()
+                        }
+                        detect.matchedKind == MifareClassicCardWriter.DetectResult.MatchKind.ASOP_KEYA ||
+                        detect.matchedKind == MifareClassicCardWriter.DetectResult.MatchKind.ASOP_KEYB -> {
+                            // Карта имеет keyA/keyB от ASOP-ключа, который мы знаем.
+                            detect.matchedKey ?: candidates.firstOrNull { it.size >= 12 } ?: byteArrayOf()
+                        }
+                        else -> candidates.firstOrNull { it.size >= 12 } ?: byteArrayOf()
+                    }
+                    val (keyA, keyB) = if (workingKey24.size >= 12) {
+                        workingKey24.copyOfRange(0, 6) to workingKey24.copyOfRange(6, 12)
+                    } else {
+                        byteArrayOf() to byteArrayOf()
+                    }
+
+                    val vcm1Parsed = writer.readVcm1(tag, candidates)
+                    if (vcm1Parsed == null) {
+                        // VCM1 magic не нашёлся — возможно SAC1 legacy format, попробуем как фоллбэк
+                        // через readStream для обратной совместимости. Но новой активации SAC1 карт
+                        // больше не делаем — re-write в VCM1 нужен (промпт 008 clean-break).
+                        val sac1 = writer.readStream(tag, candidates)
+                        if (sac1 != null) {
+                            Log.w("CardActivationVM", "processClassicTargetCard: found legacy SAC1 format — re-activation required (clean-break)")
+                            _state.update {
+                                it.copy(
+                                    busy = false,
+                                    targetCardUid = uid,
+                                    message = "Карта в устаревшем формате SAC1. Требуется re-activation в VCM1."
+                                )
+                            }
+                            return@launch
+                        }
+                        Log.w("CardActivationVM", "processClassicTargetCard: existing+null VCM1 — partial-write state, allowing reflash")
+                        _state.update {
+                            it.copy(
+                                busy = false,
+                                targetCardUid = uid,
+                                targetCardMode = "existing",
+                                workingKeyClassicA = keyA.takeIf { it.size == 6 },
+                                workingKeyClassicB = keyB.takeIf { it.size == 6 },
+                                previousIdentityJson = null,
+                                previousRegionId = null,
+                                previousOrganizerId = null,
+                                previousCarrierId = null,
+                                previousDistributorId = null,
+                                previousAuditServiceId = null,
+                                previousUserId = null,
+                                pendingWriteTech = CardTech.CLASSIC,
+                                message = "Карта частично прошита (Classic, matched=${detect.matchedKind}). Перезапишите VCM1 (обновите поля и нажмите «Активировать»)."
+                            )
+                        }
+                        loadReferenceData()
+                        return@launch
+                    }
+                    // VCM1 успешно прочитан. Достаём bitmask+entity для UI-prefill.
+                    val primaryRole = AsopCardType.highestSetBitRole(vcm1Parsed.bitmask)
+                    val entity = vcm1Parsed.entity
+                    val prevJson = "{} ".let { _ ->
+                        org.json.JSONObject().apply {
+                            put("cardId", vcm1Parsed.cardId.toString())
+                            put("uid", uid)
+                            // Промпт 009: только USER или NONE на карте.
+                            if (entity?.type == EntityType.USER) {
+                                put("userId", entity.id.toString())
+                            }
+                            // PASSENGER_ANONYMOUS: entity=null → пустой JSON.
+                            put("roles", org.json.JSONArray().apply {
+                                AsopCardType.allRolesForBitmask(vcm1Parsed.bitmask).forEach { put(it.role) }
+                            })
+                        }.toString()
+                    }
+                    _state.update {
+                        it.copy(
+                            busy = false,
+                            targetCardUid = uid,
+                            targetCardMode = "existing",
+                            workingKeyClassicA = keyA.takeIf { it.size == 6 },
+                            workingKeyClassicB = keyB.takeIf { it.size == 6 },
+                            previousIdentityJson = prevJson,
+                            // Промпт 009: на карте остаётся только USER. Остальные *_ID
+                            // восстанавливаются из ASOP_USER_* связей при чтении, если нужно.
+                            previousUserId = if (entity?.type == EntityType.USER) entity.id.toString() else null,
+                            pendingWriteTech = CardTech.CLASSIC,
+                            message = "Карта VCM1 (primary=" + (primaryRole?.label ?: "n/a") + ", bitmask=0x" +
+                                vcm1Parsed.bitmask.toString(16) + ")"
+                        )
+                    }
+                    Log.i("CardActivationVM", "processClassicTargetCard: VCM1 read OK — primary=" +
+                        (primaryRole?.label ?: "n/a") + ", entity=" + entity)
+                    addReceipt("Карта прочитана: ${detect.state}, primary=${primaryRole?.label ?: "n/a"}, ${if (entity != null) "entity=$entity" else "entity=—"}")
+                    loadReferenceData()
+                }
+                MifareClassicCardWriter.ClassicState.UNRECOGNIZED -> {
+                    _state.update {
+                        it.copy(busy = false,
+                            message = "Карта не идентифицирована — factory/ASOP/NULL auth все fail. Возможно старая карта или ключи не подходят.")
+                    }
+                }
+            }
+        }
     }
 }

@@ -67,6 +67,15 @@ interface SyncApi {
         @Body request: CardActivateRequest
     ): Response<CardActivateResponse>
 
+    /**
+     * VCM1-flow для Classic (промпт 008): без signature, server-master cardId.
+     * Терминал шлёт bitmask + entity, сервер возвращает свой masterCardId (UID-based).
+     */
+    @POST("api/v1/sync/cards/activate-vcm1")
+    suspend fun activateCardVcm1(
+        @Body request: CardActivateRequest
+    ): Response<CardActivateResponse>
+
     @GET("api/v1/sync/cards/by-uid/{uid}")
     suspend fun getCardByUid(@Path("uid") uid: String): Response<CardByUidResponse>
 

@@ -38,7 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
 import ru.asop.terminal.nfc.DesfireCardReader
+import ru.asop.terminal.nfc.decodeSectorOne
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -148,7 +150,7 @@ private fun ListeningCard() {
             Text("Приложите карту к NFC-модулю", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Ожидание чтения Mifare DESFire…",
+                "Ожидание чтения MIFARE…",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -325,6 +327,245 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                     }
                 }
 
+            } else if (result.isClassic) {
+                val classic = result.classicInfo
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("MIFARE Classic", style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.width(8.dp))
+                    Text("•", color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text(classic?.typeLabel ?: "", style = MaterialTheme.typography.titleMedium)
+                }
+                Spacer(Modifier.height(12.dp))
+                InfoRow("UID", result.uid)
+                InfoRow("Секторов", "${classic?.sectorCount ?: "?"}")
+                classic?.keyFoundFirstBytes?.let { InfoRow("Найден ключ (первые 2 байта)", it) }
+                classic?.block0Content?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Блок 0 (производителя):", style = MaterialTheme.typography.bodySmall)
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                }
+                // Полный дамп sectors 1..end с блоками data + trailer.
+                // Sector 0 пропускается (manufacturer block, показан выше).
+                classic?.allBlocks?.takeIf { it.isNotEmpty() }?.let { allBlocks ->
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text("Полный дамп секторов (1..${allBlocks.size}):", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Блок данных 16 байт / trailer (последний блок сектора). " +
+                            "Если сектор пуст — auth не прошёл (factory/ASOP).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    allBlocks.entries.forEach { (sector, blocks) ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = androidx.compose.material3.CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    "Sector $sector ${classic.trailerKeyLabels[sector]?.let { "— ключ: $it" } ?: ""}",
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                if (blocks.isEmpty()) {
+                                    Text(
+                                        "auth не прошёл ни одним ключом",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                } else {
+                                    blocks.forEachIndexed { i, hex ->
+                                        val isTrailer = i == blocks.size - 1
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                String.format("  б%d:", i),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                color = if (isTrailer)
+                                                    MaterialTheme.colorScheme.primary
+                                                else
+                                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(Modifier.width(4.dp))
+                                            Text(
+                                                hex,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                                color = if (isTrailer)
+                                                    MaterialTheme.colorScheme.primary
+                                                else
+                                                    MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Человекочитаемая расшифровка сектора 1 (промпт 008): magic + bitmask + UUIDs.
+                // Показываем всегда, когда sector 1 прочитан — даже если VCM1/SAC1 магия
+                // не совпала. Это критично для debug клон-карт и понимания содержимого.
+                classic?.let { c ->
+                    val decode = decodeSectorOne(c.allBlocks ?: emptyMap())
+                    if (decode != null) {
+                        Spacer(Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Sector 1 — расшифровка:",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                val magicColor = when (decode.magic) {
+                                    "VCM1" -> MaterialTheme.colorScheme.primary
+                                    "SAC1" -> MaterialTheme.colorScheme.error
+                                    "BLANK", "FACTORY_FF" -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    else -> MaterialTheme.colorScheme.error
+                                }
+                                Text(
+                                    "Magic 4 байта блока 0:  ${decode.magic}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = magicColor
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Bitmask (байты 4-5, LE): ${decode.bitmaskHex} = ${decode.bitmaskValue} dec",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                )
+                                if (decode.roles.isEmpty()) {
+                                    Text(
+                                        "  Роли: (нет битов)",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    Text(
+                                        "  Роли (${decode.roles.size}):",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    decode.roles.forEach { role ->
+                                        Text(
+                                            "  • $role",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "cardId (UUID v7, 16 байт блока 1):",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    if (decode.cardIdPresent) decode.cardIdFormatted
+                                    else "(blank — 00..00)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    color = if (decode.cardIdPresent)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "entityUuid (16 байт блока 2):",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    decode.entityFormatted,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    color = if (decode.entityPresent)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (decode.magic != "VCM1") {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        "⚠ Карта в формате ${decode.magic} — нужен Drawer → Активация карт " +
+                                            "для пере-прошивки в VCM1.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                } else if (decode.roles.isEmpty()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        "ℹ VCM1-magic есть, но битовая маска пуста (rare — обычно FOREMAN ID)" +
+                                            " Drawer → Активация карт, чтобы заполнить роли.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ASOP cardIdentity (если SAC1 был прочитан в дампе).
+                classic?.sac1Identity?.let { identity ->
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "ASOP cardIdentity (SAC1, из sectors 1..end)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = identity.identityJson.takeIf { it.isNotBlank() }
+                                ?: "(raw proto bytes: ${identity.protoBytes?.size ?: "?"} bytes)",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(12.dp),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    InfoRow("Подпись (RSA-PSS-SHA256, raw)", "${identity.signatureBase64.take(40)}…")
+                    identity.signatureValid?.let { valid ->
+                        InfoRow(
+                            "Верификация",
+                            if (valid) "OK — подпись верна" else "FAIL — подпись неверна"
+                        )
+                        if (!valid) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Совет: перезаписать карту (Drawer → Активация карт).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+                result.notes.forEach { note ->
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        note,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
                 Text("Карта не DESFire", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))

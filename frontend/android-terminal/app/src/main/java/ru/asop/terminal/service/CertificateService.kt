@@ -1,14 +1,19 @@
 package ru.asop.terminal.service
 
+import android.util.Log
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import ru.asop.terminal.cert.MtlsManager
 import ru.asop.terminal.db.SyncPreferences
+import ru.asop.terminal.db.entity.DeltaSyncJobEntity
 import ru.asop.terminal.network.CertSignApi
 import ru.asop.terminal.network.GatewayApi
 import ru.asop.terminal.network.models.CertSignRequest
 import ru.asop.terminal.network.models.CertStoredResult
+import ru.asop.terminal.network.models.DeltaSyncRequest
+import ru.asop.terminal.worker.WorkScheduler
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -27,11 +32,15 @@ class CertificateService @Inject constructor(
     private val certSignApi: CertSignApi,
     private val gatewayApi: GatewayApi,
     private val syncPreferences: SyncPreferences,
+    private val workScheduler: WorkScheduler,
+    private val syncMetaDao: ru.asop.terminal.db.dao.SyncMetaDao,
+    private val deltaSyncJobDao: ru.asop.terminal.db.dao.DeltaSyncJobDao,
     private val moshi: Moshi
 ) {
     companion object {
         private const val POLL_INTERVAL_MS = 2000L
         private const val POLL_TIMEOUT_MS = 5 * 60 * 1000L  // 5 минут
+        private const val TAG = "CertificateService"
     }
 
     enum class State {
@@ -55,6 +64,34 @@ class CertificateService @Inject constructor(
     ): CertStoredResult {
         // 1. Ключевая пара + публичный ключ
         mtlsManager.generateKeyPair()
+        return requestCertSign(terminalSerial, terminalNumber, terminalModel, carrierId, terminalId)
+    }
+
+    /**
+     * Переподписать сертификат для существующего keyPair в AndroidKeyStore.
+     * Используется после uninstall, когда PEM-сертификат потерян (KEY_CERT_PEM стёрт),
+     * но keyPair в AndroidKeyStore сохранился. Не удаляет ключ, только обновляет PEM.
+     */
+    suspend fun refreshCertificate(
+        terminalSerial: String,
+        terminalNumber: String? = null,
+        terminalModel: String? = null,
+        carrierId: String? = null,
+        terminalId: String? = null
+    ): CertStoredResult {
+        if (!mtlsManager.hasKeyPair()) {
+            throw IllegalStateException("Нет ECC keyPair в AndroidKeyStore — нужно полное provision()")
+        }
+        return requestCertSign(terminalSerial, terminalNumber, terminalModel, carrierId, terminalId)
+    }
+
+    private suspend fun requestCertSign(
+        terminalSerial: String,
+        terminalNumber: String?,
+        terminalModel: String?,
+        carrierId: String?,
+        terminalId: String?,
+    ): CertStoredResult {
         val publicKeyB64 = mtlsManager.getPublicKeyBase64()
 
         // 2. POST cert-sign (plain HTTPS, без mTLS)
@@ -121,6 +158,52 @@ class CertificateService @Inject constructor(
                         }
                     } catch (_: Exception) {
                         // Некритично — ключ подтянется позже при следующей синхронизации
+                    }
+
+                    // Автоматический delta-sync сразу после провизии сертификата (промпт 008):
+                    // — без него terminal_keys пуст, активация MIFARE Classic fail
+                    //   (auth sector 1 не проходит — factory/ASOP/NULL keys все fail).
+                    //   Раньше пользователю приходилось вручную кликать «Дельта сейчас» в
+                    //   drawer MainScreen → удобство снижалось на 1 шаг.
+                    try {
+                        val terminalId = syncPreferences.terminalId.first() ?: ""
+                        val carrierId = syncPreferences.carrierId.first()
+                        val regionId = syncPreferences.regionId.first()
+                        val lastVersion = syncMetaDao.get()?.lastVersion
+                        Log.i(TAG, "auto-delta after cert: terminalId=$terminalId, lastVersion=$lastVersion")
+val resp = gatewayApi.deltaSync(
+                            DeltaSyncRequest(
+                                terminalId = terminalId,
+                                carrierId = carrierId,
+                                regionId = regionId,
+                                lastVersion = lastVersion
+                            )
+                        )
+                        if (resp.isSuccessful && resp.body() != null) {
+                            val eventId = resp.body()!!.eventId
+                            Log.i(TAG, "auto-delta after cert: queued eventId=$eventId")
+                            deltaSyncJobDao.insert(
+                                DeltaSyncJobEntity(
+                                    eventId = eventId,
+                                    status = "PENDING",
+                                    requestedAt = System.currentTimeMillis()
+                                )
+                            )
+                            workScheduler.enqueueForcedDeltaChunkPoll()
+                        } else {
+                            Log.w(TAG, "auto-delta after cert HTTP ${resp.code()} — fallback WorkManager")
+                            workScheduler.enqueueOneShotDelta(terminalId, carrierId, regionId, lastVersion)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "auto-delta after cert exception: ${e.message}")
+                        try {
+                            workScheduler.enqueueOneShotDelta(
+                                syncPreferences.terminalId.first() ?: "",
+                                syncPreferences.carrierId.first(),
+                                syncPreferences.regionId.first(),
+                                syncMetaDao.get()?.lastVersion
+                            )
+                        } catch (_: Exception) { /* ignore */ }
                     }
 
                     return result
