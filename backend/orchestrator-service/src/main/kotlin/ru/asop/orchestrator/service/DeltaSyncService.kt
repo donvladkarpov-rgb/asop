@@ -20,7 +20,7 @@ class DeltaSyncService(
     private val protoRowMapper: ProtoRowMapper,
     private val chunkingService: ChunkingService,
     private val eventService: EventService,
-    private val threeDesKeyService: ThreeDesKeyService,
+    private val keyService: KeyService,
     private val masterWebClient: WebClient
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -29,8 +29,8 @@ class DeltaSyncService(
         val eventId = command.eventId
         return Mono.defer {
             fetchUserIds(command).flatMap { userIds ->
-                threeDesKeyService.readBaseConfig().flatMap { baseConfig ->
-                    val retentionYears = threeDesKeyService.retentionYears(baseConfig)
+                keyService.readBaseConfig().flatMap { baseConfig ->
+                    val retentionYears = keyService.retentionYears(baseConfig)
                     Flux.fromIterable(MasterRegistry.ALL.entries)
                         .concatMap { (table, ep) ->
                             fetchTable(table, ep, command, userIds)
@@ -56,8 +56,8 @@ class DeltaSyncService(
     }
 
     private fun toRowMessage(table: String, row: JsonNode, retentionYears: Int): Mono<com.google.protobuf.Message> {
-        if (table == ThreeDesKeyService.TABLE) {
-            return threeDesKeyService.buildKeyRow(row, retentionYears)
+        if (table == KeyService.TABLE) {
+            return keyService.buildKeyRow(row, retentionYears)
         }
         return Mono.just(protoRowMapper.buildRowMessage(table, row))
     }

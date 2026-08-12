@@ -8,7 +8,7 @@ import reactor.core.publisher.Mono
 import ru.asop.api.crypto.controller.ServerKeyApi
 import ru.asop.api.crypto.dto.request.DecryptRequest
 import ru.asop.api.crypto.dto.response.DecryptResponse
-import ru.asop.api.crypto.dto.response.Generate3desKeyResponse
+import ru.asop.api.crypto.dto.response.GenerateKeyResponse
 import ru.asop.api.crypto.dto.response.ServerKeyPublicResponse
 import ru.asop.crypto.service.ServerKeyService
 import java.util.Base64
@@ -31,17 +31,17 @@ class ServerKeyController(
 
     override fun decrypt(@RequestBody request: DecryptRequest): Mono<ResponseEntity<DecryptResponse>> {
         return Mono.fromCallable {
-            DecryptResponse(serverKeyService.decrypt3desKey(request.cipherBase64))
+            DecryptResponse(serverKeyService.decryptKey(request.cipherBase64))
         }.map { ResponseEntity.ok(it) }
             .onErrorResume {
                 Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
             }
     }
 
-    override fun generate3desKey(): Mono<ResponseEntity<Generate3desKeyResponse>> {
+    override fun generateKey(): Mono<ResponseEntity<GenerateKeyResponse>> {
         return Mono.fromCallable {
-            val (keyId, cipherBase64) = serverKeyService.generate3desKey()
-            Generate3desKeyResponse(keyId = keyId, cipherBase64 = cipherBase64)
+            val (keyId, cipherBase64) = serverKeyService.generateKey()
+            GenerateKeyResponse(keyId = keyId, cipherBase64 = cipherBase64)
         }.map { ResponseEntity.ok(it) }
     }
 }

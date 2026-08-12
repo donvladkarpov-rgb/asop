@@ -71,8 +71,8 @@ class MasterRegistry {
             "asop_vehicle_models" to route("vehicle-models"),
             // tariff-rates в card-service НЕ фильтруется по userIdsIn (SQL без фильтра)
             "asop_tariff_rates" to card("tariff-rates"),
-            // Глобальный пул ротируемых 3DES-ключей карт (админка генерирует через crypto-service)
-            "asop_3des_keys" to admin("three-des-keys"),
+            // Глобальный пул ротируемых ключей карт (админка генерирует через crypto-service)
+            "asop_keys" to admin("asop-keys"),
             // Справочник КРС (audit-service)
             "asop_audit_services" to audit("audit-services")
         )

@@ -13,13 +13,13 @@ import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.admin.config.DeltaSupport
-import ru.asop.admin.model.ThreeDesKeyEntity
-import ru.asop.admin.repository.ThreeDesKeyRepository
+import ru.asop.admin.model.KeyEntity
+import ru.asop.admin.repository.KeyRepository
 import ru.asop.common.util.UuidUtils
 import org.springframework.web.reactive.function.client.WebClient
 import java.util.UUID
 
-data class ThreeDesKeyResponse(
+data class KeyResponse(
     val keyId: UUID,
     val keyMaterial: String,
     val createdAt: java.time.Instant,
@@ -29,20 +29,20 @@ data class ThreeDesKeyResponse(
 )
 
 /**
- * CRUD + delta для ASOP_3DES_KEYS.
+ * CRUD + delta для ASOP_KEYS.
  * KEY_MATERIAL в ответах всегда зашифрован (публичный ключ сервера). Добавление — генерация
  * через crypto-service. Удаление — только SOFT (DELETED_AT), физическое удаление запрещено.
  */
 @RestController
-@RequestMapping("/api/v1/three-des-keys")
-class ThreeDesKeyController(
-    private val repository: ThreeDesKeyRepository,
+@RequestMapping("/api/v1/asop-keys")
+class KeyController(
+    private val repository: KeyRepository,
     private val template: R2dbcEntityTemplate,
     private val cryptoWebClient: org.springframework.web.reactive.function.client.WebClient
 ) {
 
     @GetMapping
-    fun list(): Mono<ResponseEntity<List<ThreeDesKeyResponse>>> {
+    fun list(): Mono<ResponseEntity<List<KeyResponse>>> {
         return repository.findAll()
             .map { it.toResponse() }
             .collectList()
@@ -54,17 +54,17 @@ class ThreeDesKeyController(
         @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
-    ): Flux<ThreeDesKeyEntity> {
-        return template.select(ThreeDesKeyEntity::class.java)
+    ): Flux<KeyEntity> {
+        return template.select(KeyEntity::class.java)
             .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
             .all()
     }
 
     @PostMapping
-    fun generate(): Mono<ResponseEntity<ThreeDesKeyResponse>> {
+    fun generate(): Mono<ResponseEntity<KeyResponse>> {
         return generateFromCrypto()
             .flatMap { cipherBase64 ->
-                val entity = ThreeDesKeyEntity(
+                val entity = KeyEntity(
                     keyId = UuidUtils.newId(),
                     keyMaterial = cipherBase64
                 )
@@ -96,7 +96,7 @@ class ThreeDesKeyController(
             .map { it.cipherBase64 }
     }
 
-    private fun ThreeDesKeyEntity.toResponse() = ThreeDesKeyResponse(
+    private fun KeyEntity.toResponse() = KeyResponse(
         keyId = keyId,
         keyMaterial = keyMaterial,
         createdAt = createdAt,

@@ -9,7 +9,7 @@ import reactor.core.publisher.Mono
 import ru.asop.api.crypto.dto.request.DecryptRequest
 import ru.asop.api.crypto.dto.response.DecryptResponse
 import ru.asop.api.crypto.dto.response.ServerKeyPublicResponse
-import ru.asop.api.crypto.dto.response.Generate3desKeyResponse
+import ru.asop.api.crypto.dto.response.GenerateKeyResponse
 
 @RequestMapping("/api/v1/keys")
 interface ServerKeyApi {
@@ -23,5 +23,5 @@ interface ServerKeyApi {
     ): Mono<ResponseEntity<DecryptResponse>>
 
     @PostMapping("/generate", produces = ["application/json"])
-    fun generate3desKey(): Mono<ResponseEntity<Generate3desKeyResponse>>
+    fun generateKey(): Mono<ResponseEntity<GenerateKeyResponse>>
 }

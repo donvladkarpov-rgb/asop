@@ -42,6 +42,19 @@ class SyncCardController(
         return proxy("cards", "/api/v1/cards/activate", body)
     }
 
+    /**
+     * VCM1-flow (промпт 008): активация MIFARE Classic без RSA-PSS подписи,
+     * server-master cardId по UID. Терминал-Android шлёт client cardId (UUID v7),
+     * сервер возвращает masterCardId; терминал обязан перезаписать block 1 на карте
+     * при `cardIdOverridden=true`.
+     */
+    @PostMapping("/api/v1/sync/cards/activate-vcm1")
+    fun activateCardVcm1(
+        @RequestBody body: JsonNode
+    ): Mono<ResponseEntity<JsonNode>> {
+        return proxy("cards", "/api/v1/cards/activate-vcm1", body)
+    }
+
     @GetMapping("/api/v1/sync/cards/by-uid/{uid}")
     fun getCardByUid(
         @PathVariable uid: String

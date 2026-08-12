@@ -12,7 +12,7 @@ import java.security.KeyStore
 import javax.net.ssl.TrustManagerFactory
 
 /**
- * WebClient для обращения к crypto-service (генерация 3DES-ключей, получение серверного публичного ключа).
+ * WebClient для обращения к crypto-service (генерация ключей ASOP_KEYS, получение серверного публичного ключа).
  * Доверяет сертификату crypto-service через общий truststore.
  */
 @Configuration

@@ -426,6 +426,8 @@ CREATE TABLE ASOP_USERS
 (
     USER_ID            UUID         NOT NULL,  -- UUIDv7
     FIRST_NAME         VARCHAR(100) NOT NULL,
+    -- Полная фамилия (опционально). Если NULL — деривируется из LAST_NAME_INITIAL при записи.
+    LAST_NAME          VARCHAR(100),
     LAST_NAME_INITIAL  CHAR(1)      NOT NULL,
     PATRONYMIC_INITIAL CHAR(1),
     PHONE              VARCHAR(20),
@@ -712,6 +714,8 @@ CREATE TABLE ASOP_CARD_MIFARES
 
     -- РОЛИ И PKI (НОВОЕ)
     CARD_ROLE            VARCHAR(30)  NOT NULL DEFAULT 'PASSENGER_ANONYMOUS',
+    -- Технология карты (промпт 007): DESFire — заводская по умолчанию; Classic — MIFARE Classic 1K/4K.
+    CARD_TECH            VARCHAR(10)  NOT NULL DEFAULT 'DESFIRE',
     IDENTITY_JSON        TEXT,
     IDENTITY_SIGNATURE   TEXT,
     CERTIFICATE_SERIAL   VARCHAR(50)  UNIQUE,
@@ -740,6 +744,7 @@ CREATE TABLE ASOP_CARD_MIFARES
         'DISTRIBUTOR_DISPATCHER', 'KRS_DISPATCHER', 'DRIVER',
         'KRS_FOREMAN', 'KRS_CONTROLLER', 'PASSENGER', 'PASSENGER_ANONYMOUS'
     )),
+    CONSTRAINT chk_card_tech CHECK (CARD_TECH IN ('DESFIRE', 'CLASSIC')),
     CONSTRAINT chk_cert_dates CHECK (
         (VALID_FROM IS NULL AND VALID_UNTIL IS NULL) OR
         (VALID_FROM IS NOT NULL AND VALID_UNTIL IS NOT NULL AND VALID_UNTIL > VALID_FROM)
@@ -752,6 +757,7 @@ CREATE TABLE ASOP_CARD_MIFARES
 COMMENT ON TABLE ASOP_CARD_MIFARES IS
     'MIFARE-карты системы. Поддерживает роли, PKI-сертификаты, аудит аутентификаций и техническую диагностику NFC.';
 COMMENT ON COLUMN ASOP_CARD_MIFARES.CARD_ROLE IS 'Роль карты в системе. Определяет права и DN-шаблон сертификата.';
+COMMENT ON COLUMN ASOP_CARD_MIFARES.CARD_TECH IS 'Технология NFC: DESFire (EV1/EV2/EV3) или MIFARE Classic (1K/4K). По умолчанию DESFire для обратной совместимости.';
 COMMENT ON COLUMN ASOP_CARD_MIFARES.CERTIFICATE_SERIAL IS 'Серийный номер X.509 сертификата (для PKI-карт). NULL для анонимных.';
 COMMENT ON COLUMN ASOP_CARD_MIFARES.PUBLIC_KEY_HASH IS 'SHA-256 хэш публичного ключа (для быстрой проверки без парсинга сертификата).';
 COMMENT ON COLUMN ASOP_CARD_MIFARES.KEY_VERSION IS 'Версия ключевой пары. Упрощает ротацию (выпускаем v2, пока v1 ещё валиден).';
@@ -1523,27 +1529,28 @@ COMMENT ON COLUMN ASOP_TERMINAL_CERTS.CA_CHAIN IS
     'PEM-цепочка CA (Root + Intermediate) на момент выпуска.';
 
 -- ========================
--- 8.2. 3DES-КЛЮЧИ КАРТ И ПАРАМЕТРЫ АСОП
+-- 8.2. КЛЮЧИ АСОП (ASOP_KEYS)
 -- ========================
 
--- Глобальный пул ротируемых 3DES-ключей карт (24 байта, 3K3DES).
+-- Глобальный пул ротируемых ключей АСОП (24 байта, 3K3DES — для DESFire;
+-- MIFARE Classic использует первые 6 байт каждого ключа как Key A, байты 6-11 как Key B).
 -- KEY_MATERIAL всегда хранится зашифрованным ПУБЛИЧНЫМ КЛЮЧОМ СЕРВЕРА (base64).
 -- Записи принципиально физически не удаляются — только метка DELETED_AT.
 -- Таблица входит в дельта-синк (доставка на терминалы через mTLS, вариант Б).
-CREATE TABLE ASOP_3DES_KEYS
+CREATE TABLE ASOP_KEYS
 (
     KEY_ID       UUID         NOT NULL,  -- UUIDv7
-    KEY_MATERIAL TEXT         NOT NULL,  -- 3DES-ключ (24 байта), зашифрован публичным ключом сервера (base64)
+    KEY_MATERIAL TEXT         NOT NULL,  -- ключ произвольной длины, зашифрован публичным ключом сервера (base64)
     CREATED_AT   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     UPDATED_AT   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     DELETED_AT   TIMESTAMPTZ,
     VERSION      BIGINT,
-    CONSTRAINT pk_3des_keys PRIMARY KEY (KEY_ID)
+    CONSTRAINT pk_asop_keys PRIMARY KEY (KEY_ID)
 );
-COMMENT ON TABLE ASOP_3DES_KEYS IS
-    'Пул ротируемых 3DES-ключей карт (MIFARE/DESFire). KEY_MATERIAL зашифрован публичным ключом сервера. Записи никогда физически не удаляются — только метятся DELETED_AT.';
-COMMENT ON COLUMN ASOP_3DES_KEYS.KEY_MATERIAL IS
-    '24-байтный 3DES-ключ (3K3DES), зашифрованный публичным ключом сервера (base64). В открытом виде в БД не хранится.';
+COMMENT ON TABLE ASOP_KEYS IS
+    'Пул ротируемых ключей АСОП (DESFire/MIFARE Classic). KEY_MATERIAL зашифрован публичным ключом сервера. Записи никогда физически не удаляются — только метятся DELETED_AT.';
+COMMENT ON COLUMN ASOP_KEYS.KEY_MATERIAL IS
+    'Ключ произвольной длины, зашифрованный публичным ключом сервера (base64). В открытом виде в БД не хранится. Сейчас генерируются 24-байтные 3K3DES для DESFire; MIFARE Classic использует первые 6 байт (Key A) и байты 6-11 (Key B).';
 
 -- Параметры АСОП в виде иерархии перекрытия.
 -- «Базовая» запись — все scope-колонки NULL. Более глубокий scope перекрывает нижние
@@ -2049,8 +2056,8 @@ CREATE INDEX IF NOT EXISTS ix_asop_user_carriers_updated_deleted ON asop_user_ca
 CREATE INDEX IF NOT EXISTS ix_asop_user_carriers_deleted ON asop_user_carriers (DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_user_regions_updated_deleted ON asop_user_regions (UPDATED_AT, DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_user_regions_deleted ON asop_user_regions (DELETED_AT);
-CREATE INDEX IF NOT EXISTS ix_asop_3des_keys_updated_deleted ON asop_3des_keys (UPDATED_AT, DELETED_AT);
-CREATE INDEX IF NOT EXISTS ix_asop_3des_keys_deleted ON asop_3des_keys (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_keys_updated_deleted ON asop_keys (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_keys_deleted ON asop_keys (DELETED_AT);
 
 -- Soft-delete триггеры (одинарный PK)
 CREATE TRIGGER trg_soft_delete_asop_regions BEFORE DELETE ON asop_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('region_id', 'uuid');
@@ -2090,7 +2097,7 @@ CREATE TRIGGER trg_soft_delete_asop_blacklists BEFORE DELETE ON asop_blacklists 
 CREATE TRIGGER trg_soft_delete_asop_user_benefits BEFORE DELETE ON asop_user_benefits FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('assignment_id', 'uuid');
 CREATE TRIGGER trg_soft_delete_asop_tariff_rates BEFORE DELETE ON asop_tariff_rates FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('tariff_rate_id', 'uuid');
 CREATE TRIGGER trg_soft_delete_asop_tids BEFORE DELETE ON asop_tids FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('tid_id', 'uuid');
-CREATE TRIGGER trg_soft_delete_asop_3des_keys BEFORE DELETE ON asop_3des_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('key_id', 'uuid');
+CREATE TRIGGER trg_soft_delete_asop_keys BEFORE DELETE ON asop_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('key_id', 'uuid');
 CREATE TRIGGER trg_soft_delete_asop_config_params BEFORE DELETE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('param_id', 'uuid');
 
 -- Soft-delete триггеры (составной PK)
@@ -2143,7 +2150,7 @@ CREATE TRIGGER trg_touch_updated_asop_contract_routes BEFORE INSERT OR UPDATE ON
 CREATE TRIGGER trg_touch_updated_asop_user_roles BEFORE INSERT OR UPDATE ON asop_user_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
 CREATE TRIGGER trg_touch_updated_asop_user_carriers BEFORE INSERT OR UPDATE ON asop_user_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
 CREATE TRIGGER trg_touch_updated_asop_user_regions BEFORE INSERT OR UPDATE ON asop_user_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
-CREATE TRIGGER trg_touch_updated_asop_3des_keys BEFORE INSERT OR UPDATE ON asop_3des_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_touch_updated_asop_keys BEFORE INSERT OR UPDATE ON asop_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
 CREATE TRIGGER trg_touch_updated_asop_config_params BEFORE INSERT OR UPDATE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
 
 -- VERSION-триггеры
@@ -2189,7 +2196,7 @@ CREATE TRIGGER trg_delta_version_asop_contract_routes BEFORE INSERT OR UPDATE ON
 CREATE TRIGGER trg_delta_version_asop_user_roles BEFORE INSERT OR UPDATE ON asop_user_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_user_carriers BEFORE INSERT OR UPDATE ON asop_user_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_user_regions BEFORE INSERT OR UPDATE ON asop_user_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
-CREATE TRIGGER trg_delta_version_asop_3des_keys BEFORE INSERT OR UPDATE ON asop_3des_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+CREATE TRIGGER trg_delta_version_asop_keys BEFORE INSERT OR UPDATE ON asop_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_config_params BEFORE INSERT OR UPDATE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 
 -- КРС (audit-services) — справочник, участвует в дельта-синхронизации.

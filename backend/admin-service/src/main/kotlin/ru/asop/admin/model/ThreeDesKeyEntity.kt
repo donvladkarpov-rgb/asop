@@ -5,8 +5,8 @@ import org.springframework.data.relational.core.mapping.Table
 import java.time.Instant
 import java.util.UUID
 
-@Table("ASOP_3DES_KEYS")
-data class ThreeDesKeyEntity(
+@Table("ASOP_KEYS")
+data class KeyEntity(
     @Id
     val keyId: UUID,
     val keyMaterial: String,

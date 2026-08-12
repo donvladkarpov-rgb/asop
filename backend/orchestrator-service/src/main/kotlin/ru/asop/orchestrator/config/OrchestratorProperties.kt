@@ -7,7 +7,7 @@ data class OrchestratorProperties(
     val kafka: Kafka = Kafka(),
     val s3: S3 = S3(),
     val purge: Purge = Purge(),
-    val threeDesKeys: ThreeDesKeys = ThreeDesKeys()
+    val keys: Keys = Keys()
 ) {
     data class Kafka(
         val topics: Topics = Topics()
@@ -31,7 +31,7 @@ data class OrchestratorProperties(
         val retentionMonths: Int = 6
     )
 
-    data class ThreeDesKeys(
+    data class Keys(
         val retentionYears: Int = 5,
         val rotationEnabled: Boolean = true,
         val rotationCron: String = "0 0 3 * * *"

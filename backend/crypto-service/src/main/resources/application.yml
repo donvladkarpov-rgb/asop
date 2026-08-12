@@ -71,11 +71,11 @@ asop:
       keystore-path: ${SERVER_KEY_KEYSTORE_PATH:./data/server-key.p12}
       keystore-password: ${SERVER_KEY_KEYSTORE_PASSWORD:changeit}
       key-alias: ${SERVER_KEY_ALIAS:asop-server-key}
-      # DEV-режим: фиксированный 3DES-ключ (24 байта, hex 000102...171617):
+      # DEV-режим: фиксированный ключ (24 байта, hex 000102...171617):
       # base64 = AAECAwQFBgcICQoLDA0ODxAREhMUFRYX
-      dev-key-base64: ${DEV_3DES_KEY_BASE64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYX}
+      dev-key-base64: ${DEV_ASOP_KEY_BASE64:AAECAwQFBgcICQoLDA0ODxAREhMUFRYX}
       # Включить ТОЛЬКО для разработки/отладки/тестирования. В проде — false!
-      dev-mode-enabled: ${DEV_3DES_KEY_MODE_ENABLED:false}
+      dev-mode-enabled: ${DEV_ASOP_KEY_MODE_ENABLED:false}
 
     terminal-cert:
       validity-years: 1

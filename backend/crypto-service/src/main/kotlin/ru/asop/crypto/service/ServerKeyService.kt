@@ -23,7 +23,7 @@ import java.util.Base64
 /**
  * Выделенный ключ шифрования данных АСОП (RSA-2048).
  *
- * Используется для защиты 3DES-ключей карт at-rest в БД (ASOP_3DES_KEYS.KEY_MATERIAL):
+ * Используется для защиты ключей карт at-rest в БД (ASOP_KEYS.KEY_MATERIAL):
  * записи всегда хранятся зашифрованными ПУБЛИЧНЫМ ключом сервера, расшифровка возможна
  * только здесь приватным ключом (мастер-система). Доставка на терминал — по mTLS (вариант Б),
  * per-terminal шифрования нет.
@@ -106,11 +106,13 @@ class ServerKeyService(
     fun getPublicKey(): PublicKey = rsaKeyPair.public
 
     /**
-     * Шифрует 24-байтный 3DES-ключ публичным ключом сервера (RSA-OAEP-SHA256).
+     * Шифрует ключ публичным ключом сервера (RSA-OAEP-SHA256).
+     * Поддерживает ключи произвольной длины (RSA-2048 OAEP вмещает до ~190 байт plaintext).
+     * Сейчас генерируются 24-байтные 3K3DES для DESFire; MIFARE Classic использует первые 6 байт.
      */
-    fun encrypt3desKey(plainBase64: String): String {
+    fun encryptKey(plainBase64: String): String {
         val plain = Base64.getDecoder().decode(plainBase64)
-        require(plain.size == 24) { "3DES key must be 24 bytes, got ${plain.size}" }
+        require(plain.isNotEmpty() && plain.size <= 190) { "Key material must be 1-190 bytes, got ${plain.size}" }
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
         val spec = OAEPParameterSpec(
             "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT
@@ -120,37 +122,37 @@ class ServerKeyService(
     }
 
     /**
-     * Расшифровывает 3DES-ключ приватным ключом сервера. Отдаёт открытые 24 байта (base64).
+     * Расшифровывает ключ приватным ключом сервера. Отдаёт открытый plaintext (base64).
      */
-    fun decrypt3desKey(cipherBase64: String): String {
+    fun decryptKey(cipherBase64: String): String {
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
         val spec = OAEPParameterSpec(
             "SHA-256", "MGF1", MGF1ParameterSpec.SHA256, PSource.PSpecified.DEFAULT
         )
         cipher.init(Cipher.DECRYPT_MODE, rsaKeyPair.private, spec)
         val plain = cipher.doFinal(Base64.getDecoder().decode(cipherBase64))
-        require(plain.size == 24) { "Decrypted 3DES key must be 24 bytes, got ${plain.size}" }
+        require(plain.isNotEmpty()) { "Decrypted key material is empty" }
         return Base64.getEncoder().encodeToString(plain)
     }
 
     /**
-     * Генерирует новый случайный 24-байтный 3DES-ключ и сразу шифрует его публичным ключом.
+     * Генерирует новый случайный 24-байтный 3K3DES-ключ и сразу шифрует его публичным ключом.
      * В dev-режиме всегда возвращает единственный заранее известный ключ.
      */
-    fun generate3desKey(): Pair<String, String> {
+    fun generateKey(): Pair<String, String> {
         val plainBase64: String
         val keyId: String
         if (cfg.devModeEnabled) {
             plainBase64 = cfg.devKeyBase64
-            keyId = "dev-fixed-3des-key"
-            log.warn("DEV MODE: returning fixed 3DES key {}", keyId)
+            keyId = "dev-fixed-asop-key"
+            log.warn("DEV MODE: returning fixed ASOP key {}", keyId)
         } else {
             val key = ByteArray(24)
             SecureRandom().nextBytes(key)
             plainBase64 = Base64.getEncoder().encodeToString(key)
             keyId = ru.asop.common.util.UuidUtils.newId().toString()
         }
-        return keyId to encrypt3desKey(plainBase64)
+        return keyId to encryptKey(plainBase64)
     }
 
     fun isDevModeEnabled(): Boolean = cfg.devModeEnabled

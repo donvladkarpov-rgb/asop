@@ -8,19 +8,19 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import org.springframework.web.reactive.function.client.WebClient
 import reactor.core.publisher.Mono
-import ru.asop.proto.v1.Asop3desKeysRow
+import ru.asop.proto.v1.AsopKeysRow
 import ru.asop.orchestrator.config.OrchestratorProperties
 import java.time.Instant
 import java.util.Base64
 
 /**
- * Спец-обработка глобального пула 3DES-ключей (asop_3des_keys):
- *  - blob (зашифрован публичным ключом сервера) → crypto-service `decrypt` → plaintext 24 байта;
+ * Спец-обработка глобального пула ключей (asop_keys):
+ *  - blob (зашифрован публичным ключом сервера) → crypto-service `decrypt` → plaintext;
  *  - серверный фильтр «N лет» (CREATED_AT >= now - N, N из base-конфига);
- *  - построение proto-строки Asop3desKeysRow (key_material как bytes plaintext).
+ *  - построение proto-строки AsopKeysRow (key_material как bytes plaintext).
  */
 @Service
-class ThreeDesKeyService(
+class KeyService(
     private val masterWebClient: WebClient,
     private val props: OrchestratorProperties,
     private val objectMapper: ObjectMapper
@@ -28,11 +28,11 @@ class ThreeDesKeyService(
     private val log = LoggerFactory.getLogger(javaClass)
 
     companion object {
-        const val TABLE = "asop_3des_keys"
+        const val TABLE = "asop_keys"
         // Ключи base-конфига (scope=NULL) из ASOP_CONFIG_PARAMS
-        const val CFG_RETENTION_YEARS = "threeDesKeys.retentionYears"
-        const val CFG_ROTATION_CRON = "threeDesKeys.rotationCron"
-        const val CFG_ROTATION_ENABLED = "threeDesKeys.rotationEnabled"
+        const val CFG_RETENTION_YEARS = "keys.retentionYears"
+        const val CFG_ROTATION_CRON = "keys.rotationCron"
+        const val CFG_ROTATION_ENABLED = "keys.rotationEnabled"
     }
 
     fun readBaseConfig(): Mono<Map<String, Any?>> {
@@ -41,7 +41,7 @@ class ThreeDesKeyService(
             .retrieve()
             .bodyToMono(JsonNode::class.java)
             .onErrorResume { err ->
-                log.warn("3des-keys: base config fetch failed, using defaults: {}", err.message)
+                log.warn("asop-keys: base config fetch failed, using defaults: {}", err.message)
                 Mono.empty()
             }
             .defaultIfEmpty(objectMapper.createObjectNode())
@@ -54,25 +54,25 @@ class ThreeDesKeyService(
     fun retentionYears(base: Map<String, Any?>): Int {
         val fromConfig = (base[CFG_RETENTION_YEARS] as? Number)?.toInt()
             ?: (base[CFG_RETENTION_YEARS] as? String)?.toIntOrNull()
-        log.debug("3des retentionYears resolved: {} (base)", fromConfig ?: props.threeDesKeys.retentionYears)
-        return fromConfig ?: props.threeDesKeys.retentionYears
+        log.debug("asop-keys retentionYears resolved: {} (base)", fromConfig ?: props.keys.retentionYears)
+        return fromConfig ?: props.keys.retentionYears
     }
 
     fun rotationCron(base: Map<String, Any?>): String {
         return (base[CFG_ROTATION_CRON] as? String)
-            ?: props.threeDesKeys.rotationCron
+            ?: props.keys.rotationCron
     }
 
     fun rotationEnabled(base: Map<String, Any?>): Boolean {
         return (base[CFG_ROTATION_ENABLED] as? Boolean)
-            ?: ((base[CFG_ROTATION_ENABLED] as? String)?.toBooleanStrictOrNull() ?: props.threeDesKeys.rotationEnabled)
+            ?: ((base[CFG_ROTATION_ENABLED] as? String)?.toBooleanStrictOrNull() ?: props.keys.rotationEnabled)
     }
 
     /** Дефолтный cron из application.yml — fallback при недоступности base-конфига. */
-    fun defaultCron(): String = props.threeDesKeys.rotationCron
+    fun defaultCron(): String = props.keys.rotationCron
 
     /**
-     * Преобразует JSON-строку /delta в Asop3desKeysRow:
+     * Преобразует JSON-строку /delta в AsopKeysRow:
      *  - отбрасывает записи старше N лет (серверный фильтр);
      *  - расшифровывает KEY_MATERIAL через crypto-service.
      * Возвращает пустой Mono если запись отфильтрована.
@@ -90,12 +90,12 @@ class ThreeDesKeyService(
         val cipherBase64 = node.get("keyMaterial")?.asText()
             ?: node.get("key_material")?.asText()
         if (cipherBase64.isNullOrBlank()) {
-            log.warn("3des key row without keyMaterial, skipping")
+            log.warn("asop-keys key row without keyMaterial, skipping")
             return Mono.empty()
         }
         return decrypt(cipherBase64)
             .map { plainBase64 ->
-                val rowBuilder = Asop3desKeysRow.newBuilder()
+                val rowBuilder = AsopKeysRow.newBuilder()
                     .setKeyId(node.get("keyId")?.asText() ?: node.get("key_id")?.asText() ?: "")
                     .setKeyMaterial(ByteString.copyFrom(Base64.getDecoder().decode(plainBase64)))
                     .setCreatedAt(parseEpoch(node, "createdAt", "created_at") ?: 0L)
@@ -121,7 +121,7 @@ class ThreeDesKeyService(
             .bodyToMono(JsonNode::class.java)
             .map { it.get("keyMaterialBase64").asText() }
             .onErrorResume { err ->
-                log.error("3des decrypt failed: {}", err.message)
+                log.error("asop-keys decrypt failed: {}", err.message)
                 Mono.error(err)
             }
     }

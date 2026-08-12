@@ -27,7 +27,7 @@ class FullSyncService(
     private val eventService: EventService,
     private val props: OrchestratorProperties,
     private val s3Client: S3Client,
-    private val threeDesKeyService: ThreeDesKeyService,
+    private val keyService: KeyService,
     private val masterWebClient: WebClient
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
@@ -76,8 +76,8 @@ class FullSyncService(
                 .collectList()
                 .flatMap { userIdList ->
                     val userIds = userIdList.toSet()
-                    threeDesKeyService.readBaseConfig().flatMap { baseConfig ->
-                        val retentionYears = threeDesKeyService.retentionYears(baseConfig)
+                    keyService.readBaseConfig().flatMap { baseConfig ->
+                        val retentionYears = keyService.retentionYears(baseConfig)
                         lazyTableRows(command, userIds, retentionYears)
                     }
                 }
@@ -159,8 +159,8 @@ class FullSyncService(
     }
 
     private fun toRowMessage(table: String, row: JsonNode, retentionYears: Int): Mono<Message> {
-        if (table == ThreeDesKeyService.TABLE) {
-            return threeDesKeyService.buildKeyRow(row, retentionYears)
+        if (table == KeyService.TABLE) {
+            return keyService.buildKeyRow(row, retentionYears)
         }
         return Mono.just(protoRowMapper.buildRowMessage(table, row))
     }
@@ -208,8 +208,8 @@ class FullSyncService(
     }
 
     private fun protoClassName(table: String): String {
-        // глобальный пул 3DES-ключей назван в proto c префиксом Asop
-        if (table == ThreeDesKeyService.TABLE) return "Asop3desKeysFile"
+        // глобальный пул ключей назван в proto c префиксом Asop
+        if (table == KeyService.TABLE) return "AsopKeysFile"
         return "${camel(table)}File"
     }
 
