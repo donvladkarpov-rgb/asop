@@ -260,6 +260,37 @@ Spring Boot 3.3.5 WebFlux. **БЕЗ R2DBC** (кроме purge-job). Читает
 - user-service: admin-users (UNION user_carriers ∪ user_regions), user-roles, user-carriers, user-regions (camelCase алиасы через DatabaseClient)
 - card-service: cards, card-mifares, card-banks, card-tariffs, blacklists, user-benefits, tariff-rates. Для mifares/banks/tariffs/blacklists — JOIN ASOP_CARDS на user_id (фильтр `userIdsIn`). Tariff-rates — без user-фильтра (carrierId FK).
 
+**Region/carrier фильтрация в `/delta` (промпт 010):**
+
+Параметр `regionId` (и реже `carrierId`) принимают все мастер-сервисы и применяют SQL-фильтрацию ПЕРЕД возвратом:
+
+| DB table | Region filter | Реализация |
+|----------|---------------|-----------|
+| `asop_territories` | `region_id` direct | `Criteria.where("region_id")` в `TerritoryController` |
+| `asop_organizers` | через `organizer_territories → territories.region_id` | `OrganizerDeltaQuery` (EXISTS subquery) |
+| `asop_organizer_territories` | через `territories.region_id` | `OrganizerTerritoryDeltaQuery` (JOIN) |
+| `asop_benefit_steps` | через `benefits.region_id` | `BenefitStepDeltaQuery` (JOIN) |
+| `asop_carriers` | direct `region_id` | existing |
+| `asop_contracts` | direct `carrier_id`/`cards_distributor_id` | existing |
+| `asop_users` | UNION (carriers/regions/admin-no-region) | existing |
+| `asop_user_regions` / `asop_user_carriers` | direct | existing |
+| `asop_fare_zones`/`transport_stops`/`routes`/`paths`/`path_transport_stops`/`schedule` | direct `region_id` | `REGION_ID_TABLES` set |
+| `asop_vehicles`/`path_services`/`path_discounts` | direct `carrier_id` | `CARRIER_ID_TABLES` set |
+| `asop_contract_routes` | через `routes.region_id` | `ResourceInfo.regionJoinClause` в `GenericRouteRepository.findDelta` |
+| `asop_path_benefits` | через `paths → routes.region_id` | `ResourceInfo.regionJoinClause` в `GenericRouteRepository.findDelta` |
+| `asop_user_roles` | через `users + EXISTS ASOP_USER_REGIONS` | explicit JOIN в `UserRoleController` |
+| `asop_services`/`benefits` | direct `region_id` | existing |
+
+Если `regionId` в запросе = NULL (full dump — orchestrator не знает, какой регион нужен), SQL возвращает все строки (`null` означает «global» для `where (:p IS NULL OR ...)`). Это позволяет `FullSyncService` прокачать всю базу для нового терминала при первой регистрации.
+
+**Тех. детали промпт 010:**
+- Spring Data R2DBC плохо мапит custom `@Query` возвращающие `Flux<Entity>` для сложных JOIN — использован прямой `DatabaseClient` + `.map { row -> entity }` с явным row mapping.
+- R2DBC PostgreSQL driver возвращает UUID как `UUID.class`, не `String`; хелпер `asUuid(value)` оборачивает оба варианта.
+- `.bind("name", nullable_value)` падает (`Any` non-null) — нужен `if (v != null) spec.bind(v) else spec.bindNull(name, Class::javaObjectType)`.
+- Все WHERE-условия с префиксом таблицы (`ASOP_T.x`) во избежание ambiguity при JOIN.
+- В `GenericRouteRepository.findDelta` добавлено поле `ResourceInfo.regionJoinClause: String?` — если задано и `regionId != null`, используется вместо стандартного `region_id = :regionId`. Это общий механизм для произвольных JOIN-фильтров.
+- `MasterRegistry.kt` НЕ изменён — orchestrator` уже передаёт `regionId`/`carrierId` в URL; правки сделаны на master-стороне.
+
 ### Soft-delete и VERSION-курсор
 
 - `DELETED_AT TIMESTAMPTZ` добавлен во все 42 справочные таблицы через DO-блок в `v001-init.sql`.
@@ -448,23 +479,23 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Роли смарт-карт
 `PASSENGER_ANONYMOUS`, `PASSENGER_BENEFIT`, `DRIVER`, `CONTROLLER`, `DISPATCHER`, `CARRIER_ADMIN`, `REGION_ADMIN`, `SUPER_ADMIN`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_TERMINAL`, `SERVICE`
 
-### 3DES-ключи карт (промпт 004)
+### Ключи ASOP_KEYS (промпт 006)
 
-**Доставка — вариант Б** (по mTLS в составе дельты/полной выкачки, БЕЗ ECIES). ECIES отклонён из-за непортативности `PURPOSE_AGREE` между OEM-реализациями Android Keystore. Plaintext 24 байта 3DES-ключа приходит на терминал по mTLS, терминал перешифровывает его локальным Keystore-AES-ключом.
+**Доставка — вариант Б** (по mTLS в составе дельты/полной выкачки, БЕЗ ECIES). ECIES отклонён из-за непортативности `PURPOSE_AGREE` между OEM-реализациями Android Keystore. Plaintext ключа приходит на терминал по mTLS, терминал перешифровывает его локальным Keystore-AES-ключом. Сейчас генерируются 24-байтные 3K3DES для DESFire; MIFARE Classic использует первые 6 байт (Key A) и байты 6-11 (Key B).
 
 **Серверный ключ шифрования** (`crypto-service`):
 - RSA-2048 PKCS12 (`./data/server-key.p12`), отдельный от CA/TLS
 - `POST /api/v1/keys/decrypt` (cipher → plaintext base64), `POST /api/v1/keys/generate` (keyId+cipher), `GET /api/v1/keys/public`
 - RSA/ECB/OAEPWithSHA-256AndMGF1Padding
-- **Dev-режим**: `asop.crypto.server-key.dev-mode-enabled` (env `DEV_3DES_KEY_MODE_ENABLED`) + фиксированный dev-ключ `DEV_3DES_KEY_BASE64` (base64 `AAECAwQFBgcICQoLDA0ODxAREhMUFRYX`)
+- **Dev-режим**: `asop.crypto.server-key.dev-mode-enabled` (env `DEV_ASOP_KEY_MODE_ENABLED`) + фиксированный dev-ключ `DEV_ASOP_KEY_BASE64` (base64 `AAECAwQFBgcICQoLDA0ODxAREhMUFRYX`)
 
 **Таблицы:**
-- `ASOP_3DES_KEYS` — глобальный пул ротируемых 3DES-ключей (admin-service). `KEY_ID UUIDv7`, `KEY_MATERIAL TEXT` (24 байта, зашифрован публичным ключом сервера). Soft-delete only, `PurgeJob` исключает из purge.
+- `ASOP_KEYS` — глобальный пул ротируемых ключей (admin-service). `KEY_ID UUIDv7`, `KEY_MATERIAL TEXT` (ключ произвольной длины, зашифрован публичным ключом сервера). Soft-delete only, `PurgeJob` исключает из purge.
 - `ASOP_CONFIG_PARAMS` — иерархия перекрытия параметров: base (scope=NULL) → region → organizer → carrier → distributor → krs. `PARAMS JSONB`. Серверная, на терминалы НЕ синкается.
 
 **Оркестратор:**
-- `MasterRegistry.GLOBAL_TABLES["asop_3des_keys"]` → admin `three-des-keys`
-- `ThreeDesKeyService` — decrypt-трансформ + серверный фильтр «N лет» (default 5)
+- `MasterRegistry.GLOBAL_TABLES["asop_keys"]` → admin `asop-keys`
+- `KeyService` — decrypt-трансформ + серверный фильтр «N лет» (default 5)
 - `KeyRotationScheduler` — `SchedulingConfigurer` + динамический CronTrigger, timeout 10 сек на чтение base-конфига, fallback на дефолтный cron
 
 **Android:**

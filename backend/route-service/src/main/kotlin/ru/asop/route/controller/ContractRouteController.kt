@@ -28,6 +28,8 @@ class ContractRouteController(
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
+        // Промпт 010: GenericRouteRepository.findDelta использует JOIN ASOP_ROUTES.region_id
+        // при regionJoinClause в ResourceInfo (contract-routes уже настроен).
         val info = RouteTableRegistry.resolve("contract-routes") ?: return Flux.empty()
         return repository.findDelta(info, versionSince, includeDeleted == true, regionId, carrierId, limit)
     }

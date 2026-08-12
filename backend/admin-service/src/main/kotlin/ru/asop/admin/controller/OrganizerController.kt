@@ -7,6 +7,7 @@ import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import reactor.core.publisher.Mono
 import ru.asop.admin.model.OrganizerEntity
 import ru.asop.admin.model.OrganizerTerritoryEntity
+import ru.asop.admin.repository.OrganizerDeltaQuery
 import ru.asop.admin.repository.OrganizerRepository
 import ru.asop.admin.repository.OrganizerTerritoryRepository
 import ru.asop.admin.repository.RegionRepository
@@ -25,11 +26,12 @@ import org.springframework.data.relational.core.query.Criteria
 import org.springframework.data.relational.core.query.Query
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestParam
-import ru.asop.admin.config.DeltaSupport
+
 
 @RestController
 class OrganizerController(
     private val organizerRepository: OrganizerRepository,
+    private val organizerDeltaQuery: OrganizerDeltaQuery,
     private val organizerTerritoryRepository: OrganizerTerritoryRepository,
     private val territoryRepository: TerritoryRepository,
     private val regionRepository: RegionRepository,
@@ -128,12 +130,11 @@ class OrganizerController(
 
     @GetMapping("/delta")
     fun listDelta(
+        @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
-    ): Flux<OrganizerEntity> {
-        return template.select(OrganizerEntity::class.java)
-            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
-            .all()
-    }
+    ): Flux<OrganizerEntity> = organizerDeltaQuery.findByRegion(
+        versionSince, includeDeleted, limit, regionId
+    )
 }

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RestController
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
 import reactor.core.publisher.Mono
 import ru.asop.admin.model.BenefitStepEntity
+import ru.asop.admin.repository.BenefitStepDeltaQuery
 import ru.asop.admin.repository.BenefitStepRepository
 import ru.asop.api.reference.controller.BenefitStepApi
 import ru.asop.api.reference.dto.request.BenefitStepCreateRequest
@@ -20,11 +21,12 @@ import org.springframework.data.relational.core.query.Criteria
 import org.springframework.data.relational.core.query.Query
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestParam
-import ru.asop.admin.config.DeltaSupport
+
 
 @RestController
 class BenefitStepController(
     private val repository: BenefitStepRepository,
+    private val deltaQuery: BenefitStepDeltaQuery,
     private val template: R2dbcEntityTemplate
 ) : BenefitStepApi {
 
@@ -95,12 +97,9 @@ class BenefitStepController(
 
     @GetMapping("/delta")
     fun listDelta(
+        @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
-    ): Flux<BenefitStepEntity> {
-        return template.select(BenefitStepEntity::class.java)
-            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
-            .all()
-    }
+    ): Flux<BenefitStepEntity> = deltaQuery.findByRegion(versionSince, includeDeleted, limit, regionId)
 }

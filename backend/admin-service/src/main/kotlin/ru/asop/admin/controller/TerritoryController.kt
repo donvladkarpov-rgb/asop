@@ -107,12 +107,14 @@ class TerritoryController(
 
     @GetMapping("/delta")
     fun listDelta(
+        @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) versionSince: Long?,
         @RequestParam(required = false) includeDeleted: Boolean,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<TerritoryEntity> {
+        val extra = if (regionId != null) Criteria.where("region_id").`is`(regionId) else null
         return template.select(TerritoryEntity::class.java)
-            .matching(DeltaSupport.query(versionSince, includeDeleted, limit))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit, extra))
             .all()
     }
 }

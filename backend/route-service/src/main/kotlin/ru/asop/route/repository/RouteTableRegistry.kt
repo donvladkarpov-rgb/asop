@@ -6,7 +6,15 @@ data class ResourceInfo(
     val pkColumn: String,
     val idSnake: String,
     val columnExprs: Map<String, String> = emptyMap(),
-    val selectColumns: String? = null
+    val selectColumns: String? = null,
+    /**
+     * Промпт 010: optional JOIN-clause для region-фильтрации через head-table
+     * (для таблиц без собственного region_id). Пример:
+     * "JOIN ASOP_ROUTES r ON r.ROUTE_ID = ${tableAlias}.ROUTE_ID AND r.REGION_ID = :regionId"
+     * Где ${tableAlias} = "${tableName.first().lowercase() + tableName.substring(1).lowercase().removePrefix("ASOP_")}".
+     * Используется ТОЛЬКО если regionId != null.
+     */
+    val regionJoinClause: String? = null
 )
 
 object RouteTableRegistry {
@@ -69,7 +77,9 @@ object RouteTableRegistry {
             resource = "path-benefits",
             tableName = "ASOP_PATH_BENEFITS",
             pkColumn = "PATH_BENEFIT_ID",
-            idSnake = "path_benefit_id"
+            idSnake = "path_benefit_id",
+            selectColumns = "ASOP_PATH_BENEFITS.PATH_BENEFIT_ID, ASOP_PATH_BENEFITS.PATH_ID, ASOP_PATH_BENEFITS.BENEFIT_ID, ASOP_PATH_BENEFITS.CREATED_AT, ASOP_PATH_BENEFITS.UPDATED_AT, ASOP_PATH_BENEFITS.DELETED_AT, ASOP_PATH_BENEFITS.VERSION",
+            regionJoinClause = "JOIN ASOP_PATHS p ON p.PATH_ID = ASOP_PATH_BENEFITS.PATH_ID JOIN ASOP_ROUTES r ON r.ROUTE_ID = p.ROUTE_ID AND r.REGION_ID = :regionId"
         ),
         "vehicles" to ResourceInfo(
             resource = "vehicles",
@@ -93,7 +103,9 @@ object RouteTableRegistry {
             resource = "contract-routes",
             tableName = "ASOP_CONTRACT_ROUTES",
             pkColumn = "CONTRACT_ID",
-            idSnake = "contract_id"
+            idSnake = "contract_id",
+            selectColumns = "ASOP_CONTRACT_ROUTES.CONTRACT_ID, ASOP_CONTRACT_ROUTES.ROUTE_ID, ASOP_CONTRACT_ROUTES.CREATED_AT, ASOP_CONTRACT_ROUTES.UPDATED_AT, ASOP_CONTRACT_ROUTES.DELETED_AT, ASOP_CONTRACT_ROUTES.VERSION",
+            regionJoinClause = "JOIN ASOP_ROUTES r ON r.ROUTE_ID = ASOP_CONTRACT_ROUTES.ROUTE_ID AND r.REGION_ID = :regionId"
         )
     )
 

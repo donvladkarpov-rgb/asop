@@ -102,22 +102,27 @@ class GenericRouteRepository(
         carrierId: UUID?,
         limit: Int
     ): Flux<Map<String, Any?>> {
-        val baseSelect = info.selectColumns ?: "*"
-        val selectClause = if (info.selectColumns != null) {
-            val cols = LinkedHashSet(baseSelect.split(",").map { it.trim() }.filter { it.isNotEmpty() })
-            listOf("created_at", "updated_at", "deleted_at", "version").forEach { if (it !in cols) cols.add(it) }
-            cols.joinToString(", ")
-        } else baseSelect
+        val selectClause = info.selectColumns ?: "*"
+
+        // Промпт 010: JOIN-based region filter для таблиц без собственного region_id.
+        val useJoin = regionId != null && info.regionJoinClause != null
+        val joinSql: String = if (useJoin) " ${info.regionJoinClause}" else ""
+
+        // Все WHERE-условия и ORDER BY используют префикс таблицы (= info.tableName) во избежание
+        // неоднозначности при JOIN. selectColumns может содержать как псевдо-префиксные, так и bare-колонки.
         val conditions = mutableListOf<String>()
-        versionSince?.let { conditions += "version > :since" }
-        if (!includeDeleted) conditions += "deleted_at IS NULL"
-        if (regionId != null && info.tableName in REGION_ID_TABLES) conditions += "region_id = :regionId"
-        if (carrierId != null && info.tableName in CARRIER_ID_TABLES) conditions += "carrier_id = :carrierId"
-        val whereClause = if (conditions.isEmpty()) "" else conditions.joinToString(" AND ", prefix = " WHERE ")
-        val sql = "SELECT $selectClause FROM ${info.tableName}$whereClause ORDER BY version ASC LIMIT :limit"
+        versionSince?.let { conditions += "${info.tableName}.version > :since" }
+        if (!includeDeleted) conditions += "${info.tableName}.deleted_at IS NULL"
+        if (regionId != null && !useJoin && info.tableName in REGION_ID_TABLES)
+            conditions += "${info.tableName}.region_id = :regionId"
+        if (carrierId != null && info.tableName in CARRIER_ID_TABLES)
+            conditions += "${info.tableName}.carrier_id = :carrierId"
+        val whereClause = if (conditions.isEmpty()) "" else conditions.joinToString(" AND ", prefix = "WHERE ")
+        val sql = "SELECT $selectClause FROM ${info.tableName}$joinSql $whereClause ORDER BY ${info.tableName}.version ASC LIMIT :limit"
         var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql).bind("limit", limit)
         versionSince?.let { spec = spec.bind("since", it) }
-        if (regionId != null && info.tableName in REGION_ID_TABLES) spec = spec.bind("regionId", regionId)
+        if (useJoin) spec = spec.bind("regionId", regionId!!)
+        if (regionId != null && !useJoin && info.tableName in REGION_ID_TABLES) spec = spec.bind("regionId", regionId)
         if (carrierId != null && info.tableName in CARRIER_ID_TABLES) spec = spec.bind("carrierId", carrierId)
         return spec.fetch().all()
     }

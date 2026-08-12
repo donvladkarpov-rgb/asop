@@ -402,12 +402,12 @@ Endpoint `GET /api/v1/keys/public` проксируется gateway → crypto-s
 
 Верификация НЕ выполняется при активации/регистрации карты (write-операция).
 
-### 3DES-ключи на терминале (локальное AES-шифрование)
+### Ключи ASOP_KEYS на терминале (локальное AES-шифрование)
 
-3DES-ключи доставляются на терминал через дельту/полную выкачку (поле `asop_3des_keys = 43` в `DeltaChunk`). На устройстве они **перешифровываются** локальным AES-ключом, чтобы не хранить plaintext 3DES-материал в Room:
+Ключи доставляются на терминал через дельту/полную выкачку (поле `asop_keys = 43` в `DeltaChunk`). На устройстве они **перешифровываются** локальным AES-ключом, чтобы не хранить plaintext материал в Room:
 
 - `TerminalKeyCryptor` (алиас `asop_terminal_keys_aes`, AndroidKeyStore AES-256/GCM, `PURPOSE_ENCRYPT|DECRYPT`)
-- Генерация: **lazy** — при первом прибытии `asop_3des_keys` через дельту
+- Генерация: **lazy** — при первом прибытии `asop_keys` через дельту
 - Ключ **неэкспортируемый**, живёт в TEE/StrongBox, **не зависит от mTLS-сертификата** (разные алиасы и PURPOSE)
 - Переживает: перевыпуск mTLS-серта, переустановку приложения (тот же signing key), `fallbackToDestructiveMigration()` Room
 - Удаляется только при очистке данных приложения или factory reset
@@ -426,6 +426,24 @@ Android → POST /sync/references/delta (body: terminalId, lastVersion) → 202 
        → Android → GET /events/{eventId} → COMPLETED → GET /sync/references/{eventId}/chunks/{n}
        → ReferenceSyncStore.applyChunk → Room reference_rows (атомарно) + sync_meta watermark
 ```
+
+**Region/carrier фильтрация в `master /delta` (промпт 010):**
+
+Все мастер-сервисы принимают `regionId` и `carrierId` query-параметры, которые orchestrator пробрасывает на основе `terminalId → carrierId → regionId` (`TerminalResolver`). Реальная SQL-фильтрация по региону делается в самих мастерах:
+
+- **Прямая фильтрация** (таблица имеет `region_id` колонку): `asop_territories`, `asop_carriers`, `asop_fare_zones`, `asop_transport_stops`, `asop_routes`, `asop_paths`, `asop_path_transport_stops`, `asop_schedule`, `asop_services`, `asop_benefits`.
+- **JOIN-фильтрация** (через FK-цепочку): `asop_benefit_steps` → `benefits.region_id`; `asop_contract_routes` → `routes.region_id`; `asop_path_benefits` → `paths→routes.region_id`; `asop_organizer_territories` → `territories.region_id`.
+- **EXISTS-фильтрация** (через many-to-many): `asop_organizers` → `organizer_territories→territories.region_id`; `asop_user_roles` → `users + ASOP_USER_REGIONS.region_id`.
+
+Если `regionId = null` (full dump), SQL возвращает все строки (`where (:p IS NULL OR ...)`). Это необходимо для `FullSyncService` при первом включении терминала.
+
+**Тех. детали промпт 010 (для разработчиков):**
+- Spring Data R2DBC плохо мапит custom `@Query` возвращающие `Flux<Entity>` — для JOIN использован прямой `DatabaseClient + .map { row -> entity }`.
+- R2DBC PostgreSQL driver возвращает UUID как `UUID.class` — helper `asUuid(value)` оборачивает оба варианта.
+- `.bind("name", null)` падает (`Any` non-null) — `if (v != null) spec.bind(v) else spec.bindNull(name, Class::javaObjectType)`.
+- Все WHERE-условия с префиксом таблицы (`ASOP_FOO.x`) во избежание ambiguity при JOIN.
+- В `GenericRouteRepository.findDelta` добавлено поле `ResourceInfo.regionJoinClause: String?` — если задано и `regionId != null`, используется вместо стандартного `region_id = :regionId`. Это generic механизм для произвольных JOIN-фильтров.
+- `MasterRegistry.kt` НЕ изменён — orchestrator уже передаёт `regionId`/`carrierId`; правки сделаны только на master-стороне.
 
 **VERSION-курсор**: все ~42 справочные таблицы имеют `VERSION BIGINT` — глобальный монотонный sequence `asop_delta_version_seq` (`trg_fn_assign_version()` присваивает `nextval(...)` на INSERT/UPDATE/DELETE). Дельта-фильтр — `VERSION > versionSince`, сортировка `ORDER BY VERSION ASC` (стабильная keyset-пагинация, не зависит от таймзоны/изменения часов, в отличие от `UPDATED_AT`). `UPDATED_AT` остаётся для аудита и soft-delete.
 

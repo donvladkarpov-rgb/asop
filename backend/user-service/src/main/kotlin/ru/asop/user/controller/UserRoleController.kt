@@ -52,20 +52,31 @@ class UserRoleController(
         @RequestParam(required = false) carrierId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
-        val conditions = mutableListOf<String>()
-        if (versionSince != null) conditions += "version > :since"
-        if (includeDeleted != true) conditions += "deleted_at IS NULL"
-        val where = if (conditions.isEmpty()) "" else " WHERE ${conditions.joinToString(" AND ")}"
+        // Промпт 010: region filter через JOIN ASOP_USERS + EXISTS ASOP_USER_REGIONS.
         val sql = """
-            SELECT user_id AS "userId", role_id AS "roleId",
-                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt",
-                   version AS "version"
-            FROM ASOP_USER_ROLES$where
-            ORDER BY version ASC
+            SELECT ur.user_id AS "userId", ur.role_id AS "roleId",
+                   ur.created_at AS "createdAt", ur.updated_at AS "updatedAt",
+                   ur.deleted_at AS "deletedAt", ur.version AS "version"
+            FROM ASOP_USER_ROLES ur
+            JOIN ASOP_USERS u ON u.user_id = ur.user_id
+            WHERE (:versionSince IS NULL OR ur.version > :versionSince)
+              AND (:includeDeleted = TRUE OR ur.deleted_at IS NULL)
+              AND (
+                :regionId::uuid IS NULL
+                OR EXISTS (
+                  SELECT 1 FROM ASOP_USER_REGIONS ur2
+                  WHERE ur2.user_id = u.user_id
+                    AND ur2.region_id = :regionId::uuid
+                )
+              )
+            ORDER BY ur.version ASC
             LIMIT :limit
         """.trimIndent()
-        var spec = db.sql(sql)
-        if (versionSince != null) spec = spec.bind("since", versionSince)
-        return spec.bind("limit", limit).fetch().all()
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+        if (versionSince != null) spec = spec.bind("versionSince", versionSince) else spec = spec.bindNull("versionSince", Long::class.javaObjectType)
+        spec = spec.bind("includeDeleted", includeDeleted ?: false)
+        if (regionId != null) spec = spec.bind("regionId", regionId.toString()) else spec = spec.bindNull("regionId", String::class.javaObjectType)
+        spec = spec.bind("limit", limit)
+        return spec.fetch().all()
     }
 }

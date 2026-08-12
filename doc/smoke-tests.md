@@ -423,3 +423,55 @@ adb shell am broadcast -a "androidx.work.diagnostics.REQUEST_DIAGNOSTICS" \
 # Check WorkManager status
 adb shell dumpsys jobscheduler | grep -A 20 "ru.asop.terminal"
 ```
+
+## Smoke Test: Delta Region Isolation (промпт 010)
+
+**Goal:** Убедиться, что после промпта 010 терминалы разных регионов получают только свои данные.
+
+```bash
+# Предварительно: найти region UUID регионов 0101 (Москва), 0103 (Крым).
+# Из контейнера gateway выполнить curl напрямую в master-сервисы.
+docker exec docker-gateway-service-1 bash -c '
+  R1="00000000-0000-0000-0000-000000000101"
+  R3="00000000-0000-0000-0000-000000000103"
+
+  curl -k -s "https://admin-service:8091/api/v1/territories/delta?regionId=$R1&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"territories/0101=\\${len(d)}\")"
+  curl -k -s "https://admin-service:8091/api/v1/territories/delta?regionId=$R3&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"territories/0103=\\${len(d)}\")"
+
+  curl -k -s "https://admin-service:8091/api/v1/organizers/delta?regionId=$R1&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"organizers/0101=\\${len(d)}\")"
+  curl -k -s "https://admin-service:8091/api/v1/organizers/delta?regionId=$R3&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"organizers/0103=\\${len(d)}\")"
+
+  curl -k -s "https://admin-service:8091/api/v1/organizer-territories/delta?regionId=$R1&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"org_territories/0101=\\${len(d)}\")"
+  curl -k -s "https://admin-service:8091/api/v1/organizer-territories/delta?regionId=$R3&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"org_territories/0103=\\${len(d)}\")"
+
+  curl -k -s "https://admin-service:8091/api/v1/benefit-steps/delta?regionId=$R1&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"benefit_steps/0101=\\${len(d)}\")"
+  curl -k -s "https://admin-service:8091/api/v1/benefit-steps/delta?regionId=$R3&limit=100" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"benefit_steps/0103=\\${len(d)}\")"
+
+  curl -k -s "https://route-service:8092/api/v1/contract-routes/delta?regionId=$R1&limit=200" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"contract_routes/0101=\\${len(d)}\")"
+  curl -k -s "https://route-service:8092/api/v1/contract-routes/delta?regionId=$R3&limit=200" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"contract_routes/0103=\\${len(d)}\")"
+
+  curl -k -s "https://route-service:8092/api/v1/path-benefits/delta?regionId=$R1&limit=200" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"path_benefits/0101=\\${len(d)}\")"
+  curl -k -s "https://route-service:8092/api/v1/path-benefits/delta?regionId=$R3&limit=200" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"path_benefits/0103=\\${len(d)}\")"
+
+  curl -k -s "https://user-service:8082/api/v1/user-roles/delta?regionId=$R1&limit=200" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"user_roles/0101=\\${len(d)}\")"
+  curl -k -s "https://user-service:8082/api/v1/user-roles/delta?regionId=$R3&limit=200" \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(f\"user_roles/0103=\\${len(d)}\")"
+'
+```
+
+**Ожидаемый результат:** для каждой из 7 таблиц количество rows для `0101` и `0103` меньше, чем total. Например, для organizer-territories: 0101 → только organizer 0301 (Москва), 0103 → только 0303 (Крым), никакого взаимного overlap.
+
+```
