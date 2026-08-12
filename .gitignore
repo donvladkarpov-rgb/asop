@@ -108,3 +108,7 @@ prompt-*.md
 # после каждого дельта-состояния БД. См. AGENTS.md → "Этап E".
 frontend/android-test/app/src/main/assets/expected-2.json
 frontend/android-test/app/src/main/assets/expected-all.json
+
+# Android Studio build artifacts (classes*.dex)
+/classes*.dex
+/frontend/**/classes*.dex
