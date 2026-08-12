@@ -109,6 +109,7 @@ prompt-*.md
 frontend/android-test/app/src/main/assets/expected-2.json
 frontend/android-test/app/src/main/assets/expected-all.json
 
-# Android Studio build artifacts (classes*.dex)
+# Android Studio debug-build leftovers: d8 HMR иногда сбрасывает classes*.dex
+# прямо в CWD репозитория вместо app/build/... (которые покрыты **/build/ выше).
 /classes*.dex
 /frontend/**/classes*.dex
