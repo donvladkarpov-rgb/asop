@@ -31,6 +31,17 @@ interface CardApi {
         principal: Mono<Principal>
     ): Mono<ResponseEntity<CardActivateResponse>>
 
+    /**
+     * VCM1-flow (промпт 008): activation MIFARE Classic без RSA-PSS подписи,
+     * server-master cardId по UID. Если указан ли `vcm1`-payload в `request`,
+     * сервер переключается в VCM1-flow (см. `CardActivationService.activate()`).
+     */
+    @PostMapping("/activate-vcm1")
+    fun activateCardVcm1(
+        @Valid @RequestBody request: CardActivateRequest,
+        principal: Mono<Principal>
+    ): Mono<ResponseEntity<CardActivateResponse>>
+
     @PostMapping("/{id}/block")
     fun blockCard(
         @PathVariable id: UUID,

@@ -48,6 +48,17 @@ class CardController(
             .map { ResponseEntity.ok(it) }
     }
 
+    override fun activateCardVcm1(
+        request: CardActivateRequest,
+        principal: Mono<Principal>
+    ): Mono<ResponseEntity<CardActivateResponse>> {
+        // VCM1-flow использует тот же CardActivateRequest DTO с заполненным vcm1-полем.
+        // CardActivationService.activate() проверяет request.vcm1 != null и переключается на VCM1.
+        // Здесь — alias для отдельного URL (clearer для API consumers).
+        return cardActivationService.activate(request)
+            .map { ResponseEntity.ok(it) }
+    }
+
     override fun blockCard(
         id: UUID,
         request: CardBlockRequest,

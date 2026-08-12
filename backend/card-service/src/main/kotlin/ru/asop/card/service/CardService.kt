@@ -1,5 +1,6 @@
 package ru.asop.card.service
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Mono
 import ru.asop.api.card.dto.request.CardRegisterRequest
@@ -44,3 +45,19 @@ private fun CardEntity.toResponse() = CardResponse(
     createdAt = createdAt,
     updatedAt = updatedAt
 )
+
+/**
+ * Парсит VCM1-bitmask из ASOP_CARD_MIFARES.IDENTITY_JSON. Возвращает null для не-VCM1 формата.
+ *
+ * Ожидаемый формат: `{"format":"VCM1", "cardId":"...", "bitmask":<int>, "entity":{...}}`. Если "format"
+ * свойство отсутствует — это legacy DESfire JSON; bitmask null.
+ */
+fun parseVcm1Bitmask(identityJson: String?): Int? {
+    if (identityJson.isNullOrBlank()) return null
+    return runCatching {
+        val node = ObjectMapper().readTree(identityJson)
+        if (node.path("format").asText() != "VCM1") return null
+        val bitmask = node.path("bitmask").asInt(-1)
+        if (bitmask < 0 || bitmask > 0x3FFF) null else bitmask
+    }.getOrNull()
+}
