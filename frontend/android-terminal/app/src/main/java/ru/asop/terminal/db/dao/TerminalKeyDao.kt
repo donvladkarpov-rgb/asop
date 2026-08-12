@@ -36,4 +36,7 @@ interface TerminalKeyDao {
 
     @Query("SELECT * FROM terminal_keys WHERE DELETED_AT = 0 ORDER BY KEY_ID DESC LIMIT :limit")
     suspend fun getActive(limit: Int = 10): List<TerminalKeyEntity>
+
+    @Query("SELECT COUNT(*) FROM terminal_keys WHERE DELETED_AT = 0")
+    suspend fun count(): Int
 }

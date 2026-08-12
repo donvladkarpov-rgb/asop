@@ -6,8 +6,8 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * 3DES-ключ карты на терминале (глобальный пул, доставленный по дельте/полной выкачке).
- * KEY_MATERIAL_ENC — 24 байта ключа, зашифрованные локальным Keystore-AES-ключом
+ * Ключ карты на терминале (глобальный пул ASOP_KEYS, доставленный по дельте/полной выкачке).
+ * KEY_MATERIAL_ENC — материал ключа, зашифрованный локальным Keystore-AES-ключом
  * (PURPOSE_ENCRYPT|PURPOSE_DECRYPT, неэкспортируемый). В открытом виде не хранится.
  * В отличие от reference_rows, записи физически удаляются при DELETED_AT.
  */

@@ -460,6 +460,8 @@ message CardMifaresRow {
   string updated_at = 18;
   string deleted_at = 19;
   int64 version = 20;
+  // Технология NFC: DESFire (по умолчанию) или MIFARE Classic (1K/4K). Промпт 007.
+  string card_tech = 21;
 }
 
 message CardBanksRow {
@@ -545,9 +547,9 @@ message TidsRow {
   int64 version = 11;
 }
 
-message Asop3desKeysRow {
+message AsopKeysRow {
   string key_id = 1;          // UUIDv7
-  bytes  key_material = 2;    // plaintext 24 байта (после decrypt сервером)
+  bytes  key_material = 2;    // plaintext (после decrypt сервером)
   int64  created_at = 3;      // epoch millis
   int64  deleted_at = 4;      // epoch millis, 0 если не удалён
   int64  version = 5;         // delta watermark
@@ -611,7 +613,7 @@ message DeltaChunk {
   repeated TariffRatesRow asop_tariff_rates = 40;
   repeated TidsRow asop_tids = 41;
   repeated CardsDistributorsRow asop_cards_distributors = 42;
-  repeated Asop3desKeysRow asop_3des_keys = 43;
+  repeated AsopKeysRow asop_keys = 43;
   repeated AuditServicesRow asop_audit_services = 44;
   int32 chunk_index = 90;
   int32 total_chunks = 91;
@@ -661,6 +663,6 @@ message BlacklistsFile { repeated BlacklistsRow rows = 1; }
 message UserBenefitsFile { repeated UserBenefitsRow rows = 1; }
 message TariffRatesFile { repeated TariffRatesRow rows = 1; }
 message TidsFile { repeated TidsRow rows = 1; }
-message Asop3desKeysFile { repeated Asop3desKeysRow rows = 1; }
+message AsopKeysFile { repeated AsopKeysRow rows = 1; }
 message AuditServicesFile { repeated AuditServicesRow rows = 1; }
 

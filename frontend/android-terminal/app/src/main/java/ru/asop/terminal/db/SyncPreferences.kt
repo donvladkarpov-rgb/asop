@@ -23,6 +23,12 @@ class SyncPreferences(private val context: Context) {
         private val KEY_TIMEZONE = stringPreferencesKey("timezone")
         private val KEY_DELTA_JOBS_ENABLED = booleanPreferencesKey("delta_jobs_enabled")
         private val KEY_SERVER_PUBLIC_KEY = stringPreferencesKey("server_public_key")
+
+        // VCM1 (промпт 008): последняя карта, приложенная к терминалу. Используется как контекст
+        // для sync-команд: server-side cardauth whitelist (uid, cardId).
+        private val KEY_LAST_CARD_UID = stringPreferencesKey("last_card_uid")
+        private val KEY_LAST_CARD_ID = stringPreferencesKey("last_card_id")
+        private val KEY_LAST_CARD_TAP_TIME = longPreferencesKey("last_card_tap_time")
     }
 
     val lastSyncTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
@@ -60,6 +66,37 @@ class SyncPreferences(private val context: Context) {
 
     val serverPublicKey: Flow<String?> = context.syncDataStore.data.map { prefs ->
         prefs[KEY_SERVER_PUBLIC_KEY]
+    }
+
+    val lastCardUid: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_LAST_CARD_UID]
+    }
+
+    val lastCardId: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_LAST_CARD_ID]
+    }
+
+    val lastCardTapTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_LAST_CARD_TAP_TIME]
+    }
+
+    /**
+     * Сохраняет контекст последнего tap карты (uid, cardId). Используется чтобы
+     * sync-* команды (transaction, session close, GPS, etc.) могли НЕСТИ
+     * cardId для server-side whitelist (uid, cardId).
+     */
+    suspend fun setLastCardTap(uid: String?, cardId: String?) {
+        if (uid == null && cardId == null) {
+            context.syncDataStore.edit { it.remove(KEY_LAST_CARD_UID); it.remove(KEY_LAST_CARD_ID) }
+            return
+        }
+        context.syncDataStore.edit { prefs ->
+            if (uid != null) prefs[KEY_LAST_CARD_UID] = uid
+            else prefs.remove(KEY_LAST_CARD_UID)
+            if (cardId != null) prefs[KEY_LAST_CARD_ID] = cardId
+            else prefs.remove(KEY_LAST_CARD_ID)
+            prefs[KEY_LAST_CARD_TAP_TIME] = System.currentTimeMillis()
+        }
     }
 
     suspend fun setLastSyncTime(time: Long) {

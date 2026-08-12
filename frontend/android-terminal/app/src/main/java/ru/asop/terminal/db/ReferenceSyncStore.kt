@@ -10,7 +10,7 @@ import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.entity.ReferenceRowEntity
 import ru.asop.terminal.db.entity.SyncMetaEntity
 import ru.asop.terminal.db.entity.TerminalKeyEntity
-import ru.asop.proto.v1.Asop3desKeysFile
+import ru.asop.proto.v1.AsopKeysFile
 import ru.asop.proto.v1.DeltaChunk
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,7 +20,7 @@ import javax.inject.Singleton
  * Generic-хранение: каждая строка справочника — JSON (payloadJson),
  * ключ (tableName, rowId). rowId — значение PK (для составных — "id1|id2").
  * sync_meta — single-row глобальный VERSION-водяной знак.
- * 3DES-ключи (asop_3des_keys) хранятся отдельно в terminal_keys, зашифрованными
+ * Ключи (asop_keys) хранятся отдельно в terminal_keys, зашифрованными
  * локальным Keystore-AES-ключом (НЕ в reference_rows — иначе ломается водяной знак).
  */
 @Singleton
@@ -38,7 +38,7 @@ class ReferenceSyncStore @Inject constructor(
             "asop_organizer_territories", "asop_contract_routes",
             "asop_user_roles", "asop_user_carriers", "asop_user_regions"
         )
-        const val THREE_DES_TABLE = "asop_3des_keys"
+        const val KEYS_TABLE = "asop_keys"
     }
 
     /** Применяет один DeltaChunk (все таблицы в нём). */
@@ -52,7 +52,7 @@ class ReferenceSyncStore @Inject constructor(
             val count = chunk.getRepeatedFieldCount(field)
             for (i in 0 until count) {
                 val msg = chunk.getRepeatedField(field, i) as Message
-                if (table == THREE_DES_TABLE) {
+                if (table == KEYS_TABLE) {
                     keyRows += toTerminalKeyRow(msg)
                 } else {
                     refRows += toReferenceRow(table, msg)
@@ -64,8 +64,8 @@ class ReferenceSyncStore @Inject constructor(
 
     /** Применяет файл `{table}.pb` из ZIP полной выгрузки (XxxFile message). */
     suspend fun applyFile(table: String, bytes: ByteArray) {
-        if (table == THREE_DES_TABLE) {
-            val builder = Asop3desKeysFile.newBuilder()
+        if (table == KEYS_TABLE) {
+            val builder = AsopKeysFile.newBuilder()
             val msg = builder.mergeFrom(bytes).build()
             val keyRows = msg.rowsList.map { toTerminalKeyRow(it) }
             applyRows(emptyList(), keyRows)
@@ -93,7 +93,7 @@ class ReferenceSyncStore @Inject constructor(
 
     /**
      * Полная выкачка/дельта завершены: поднимаем watermark до глобального MAX(version).
-     * Водяной знак учитывает только reference_rows; 3DES-ключи (terminal_keys)
+     * Водяной знак учитывает только reference_rows; ключи (terminal_keys)
      * не участвуют в watermark — они накатываются на каждый дельта независимо.
      */
     suspend fun updateGlobalWatermark() {
@@ -130,7 +130,7 @@ class ReferenceSyncStore @Inject constructor(
         )
     }
 
-    /** 3DES-ключ: перешифровываем plaintext локальным Keystore-AES-ключом at-rest. */
+    /** Ключ из asop_keys: перешифровываем plaintext локальным Keystore-AES-ключом at-rest. */
     private fun toTerminalKeyRow(msg: Message): TerminalKeyEntity {
         val desc = msg.descriptorForType
         val keyMaterial = (msg.getField(desc.findFieldByName("key_material")) as? com.google.protobuf.ByteString)

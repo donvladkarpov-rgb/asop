@@ -146,6 +146,9 @@ dependencies {
 
     // UUIDv7 (времени-упорядоченные id, синхронно с UuidUtils.newId() на бэкенде)
     implementation("com.github.f4b6a3:uuid-creator:6.0.0")
+
+    // Unit tests (JUnit 4)
+    testImplementation("junit:junit:4.13.2")
 }
 
 kapt {

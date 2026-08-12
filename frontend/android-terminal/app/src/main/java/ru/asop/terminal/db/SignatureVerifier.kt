@@ -102,16 +102,34 @@ class SignatureVerifier @Inject constructor(
             Log.w(TAG, "verify: не удалось декодировать подпись")
             return false
         }
+        return verifyRaw(canonicalBytes, sigBytes, publicKey)
+    }
+
+    /**
+     * Sync-вариант: подпись в RAW-байтах (без base64) — используется для MIFARE Classic,
+     * где подпись хранится на карте как 256 байт RSA-PSS-SHA256, без base64-кодирования.
+     * Публичный ключ передаётся снаружи (предзагружен из SyncPreferences / CryptoService).
+     * @param canonicalBytes байты canonical JSON (построен тем же `buildCanonicalString`, что и для DESFire)
+     * @param signatureRaw 256-байтная RSA-PSS-SHA256 подпись в бинарном виде
+     * @param publicKey заранее загруженный RSA-публичный ключ сервера
+     */
+    fun verifyRaw(canonicalBytes: ByteArray, signatureRaw: ByteArray, publicKey: PublicKey): Boolean {
         return try {
             val signature = Signature.getInstance("RSASSA-PSS")
             val spec = PSSParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, 32, 1)
             signature.setParameter(spec)
             signature.initVerify(publicKey)
             signature.update(canonicalBytes)
-            signature.verify(sigBytes)
+            signature.verify(signatureRaw)
         } catch (e: Exception) {
-            Log.w(TAG, "verify: ${e.message}")
+            Log.w(TAG, "verifyRaw: ${e.message}")
             false
         }
+    }
+
+    /** Удобный suspend-фасад: загружает ключ сам и делегирует в sync-вариант. */
+    suspend fun verifyRaw(canonicalBytes: ByteArray, signatureRaw: ByteArray): Boolean {
+        val publicKey = loadPublicKey() ?: return false
+        return verifyRaw(canonicalBytes, signatureRaw, publicKey)
     }
 }

@@ -12,9 +12,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Локальное шифрование 3DES-ключей карт at-rest (вариант Б).
+ * Локальное шифрование ключей ASOP_KEYS at-rest (вариант Б).
  * Один аппаратный AES-GCM-ключ (Android Keystore, PURPOSE_ENCRYPT|DECRYPT,
- * неэкспортируемый, TEE/StrongBox) на все записи. 3DES-ключ расшифровывается
+ * неэкспортируемый, TEE/StrongBox) на все записи. Ключ расшифровывается
  * только в памяти при карточных операциях и наружу не выходит.
  */
 @Singleton
