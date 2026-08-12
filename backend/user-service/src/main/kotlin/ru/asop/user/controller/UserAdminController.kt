@@ -60,20 +60,33 @@ class UserAdminController(
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
         val conditions = mutableListOf<String>()
-        if (versionSince != null) conditions += "version > :since"
-        if (includeDeleted != true) conditions += "deleted_at IS NULL"
-        val unions = mutableListOf<String>()
-        if (carrierId != null) unions += "SELECT user_id FROM ASOP_USER_CARRIERS WHERE carrier_id = :carrierId"
-        if (regionId != null) unions += "SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId"
-        if (unions.isNotEmpty()) conditions += "user_id IN (${unions.joinToString(" UNION ")})"
-        val where = if (conditions.isEmpty()) "" else " WHERE ${conditions.joinToString(" AND ")}"
+        if (versionSince != null) conditions += "u.version > :since"
+        if (includeDeleted != true) conditions += "u.deleted_at IS NULL"
+        // Фильтр-конструктор: пользователь попадает в дельту, если
+        //  • привязан к выбранному carrier/region (если указан), ИЛИ
+        //  • имеет глобальную роль SUPER_ADMIN/ADMIN/ORG_ADMIN (всегда доступен для root-активаций).
+        // Гарантирует, что root-администратор (admin@asop.local, BootstrapService) виден терминалу
+        // даже если он не привязан ни к одному региону/перевозчику.
+        val filterParts = mutableListOf<String>()
+        if (carrierId != null) filterParts += "u.user_id IN (SELECT user_id FROM ASOP_USER_CARRIERS WHERE carrier_id = :carrierId)"
+        if (regionId != null) filterParts += "u.user_id IN (SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId)"
+        filterParts += """
+            u.user_id IN (
+                SELECT ur.user_id FROM ASOP_USER_ROLES ur
+                JOIN ASOP_ROLES r ON r.role_id = ur.role_id
+                WHERE r.role_name IN ('SUPER_ADMIN','ADMIN','REGION_ADMIN','ORGANIZER_ADMIN')
+                  AND (ur.deleted_at IS NULL)
+            )
+        """.trimIndent()
+        conditions += "(${filterParts.joinToString(" OR ")})"
+        val where = " WHERE ${conditions.joinToString(" AND ")}"
         val sql = """
-            SELECT user_id AS "userId", first_name AS "firstName", last_name_initial AS "lastNameInitial",
-                   patronymic_initial AS "patronymicInitial", phone, keycloak_id AS "keycloakId",
-                   created_at AS "createdAt", updated_at AS "updatedAt", deleted_at AS "deletedAt",
-                   version AS "version"
-            FROM ASOP_USERS$where
-            ORDER BY version ASC
+            SELECT u.user_id AS "userId", u.first_name AS "firstName", u.last_name_initial AS "lastNameInitial",
+                   u.patronymic_initial AS "patronymicInitial", u.phone, u.keycloak_id AS "keycloakId",
+                   u.created_at AS "createdAt", u.updated_at AS "updatedAt", u.deleted_at AS "deletedAt",
+                   u.version AS "version"
+            FROM ASOP_USERS u$where
+            ORDER BY u.version ASC
             LIMIT :limit
         """.trimIndent()
         var spec = db.sql(sql)

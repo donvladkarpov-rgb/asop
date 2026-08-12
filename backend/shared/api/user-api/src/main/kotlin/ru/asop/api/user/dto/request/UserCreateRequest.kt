@@ -6,9 +6,17 @@ import jakarta.validation.constraints.Size
 data class UserCreateRequest(
     @field:NotBlank @field:Size(max = 100)
     val firstName: String,
-    @field:NotBlank @field:Size(max = 100)
-    val lastName: String,
-    @field:Size(max = 1)
+    /**
+     * Полная фамилия — опциональна. UI работает с инициалом (lastNameInitial),
+     * если полная фамилия не указана, UserAdminService деривирует её из initial.
+     */
+    @field:Size(max = 100)
+    val lastName: String? = null,
+    /**
+     * Обязателен для UI (промпт 005, формат "Фамилия И.О."). Однобуквенный
+     * начальный символ кириллицы/латиницы — используется в таблицах и печатях.
+     */
+    @field:NotBlank @field:Size(min = 1, max = 1)
     val lastNameInitial: String,
     @field:Size(max = 1)
     val patronymicInitial: String? = null,

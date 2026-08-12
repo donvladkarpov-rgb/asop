@@ -15,16 +15,16 @@ class UserAdminService(
 ) {
 
     fun list(): Mono<List<Map<String, Any?>>> =
-        db.sql("SELECT user_id, first_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS ORDER BY first_name")
+        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS ORDER BY first_name")
             .fetch().all().collectList()
 
     fun getById(id: String): Mono<Map<String, Any?>> =
-        db.sql("SELECT user_id, first_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE user_id = :id LIMIT 1")
+        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE user_id = :id LIMIT 1")
             .bind("id", parseId(id))
             .fetch().one().defaultIfEmpty(emptyMap())
 
     fun getByKeycloakId(keycloakId: String): Mono<Map<String, Any?>> =
-        db.sql("SELECT user_id, first_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE keycloak_id = :keycloakId LIMIT 1")
+        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE keycloak_id = :keycloakId LIMIT 1")
             .bind("keycloakId", keycloakId)
             .fetch().one().defaultIfEmpty(emptyMap())
 
@@ -33,7 +33,12 @@ class UserAdminService(
         val email = request.email ?: "${userId}@asop.local"
         val password = request.password ?: "changeit"
 
-        val dbOps = writeUserToDb(userId, request, email)
+        // Промпт 005: UI отправляет только инициал (lastNameInitial). Полная фамилия
+        // опциональна; если пусто — деривируем из initial (uppercase первая буква).
+        val effectiveLastName = request.lastName?.takeIf { it.isNotBlank() }
+            ?: request.lastNameInitial.uppercase()
+
+        val dbOps = writeUserToDb(userId, request, email, effectiveLastName)
             .then(writeAssociations(userId, request.roleIds, request.carrierIds, request.regionIds))
 
         return Mono.fromCallable {
@@ -42,7 +47,7 @@ class UserAdminService(
                     password = password,
                     temporary = true,
                     firstName = request.firstName,
-                    lastName = request.lastName
+                    lastName = effectiveLastName
                 )
             }
             .flatMap { keycloakId ->
@@ -52,7 +57,7 @@ class UserAdminService(
                         UserResponse(
                             id = userId.toString(),
                             firstName = request.firstName,
-                            lastName = request.lastName,
+                            lastName = effectiveLastName,
                             lastNameInitial = request.lastNameInitial.take(1),
                             patronymicInitial = request.patronymicInitial,
                             phone = request.phone,
@@ -73,12 +78,16 @@ class UserAdminService(
         return getById(id).flatMap { existing ->
             if (existing.isEmpty()) return@flatMap Mono.just(UserResponse(id = id, firstName = "", lastName = "", lastNameInitial = ""))
             val keycloakId = existing["keycloak_id"]?.toString()
+            val effectiveLastName = request.lastName?.takeIf { it.isNotBlank() }
+                ?: request.lastNameInitial.uppercase()
 
             val dbOps = db.sql("""
-                UPDATE ASOP_USERS SET first_name = :firstName, last_name_initial = :lastNameInitial,
+                UPDATE ASOP_USERS SET first_name = :firstName, last_name = :lastName,
+                last_name_initial = :lastNameInitial,
                 patronymic_initial = :patronymicInitial, phone = :phone WHERE user_id = :id
             """.trimIndent())
                 .bind("firstName", request.firstName)
+                .bind("lastName", effectiveLastName)
                 .bind("lastNameInitial", request.lastNameInitial.take(1))
                 .bind("patronymicInitial", request.patronymicInitial ?: "")
                 .bind("phone", request.phone ?: "")
@@ -90,7 +99,7 @@ class UserAdminService(
             val keycloakOps = if (keycloakId != null) {
                 Mono.fromCallable {
                     val email = request.email ?: "${keycloakId}@asop.local"
-                    keycloakAdminService.updateUser(keycloakId, request.firstName, request.lastName, email)
+                    keycloakAdminService.updateUser(keycloakId, request.firstName, effectiveLastName, email)
                     keycloakAdminService.removeAllRoles(keycloakId)
                     request.roleIds.forEach { roleId ->
                         val roleName = keycloakAdminService.getRoleName(roleId)
@@ -103,7 +112,7 @@ class UserAdminService(
             Mono.`when`(dbOps, keycloakOps).then(
                 Mono.fromCallable {
                     UserResponse(
-                        id = id, firstName = request.firstName, lastName = request.lastName,
+                        id = id, firstName = request.firstName, lastName = effectiveLastName,
                         lastNameInitial = request.lastNameInitial.take(1),
                         patronymicInitial = request.patronymicInitial, phone = request.phone,
                         email = request.email, keycloakId = keycloakId
@@ -127,13 +136,14 @@ class UserAdminService(
         }
     }
 
-    private fun writeUserToDb(userId: UUID, request: UserCreateRequest, keycloakId: String): Mono<Long> =
+    private fun writeUserToDb(userId: UUID, request: UserCreateRequest, keycloakId: String, effectiveLastName: String): Mono<Long> =
         db.sql("""
-            INSERT INTO ASOP_USERS (user_id, first_name, last_name_initial, patronymic_initial, phone, keycloak_id)
-            VALUES (:userId, :firstName, :lastNameInitial, :patronymicInitial, :phone, :keycloakId)
+            INSERT INTO ASOP_USERS (user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id)
+            VALUES (:userId, :firstName, :lastName, :lastNameInitial, :patronymicInitial, :phone, :keycloakId)
         """.trimIndent())
             .bind("userId", userId)
             .bind("firstName", request.firstName)
+            .bind("lastName", effectiveLastName)
             .bind("lastNameInitial", request.lastNameInitial.take(1))
             .bind("patronymicInitial", request.patronymicInitial ?: "")
             .bind("phone", request.phone ?: "")
