@@ -1,24 +1,20 @@
 package ru.asop.terminal.ui.screen
 
 import android.app.Application
-import android.nfc.NfcAdapter
-import android.nfc.Tag
-import android.nfc.tech.IsoDep
-import android.nfc.tech.MifareClassic
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.github.f4b6a3.uuid.UuidCreator
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import ru.asop.terminal.activation.AsopCardType
-import ru.asop.terminal.activation.CardActivationMatrix
 import ru.asop.terminal.activation.CardIdentityVcm1
-import ru.asop.terminal.activation.EntityType
 import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.ReferenceRowDao
@@ -26,12 +22,13 @@ import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.dao.TripPaymentDao
 import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.entity.SessionEntity
+import ru.asop.terminal.db.entity.TripPaymentEntity
 import ru.asop.terminal.network.SyncApi
 import ru.asop.terminal.network.models.SessionCloseRequest
 import ru.asop.terminal.network.models.SessionOpenRequest
 import ru.asop.terminal.network.models.TransactionCompleteRequest
-import ru.asop.terminal.serializer.deserialize
 import ru.asop.terminal.util.JsonUtil
+import ru.asop.terminal.worker.EventTypes
 import javax.inject.Inject
 
 /**
@@ -41,7 +38,8 @@ import javax.inject.Inject
  * Insert в Room + PendingEvent.SESSION_OPEN → SyncWorker → gateway → Kafka →
  * session-service → ON CONFLICT (SESSION_ID) DO NOTHING → безопасно от дублей при retry.
  *
- * cardAuth() ждёт NFC tap → read VCM1 (file 0/1) → проверяет роль DRIVER и наличие user_carriers.
+ * cardAuth() ждёт NFC tap → read VCM1 (sector 1, 48 bytes) → проверяет роль DRIVER
+ * и наличие user_carriers в локальном справочнике (asop_user_carriers).
  */
 @HiltViewModel
 class SessionFlowViewModel @Inject constructor(
@@ -51,7 +49,7 @@ class SessionFlowViewModel @Inject constructor(
     private val pendingEventDao: PendingEventDao,
     private val referenceRowDao: ReferenceRowDao,
     private val syncPreferences: SyncPreferences,
-    private val syncApi: SyncApi
+    @Suppress("unused") private val syncApi: SyncApi
 ) : AndroidViewModel(application) {
 
     enum class FlowKind { OPEN_SHIFT, CLOSE_SHIFT, OPEN_TRIP, CLOSE_TRIP, TAP_PASSENGER }
@@ -76,7 +74,7 @@ class SessionFlowViewModel @Inject constructor(
         val infoMessage: String? = null,
         val openShift: SessionEntity? = null,
         val openTrip: SessionEntity? = null,
-        val tripPayments: List<ru.asop.terminal.db.entity.TripPaymentEntity> = emptyList()
+        val tripPayments: List<TripPaymentEntity> = emptyList()
     ) {
         val canConfirmOpenShift: Boolean
             get() = cardStep == CardStep.AUTH_OK && submitState == SubmitState.IDLE
@@ -94,6 +92,8 @@ class SessionFlowViewModel @Inject constructor(
         _state.update { it.copy(errorMessage = null, infoMessage = null) }
     }
 
+    private var tripPaymentsJob: kotlinx.coroutines.Job? = null
+
     private fun observeSessions() {
         viewModelScope.launch {
             sessionDao.observeCurrentOpenShift().collect { shift ->
@@ -103,46 +103,62 @@ class SessionFlowViewModel @Inject constructor(
         viewModelScope.launch {
             sessionDao.observeCurrentOpenTrip().collect { trip ->
                 _state.update { it.copy(openTrip = trip) }
-                trip?.let { t ->
-                    tripPaymentDao.observeForTrip(t.id).collect { ps ->
-                        _state.update { it.copy(tripPayments = ps) }
+                tripPaymentsJob?.cancel()
+                if (trip != null) {
+                    tripPaymentsJob = viewModelScope.launch {
+                        observeTripPayments(trip.id)
                     }
+                } else {
+                    _state.update { it.copy(tripPayments = emptyList()) }
                 }
             }
         }
     }
 
-    /**
-     * Обрабатывает NFC tap. Вызывается из экрана после `MifareClassicReader.findVcm1CardByTrailer()`
-     * или `DesfireCardReader.readVcm1Identity()`.
-     *
-     * @param rawCardUid 16-байт UID (hex)
-     * @param identityJson содержимое File 0 (= cardIdentity JSON ASOP_CARDS)
-     * @param roles список ролей из bitmask (AsopCardType.ordinal для каждого set bit)
-     */
-    fun onCardTappedForAuth(rawCardUid: String, identityJson: JSONObject, bitmask: Int, carrierFilter: String? = null) {
-        try {
-            val identity = parseIdentity(identityJson)
-            val userId = identity?.userId?.toString()
-            val cardId = identity?.cardId?.toString() ?: ""
+    private suspend fun observeTripPayments(tripId: String) {
+        tripPaymentDao.observeForTrip(tripId).collect { ps ->
+            _state.update { it.copy(tripPayments = ps) }
+        }
+    }
 
-            if (userId == null || userId.isEmpty()) {
+    /**
+     * NFC tap auth: парсит VCM1 bytes (48-байтный sector 1), проверяет роль DRIVER /
+     * CARRIER_DISPATCHER / KRS_DISPATCHER, резолвит carrier через локальный справочник
+     * asop_user_carriers.
+     */
+    fun onCardTappedForAuth(rawCardUid: String, vcm1Bytes: ByteArray?, carrierFilter: String? = null) {
+        try {
+            val identity = vcm1Bytes?.let { CardIdentityVcm1.decodeFromBytes(it) }
+            if (identity == null) {
+                _state.update { it.copy(cardStep = CardStep.AUTH_DENIED, errorMessage = "Карта не распознана (VCM1)") }
+                return
+            }
+            val userId = identity.entity?.id?.toString()
+                ?: identity.entity?.id?.toString()
+            val cardId = identity.cardId.toString()
+
+            if (userId.isNullOrEmpty()) {
                 _state.update { it.copy(cardStep = CardStep.AUTH_DENIED, errorMessage = "Карта не активирована") }
                 return
             }
-            // role check
-            val roles = CardActivationMatrix.rolesFromBitmask(bitmask)
+
+            val roles = AsopCardType.allRolesForBitmask(identity.bitmask)
             val hasDriverRole = roles.any {
-                it == AsopCardType.DRIVER.ordinal ||
-                it == AsopCardType.CARRIER_DISPATCHER.ordinal ||
-                it == AsopCardType.KRS_DISPATCHER.ordinal
+                it == AsopCardType.DRIVER ||
+                    it == AsopCardType.CARRIER_DISPATCHER ||
+                    it == AsopCardType.KRS_DISPATCHER
             }
             if (!hasDriverRole) {
-                _state.update { it.copy(cardStep = CardStep.NOT_DRIVER, errorMessage = "Роль карты не позволяет открывать/закрывать смены") }
+                _state.update {
+                    it.copy(
+                        cardStep = CardStep.NOT_DRIVER,
+                        errorMessage = "Роль карты не позволяет открывать/закрывать смены"
+                    )
+                }
                 return
             }
+
             viewModelScope.launch {
-                // Резолвим carrier из локальной таблицы user_carriers
                 val carrierId = lookupUserCarrier(userId, carrierFilter)
                 if (carrierId == null) {
                     _state.update {
@@ -159,7 +175,7 @@ class SessionFlowViewModel @Inject constructor(
                     userId = userId,
                     userFullName = fullName,
                     carrierId = carrierId,
-                    roles = roles.map { idx -> AsopCardType.entries[idx].name },
+                    roles = roles.map { it.name },
                     tapTimestamp = System.currentTimeMillis()
                 )
                 _state.update { it.copy(cardStep = CardStep.AUTH_OK, cardTap = tap) }
@@ -173,7 +189,7 @@ class SessionFlowViewModel @Inject constructor(
      * Открыть смену. Если успешно:
      *  - INSERT Room sessions (status=OPEN)
      *  - emit PendingEvent SESSION_OPEN → SyncWorker
-     *  - обновить SyncPreferences.lastCardId, terminal timezone в payload
+     *  - обновить SyncPreferences.lastCardId
      */
     fun confirmOpenShift() {
         val tap = _state.value.cardTap ?: return
@@ -208,7 +224,7 @@ class SessionFlowViewModel @Inject constructor(
                     closedAt = null,
                     openedAtLocal = now,
                     closedAtLocal = null,
-                    expirationTime = now + 8L * 60 * 60 * 1000
+                    expirationTime = now + SessionEntity.DEFAULT_EXPIRATION_HOURS * 60 * 60 * 1000
                 )
                 sessionDao.insert(entity)
 
@@ -226,19 +242,16 @@ class SessionFlowViewModel @Inject constructor(
                     timezone = timezone,
                     attributes = null
                 )
-                pendingEventDao.insert(PendingEventEntity(
-                    id = sessionId,
-                    eventType = ru.asop.terminal.worker.EventTypes.SESSION_OPEN,
-                    payload = JsonUtil.encode(payload),
-                    pathParam = null,
-                    createdAt = now,
-                    status = PendingEventEntity.STATUS_PENDING,
-                    retryCount = 0,
-                    gatewayEventId = null,
-                    completedAt = null,
-                    errorMessage = null
-                ))
-                syncPreferences.setLastCardId(tap.cardId)
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = sessionId,
+                        topic = "asop.session.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.SESSION_OPEN,
+                        pathParam = null
+                    )
+                )
+                syncPreferences.setLastCardTap(null, tap.cardId)
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -294,7 +307,7 @@ class SessionFlowViewModel @Inject constructor(
                     closedAt = null,
                     openedAtLocal = now,
                     closedAtLocal = null,
-                    expirationTime = now + 8L * 60 * 60 * 1000
+                    expirationTime = now + SessionEntity.DEFAULT_EXPIRATION_HOURS * 60 * 60 * 1000
                 )
                 sessionDao.insert(entity)
 
@@ -312,18 +325,15 @@ class SessionFlowViewModel @Inject constructor(
                     timezone = shift.timezone,
                     attributes = null
                 )
-                pendingEventDao.insert(PendingEventEntity(
-                    id = tripId,
-                    eventType = ru.asop.terminal.worker.EventTypes.SESSION_OPEN,
-                    payload = JsonUtil.encode(payload),
-                    pathParam = null,
-                    createdAt = now,
-                    status = PendingEventEntity.STATUS_PENDING,
-                    retryCount = 0,
-                    gatewayEventId = null,
-                    completedAt = null,
-                    errorMessage = null
-                ))
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = tripId,
+                        topic = "asop.session.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.SESSION_OPEN,
+                        pathParam = null
+                    )
+                )
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -339,7 +349,7 @@ class SessionFlowViewModel @Inject constructor(
     }
 
     /**
-     * Закрыть смену (или смену+все-дети). Card-auth должен быть пройден.
+     * Закрыть смену.
      * request = текущий водитель или admin уровня перевозчика/организатора/региона/root.
      */
     fun confirmCloseShift() {
@@ -353,7 +363,6 @@ class SessionFlowViewModel @Inject constructor(
             return
         }
         if (tap.carrierId != shift.carrierId && tap.userId != shift.openedByUserId) {
-            // server-side не сможет проверить, но client быстрая защита от чужих
             _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Карта другого перевозчика (server проверяет)") }
             return
         }
@@ -361,25 +370,22 @@ class SessionFlowViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val now = System.currentTimeMillis()
-                sessionDao.close(shift.id, closedAt = now, closedByUserId = tap.userId, status = SessionEntity.STATUS_CLOSED)
+                sessionDao.close(shift.id, closedAt = now, closedByUserId = tap.userId)
                 val payload = SessionCloseRequest(
                     reason = null,
                     regionId = shift.regionId,
                     timezone = shift.timezone,
                     cardId = tap.cardId
                 )
-                pendingEventDao.insert(PendingEventEntity(
-                    id = "close-${shift.id}",
-                    eventType = ru.asop.terminal.worker.EventTypes.SESSION_CLOSE,
-                    payload = JsonUtil.encode(payload),
-                    pathParam = shift.id,
-                    createdAt = now,
-                    status = PendingEventEntity.STATUS_PENDING,
-                    retryCount = 0,
-                    gatewayEventId = null,
-                    completedAt = null,
-                    errorMessage = null
-                ))
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = "close-${shift.id}",
+                        topic = "asop.session.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.SESSION_CLOSE,
+                        pathParam = shift.id
+                    )
+                )
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -413,25 +419,22 @@ class SessionFlowViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val now = System.currentTimeMillis()
-                sessionDao.close(trip.id, closedAt = now, closedByUserId = tap.userId, status = SessionEntity.STATUS_CLOSED)
+                sessionDao.close(trip.id, closedAt = now, closedByUserId = tap.userId)
                 val payload = SessionCloseRequest(
                     reason = null,
                     regionId = trip.regionId,
                     timezone = trip.timezone,
                     cardId = tap.cardId
                 )
-                pendingEventDao.insert(PendingEventEntity(
-                    id = "close-${trip.id}",
-                    eventType = ru.asop.terminal.worker.EventTypes.SESSION_CLOSE,
-                    payload = JsonUtil.encode(payload),
-                    pathParam = trip.id,
-                    createdAt = now,
-                    status = PendingEventEntity.STATUS_PENDING,
-                    retryCount = 0,
-                    gatewayEventId = null,
-                    completedAt = null,
-                    errorMessage = null
-                ))
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = "close-${trip.id}",
+                        topic = "asop.session.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.SESSION_CLOSE,
+                        pathParam = trip.id
+                    )
+                )
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -457,8 +460,8 @@ class SessionFlowViewModel @Inject constructor(
                 val now = System.currentTimeMillis()
                 val paymentId = UuidCreator.getTimeOrderedEpoch().toString()
                 val paymentTypeId = "00000000-0000-0000-0000-000000000803"   // VALIDATION
-                val resultId = "00000000-0000-0000-0000-000000000903"          // VALIDATION_ONLY
-                val payment = ru.asop.terminal.db.entity.TripPaymentEntity(
+                val resultId = "00000000-0000-0000-0000-000000000903"         // VALIDATION_ONLY
+                val payment = TripPaymentEntity(
                     id = paymentId,
                     tripSessionId = trip.id,
                     cardId = cardId,
@@ -487,18 +490,15 @@ class SessionFlowViewModel @Inject constructor(
                     carrierId = trip.carrierId,
                     timezone = trip.timezone
                 )
-                pendingEventDao.insert(PendingEventEntity(
-                    id = paymentId,
-                    eventType = ru.asop.terminal.worker.EventTypes.TRANSACTION_COMPLETE,
-                    payload = JsonUtil.encode(payload),
-                    pathParam = null,
-                    createdAt = now,
-                    status = PendingEventEntity.STATUS_PENDING,
-                    retryCount = 0,
-                    gatewayEventId = null,
-                    completedAt = null,
-                    errorMessage = null
-                ))
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = paymentId,
+                        topic = "asop.transaction.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.TRANSACTION_COMPLETE,
+                        pathParam = null
+                    )
+                )
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -509,14 +509,6 @@ class SessionFlowViewModel @Inject constructor(
             } catch (e: Exception) {
                 _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Ошибка: ${e.message}") }
             }
-        }
-    }
-
-    private fun parseIdentity(json: JSONObject): CardIdentityVcm1? {
-        return CardIdentityVcm1.fromJson(json)?.let { vcm1 ->
-            if (vcm1.cardId != null && vcm1.userId != null) {
-                vcm1
-            } else null
         }
     }
 
@@ -531,26 +523,21 @@ class SessionFlowViewModel @Inject constructor(
 
     private suspend fun lookupUserFullName(userId: String): String? {
         return try {
-            val rowJson = referenceRowDao.rawUserByIdRow(userId)
-            if (rowJson != null) {
-                val obj = JSONObject(rowJson)
-                val first = obj.optString("firstName", "")
-                val last = obj.optString("lastNameInitial", "")
-                val initial = obj.optString("lastName", "")
-                if (first.isNotEmpty()) {
-                    if (last.isNotEmpty()) "$first $last" else if (initial.isNotEmpty()) "$first $initial." else first
-                } else null
-            } else null
+            val rowJson = referenceRowDao.rawUserByIdRow(userId) ?: return null
+            val obj = JSONObject(rowJson)
+            val first = obj.optString("firstName", "")
+            val last = obj.optString("lastName", "")
+            if (first.isNotEmpty() && last.isNotEmpty()) "$first $last" else first.ifEmpty { null }
         } catch (e: Exception) { null }
     }
 
     private fun extractFirstCarrierId(rowJson: String): String? {
-        // payload структура: {"userId":"...","carrierId":"...","createdAt":"..."}
-        // payload имеет rowId как "userId|carrierId" composite. Нам нужен carrierId из rowId
-        // или из payloadJson. Используем простой regex extraction.
         val rx = Regex("\"carrierId\"\\s*:\\s*\"([^\"]+)\"")
         return rx.find(rowJson)?.groupValues?.getOrNull(1)
     }
 
     init { observeSessions() }
+
+    @Suppress("unused")
+    private fun touchFlows(): List<Flow<*>> = listOf(_state)
 }

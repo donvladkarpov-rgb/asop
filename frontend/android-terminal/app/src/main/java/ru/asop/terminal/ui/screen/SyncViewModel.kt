@@ -23,7 +23,7 @@ class SyncViewModel @Inject constructor(
     val pendingCount: StateFlow<Int> = pendingEventDao.observePendingCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-    val currentSession: StateFlow<SessionEntity?> = sessionDao.observeCurrentOpenSession()
+    val currentSession: StateFlow<SessionEntity?> = sessionDao.observeCurrentOpenShift()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val lastSyncTime: StateFlow<Long?> = syncPreferences.lastSyncTime

@@ -28,6 +28,7 @@ import ru.asop.terminal.db.dao.SyncMetaDao
 import ru.asop.terminal.db.dao.DeltaSyncJobDao
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.TerminalKeyDao
+import ru.asop.terminal.db.dao.TripPaymentDao
 import ru.asop.terminal.BuildConfig
 import ru.asop.terminal.network.CertSignApi
 import ru.asop.terminal.network.GatewayApi
