@@ -334,9 +334,46 @@ Gateway проверяет JWT, извлекает `sub` (keycloakId), пере�
 
 Для cert-sign saga поток расширен: gateway → crypto-service → terminal-service → gateway через 3 топика (`commands`, `issued`, `events`) и проброс `X-Event-Id` через Kafka headers для корреляции.
 
+### Сессии водителя: open/close shift & trip flow (промпт 011)
+
+```
+Android (mTLS) → Gateway → asop.shift.commands
+       ↓
+session-service @KafkaListener (X-Event-Id в headers)
+  ├─ ON CONFLICT (SESSION_ID) DO NOTHING — idempotent
+  ├─ parent_session_id + status='IN_PROGRESS' → 409 Conflict (один TRIP на SHIFT)
+  └─ INSERT ASOP_SESSIONS с opened_by_user_id, closed_by_user_id, card_id,
+     tid_id, attributes JSONB (carrierId/regionId/timezone)
+       ↓
+       → asop.shift.events → CommandEventConsumer
+       → EventService.complete(eventId, {status=SESSION_OPEN}}) → 200 OK терминалу
+```
+
+**Сессионная иерархия**:
+- `SHIFT` (parent=NULL) — смена водителя (08h expiry)
+- `TRIP` (parent=shift.id) — рейс внутри смены
+- `TRANSACTION` (session_id=trip.id) — валидации пассажирских карт
+
+**Авторизация закрытия чужой смены** (промпт 011 §4, `SessionService.canClose`):
+```
+SELECT 1 FROM requester_scope rs
+WHERE ((:sessionCarrierId IS NOT NULL AND rs.cid = :sessionCarrierId)
+    OR (:sessionRegionId  IS NOT NULL AND rs.rid = :sessionRegionId))
+   OR EXISTS (SELECT 1 FROM ASOP_USER_ROLES ur
+              JOIN ASOP_ROLES r ON r.role_id = ur.role_id
+              WHERE ur.user_id = :requesterId
+                AND r.role_code IN ('ADMIN','SUPER_ADMIN','REGION_ADMIN',
+                                    'ORGANIZER_ADMIN','CARRIER_ADMIN',
+                                    'CARRIER_DISPATCHER','KRS_DISPATCHER'))
+LIMIT 1
+```
+
+Минимальный SQL путь: `ASOP_USER_CARRIERS` / `ASOP_USER_REGIONS` UNION + role-code EXISTS. Кэшбэк для cascade-резидентов: ORGANIZER_ADMIN/RGN_ADMIN получают доступ ко всем carrier-сессиям своего организатора / региона.
+
 ### Заголовки
 - `X-Keycloak-Id`: keycloakId аутентифицированного пользователя (трассировка)
 - `X-Event-Id`: идентификатор события для корреляции команд (используется `CommandEventConsumer` для вызова `EventService.complete/fail`)
+- `X-Carrier-Id`, `X-Region-Id`, `X-Timezone`: business context терминала (пробрасываются из sync-команд в Kafka headers; консьюмеры читают или игнорируют)
 
 ---
 
@@ -510,7 +547,13 @@ Soft-delete: все ~42 справочные таблицы имеют `DELETED_
 - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
 - `ContentProvider` (`ru.asop.terminal.provider`): экспортирует `reference_rows`/`sync_meta` наружу (permission `ru.asop.terminal.provider.READ`) — читается приложением `android-test` для сверки дельта-синка.
 
-**Drawer-меню (`ModalNavigationDrawer`)** — hamburger-иконка в TopAppBar, открывает панель с пунктами: "Сертификат" (диалог перевыпуска), "Регистрация" (`RegistrationScreen`, доступна всегда), "Привязать перевозчика" (`AssignCarrierScreen`), "Загрузить справочники" (AlertDialog с числом строк в `reference_rows` и активных дельта-заданий, кнопки «Дельта сейчас» и «Полная выкачка»), stub-пункты (зарегистрировать карту водителя, открыть/закрыть смену, открыть/закрыть рейс — placeholder, TODO). `TerminalNavHost` обёрнут в `ModalNavigationDrawer`+`Scaffold`, добавлены routes `assign-carrier`, `provisioning`, `registration`, `main`.
+**Drawer-меню (`ModalNavigationDrawer`)** — hamburger-иконка в TopAppBar, открывает панель с пунктами: "Сертификат" (диалог перевыпуска), "Регистрация" (`RegistrationScreen`, доступна всегда), "Привязать перевозчика" (`AssignCarrierScreen`), "Загрузить справочники" (AlertDialog с числом строк в `reference_rows` и активных дельта-заданий, кнопки «Дельта сейчас» и «Полная выкачка»), **промпт 011: реализовано** — «Открыть смену» / «Закрыть смену» / «Открыть рейс» / «Закрыть рейс» теперь навигируют на реальные Compose-экраны (`OpenShiftScreen` / `CloseShiftScreen` / `OpenTripScreen` / `CloseTripScreen`), остальные stub-пункты ("зарегистрировать карту водителя") в TODO. `TerminalNavHost` обёрнут в `ModalNavigationDrawer`+`Scaffold`, добавлены routes `assign-carrier`, `provisioning`, `registration`, `main`, `open-shift`, `close-shift`, `open-trip`, `close-trip`.
+
+**Bottom `ShiftTripInformer` (промпт 011)** — постоянно виден на `MainScreen` под sync progress:
+- `Shift OPEN, Trip CLOSED` → зелёный «Смена открыта: {userFullName}».
+- `Shift OPEN, Trip OPEN` → зелёный «Рейс открыт: vehicle=..., path=...».
+- `Обе CLOSED` → серый «Смена закрыта. Откройте смену через меню.»
+- Авторизация-цвет: amber (light) если только shift OPEN без trip — напоминание открыть рейс.
 
 **Sync flow:**
 ```

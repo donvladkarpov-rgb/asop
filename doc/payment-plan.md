@@ -133,6 +133,33 @@ payment-service (новый модуль, порт ~809x)
 - **Время online-авторизации**: если ВТБ отвечает дольше 5 с — гибридная схема скорее offline + batch.
 - **F20 NFC lock**: PCI PTS может блокировать NFC для сторонних приложений — нужна проверка на реальном F20 с Feitian SDK (NDA-доступ).
 
+## MVP-валидации проезда (промпт 011)
+
+После согласования VIP-канала payment-flow, **MVP** уже реализуется через прямую запись транзакций без списания денег:
+
+- **`TRANSACTION_TYPE_CODE='VALIDATION'` (…0803)** — «Валидация (без списания)».
+- **`TRANSACTION_RESULT_CODE='VALIDATION_ONLY'` (…0903)** — «Зафиксировано (без списания)».
+- Room `TripPaymentEntity` → Kafka `transaction-service` → `ASOP_TRANSACTIONS (amount=0)` через `asop.transaction.commands`.
+- Это уже работает end-to-end в MVP-режиме (см. `doc/smoke-tests.md → Smoke Test: Driver Session workflow`).
+- `transaction-result_id='VALIDATION_ONLY'` отмечает запись, как «не списание», без реального движения средств; переход на Phase 5 (`asop.payment.commands`) будет требовать только swap `transactionResultId` в `TripPaymentEntity` defaults и ServerKafka-routing от `transaction-topic` к `payment-topic`.
+
+**Tap-флоу пассажира** для MVP:
+
+```
+Пассажир прикладывает карту → CardReadScreen
+  → MifareClassicCardWriter.detectAndEmitPayment(eventId)
+  → INSERT TripPaymentEntity (amount=0, transactionResultId='VALIDATION_ONLY')
+  → emit PendingEvent(TRANSACTION_COMPLETE) → SyncWorker
+  → POST /sync/transactions
+  → gateway SessionCommandService → Kafka asop.transaction.commands
+  → transaction-service → INSERT ASOP_TRANSACTIONS (amount=0)
+```
+
+При переходе к Phase 5 (реальное списание ВТБ):
+- `transactionResultId` дефолт → стандартный (`Успешно`/`Отказ`);
+- идемпотентность сохраняется через `ON CONFLICT (SESSION_ID/TAP_UUID)` уже реализован в MVP.
+
+
 ## Связанные файлы
 
 - `frontend/android-terminal/app/...` — Android-терминал (будущий FeitianSdkFacade)

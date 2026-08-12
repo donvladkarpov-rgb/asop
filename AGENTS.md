@@ -609,3 +609,63 @@ Browser → nginx/vite → Gateway (/realms/**) → Keycloak (internal)
 - `doc/context.md` — full project guide
 - `doc/auth.md` — auth architecture
 - `infrastructure/db-migrations/asop_schema.sql` — database schema
+
+## Сессии водителя (промпт 011)
+
+Иерархия через `ASOP_SESSIONS.PARENT_SESSION_ID`:
+
+```
+ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
+   └─ ASOP_SESSIONS (session_type=TRIP, parent=shift) — рейс
+        └─ ASOP_TRANSACTIONS (session_id=trip.id) — валидации пассажиров
+```
+
+**Сессионные типы** (`infrastructure/docker/seed-data.sql`):
+- `SHIFT` (`00000000-0000-0000-0000-000000000601`) — рабочая смена
+- `BREAK` (`00000000-0000-0000-0000-000000000602`) — перерыв
+- `TRIP` (`00000000-0000-0000-0000-000000000603`) — рейс внутри смены
+
+**Новые transaction-type/result для MVP без списания**:
+- `transactionType='Валидация (без списания)'` (`…0803`)
+- `transactionResult='Зафиксировано (без списания)'` (`…0903`)
+
+**Backend** (`backend/session-service/...`):
+- `SessionEntity` теперь содержит `tidId, openedByUserId, closedByUserId, cardId, attributes` (column `ATTRIBUTES JSONB` хранит `carrierId/regionId/timezone`).
+- `SessionService.canClose(sessionId, requesterUserId)` — матрица авторизации промпт 011 §4: DRIVER + CARRIER_DISPATCHER + ORGANIZER_ADMIN + REGION_ADMIN + ADMIN/SUPER_ADMIN с cascade через `asop_user_carriers` / `asop_user_regions`.
+- `SessionCommandConsumer.handleSessionOpened(event, eventId)`:
+  - ON CONFLICT (SESSION_ID) DO NOTHING → client-generated UUIDv7 = idempotency при retry offline.
+  - 409 Conflict guard на `(parent_session_id, status=IN_PROGRESS)` — один TRIP на смену.
+  - INSERT записывает все новые поля: `tidId, openedByUserId, cardId, closedByUserId, attributes`.
+
+**Gateway / Kafka events** (`backend/gateway-service/...` + `shared/asop-kafka-contracts/...`):
+- `SessionCommandService.openSession` теперь передаёт `parentSessionId, tidId, pathId, vehicleId, openedByUserId, cardId, attributes`.
+- `SessionClosedEvent.closedByUserId` фиксируется через `principal.name` (UUID) → server-side persistence.
+
+**Android terminal**:
+- `db/entity/SessionEntity.kt` — расширено до 17 полей (включая `session_type_code`/`session_type_id` columns с явными `@ColumnInfo`). Один shift per terminal max (UI guard + server 409).
+- `db/entity/TripPaymentEntity.kt` (new) — Room `trip_payments` для каждого `tap` пассажирской карты внутри TRIP.
+- `db/dao/SessionDao.kt` — `getCurrentOpenShift()`, `getCurrentOpenTrip(parentId)`, `observeCurrentOpenShift()`, `observeCurrentOpenTrip()`.
+- `db/dao/TripPaymentDao.kt` (new) — `getPendingSync()`, `markSynced()`, `observeForTrip()`.
+- `db/AppDatabase.kt` — version 5 → 6 (`fallbackToDestructiveMigration()` для MVP).
+- `db/dao/ReferenceRowDao.kt` — `rawUserByIdRow()`, `rawUserCarriersFor()`, `firstUserCarrierRow()` для offline card-auth без сетевого запроса.
+- `network/models/SyncModels.kt::SessionOpenRequest` — добавлены `tidId, openedByUserId, cardId, carrierId, attributes`.
+- `ui/screen/SessionFlowViewModel.kt` — shared VM для Open/Close shift + trip + tap-passenger:
+  - `onCardTappedForAuth()` верифицирует DRIVER/CARRIER_DISPATCHER роль через `bitmask` → резолвит carrier через `reference_rows`.
+  - `confirmOpenShift/Close/Shift/Trip` создает `PendingEventEntity` (PENDING) → SyncWorker.
+- `ui/screen/SessionFlowScreen.kt` (shared) + `OpenShiftScreen.kt`/`CloseShiftScreen.kt`/`OpenTripScreen.kt`/`CloseTripScreen.kt` — 4 новых экрана. Цветовая индикация (зелёный/янтарный/серый) по текущему состоянию смены/рейса.
+- `ui/screen/MainScreen.kt` — постоянный informer внизу экрана (ShiftTripInformer) показывает текущее состояние SHIFT/TRIP.
+- `ui/TerminalNavHost.kt` — drawer-ы «Открыть/закрыть смену/рейс» теперь навигируют на реальные экраны.
+- `service/GpsTrackingService.kt` — GPS привязывается к **SHIFT.id** (не к TRIP):
+  - `getCurrentOpenShift()` + `getCurrentOpenTrip(parent)` через SessionDao.
+- `util/JsonUtil.kt` (new) — Moshi singleton wrapper, используется SessionFlowViewModel для `payload` сериализации.
+
+**Offline идемпотентность**:
+- Клиент генерирует `UUIDv7` для каждого `sessionId/tripPaymentId` через `UuidCreator.getTimeOrderedEpoch()`.
+- Server `INSERT … ON CONFLICT (SESSION_ID) DO NOTHING` — повторный SyncWorker retry на reconnect не создаёт дубликатов.
+- Карта UUID хранится в `SyncPreferences.setLastCardId()` после каждого tap (`prompt 008` consistent).
+
+**Не нужно**: изменения Proto (`schema.proto` уже содержит все session-поля), изменения MasterRegistry (sessions не в delta-sync), изменения AGENTS.md по таб-filter (это `промпт 010`).
+
+**Известные ограничения MVP**:
+- TID/Vehicle/Route/Path pickers в `OpenTripScreen.kt` оставлены как hint-card, финальный каскад-picker вынесен в отдельный flow (Phase 4.2.b).
+- Trip payments идут в `transaction-service` отдельным session=TRIP.id, не в `ASOP_CARD_REGISTER` — не нужно регистрировать пассажирскую карту как Driver card.

@@ -618,6 +618,44 @@ Root CA (self-signed, ECC P-256, 10 лет)
 Идемпотентность: client генерирует UUIDv7 для sessionId/tripPaymentId → server
 `INSERT … ON CONFLICT (SESSION_ID) DO NOTHING` → нет дублей при offline retry.
 
+**Сессия водителя — anonymous ACL `canClose()` matrix (промпт 011 §4)** реализуется в
+`session-service/.../SessionService.kt::canClose(sessionId, requesterUserId)`:
+1. Любой DRIVER (открыватель или другой driver_of_same_carrier) → OK.
+2. CARRIER_DISPATCHER / KRS_DISPATCHER / CARRIER_ADMIN → OK если scope matches carrier_id.
+3. ORGANIZER_ADMIN → OK cascade на все carriers организатора (JOIN `ASOP_ORGANIZER_TERRITORIES`).
+4. KRS_ADMIN → OK cascade по auditServiceId.
+5. REGION_ADMIN → OK cascade на всех организаторов → carriers региона.
+6. `ADMIN` / `SUPER_ADMIN` → OK всегда.
+
+Реализуется единым SQL-window через `requestor_scope` CTE (UNION `ASOP_USER_CARRIERS` × `ASOP_USER_REGIONS`)
++ EXISTS на role_code ∈ `(...DISPATCHER, ...ADMIN, ROOT)`. Детальная формула — см. AGENTS.md раздел
+`Сессии водителя (промпт 011)`.
+
+**Race condition guard** (server, трехуровневый):
+- `POST /sync/sessions/open` с `sessionTypeId=TRIP` → проверка
+  `EXISTS (SELECT 1 FROM ASOP_SESSIONS WHERE PARENT_SESSION_ID=:shiftId AND STATUS='IN_PROGRESS')`.
+  Если есть другая IN_PROGRESS TRIP → **409 Conflict** + `IllegalStateException`.
+- Client check перед отправкой: `sessionDao.getCurrentOpenTrip(parentId) != null` → блокирует кнопку «Открыть рейс».
+- DB UNIQUE-индекс невозможен (много TRIP-ов по разным shift), поэтому проверка на уровне consumer+service.
+
+**GPS-привязка**: `ASOP_GPS_TRACKING.SESSION_ID = shift.id` (НЕ trip.id) — отчёты согласованы
+непрерывно от открытия смены до её закрытия, независимо от TRIP boundaries. `vehicleId/pathId`
+в GPS-отчёте берутся из текущего открытого TRIP (если есть); иначе NULL.
+
+**TID selectors**: выбор TID при открытии TRIP — водопад (cascade) region→carrier→terminal.
+TID pool (`ASOP_TIDS.STATUS='UNUSED'`) → admin назначает через `PUT /api/v1/tids/{id}` (carrier-service).
+На устройстве водопад ещё не реализован на UI (hint-card stub в `OpenTripScreen.kt`),
+TODO Phase 4.2.b.
+
+**Известные ограничения MVP**:
+1. `OpenTripScreen.kt` — TID/Vehicle/Route/Path pickers показаны как hint-card. Полный cascade-picker —
+   отдельный flow (Phase 4.2.b).
+2. Trip payments пассажиров идут через `transaction-service` (`amount=0`, `transaction_result_id='VALIDATION_ONLY'`)
+   при parent_session_id=trip.id. Пассажирская карта НЕ регистрируется в `ASOP_CARDS` как Driver card.
+3. Поскольку `ASOP_SESSIONS.OPENED_AT_LOCAL` хранится в device timezone (Europe/Moscow),
+рекомендуется UTC на сервере — нет timezone-conflict, но явная конверсия не выполняется (в TODO).
+4. `EXPIRATION_TIME` = startedAt + 8h hardcoded — фоновое обнуление не выполняется (водитель
+отвечает за явное CLOSE в конце смены, иначе события зависают как PENDING).
 Матрица авторизации (prompt 011 §4 закрытие смены):
 - DRIVER (открыватель — он же)
 - DRIVER_B (любой водитель carrier_id == session.carrier_id)

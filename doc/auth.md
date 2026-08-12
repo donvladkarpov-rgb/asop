@@ -247,6 +247,38 @@ class TerminalPrincipalExtractor : X509PrincipalExtractor {
    ORDER BY priority, VEHICLE_NUMBER;
    ```
 
+### 5.3.a. Shift/Trip lifecycle (промпт 011)
+
+Авторизация — двух-уровневая:
+1. **Карта-ключ** на NFC tap → Android `SessionFlowViewModel.onCardTappedForAuth()`:
+   - VCM1 card identity (`file 0`) даёт `cardId, userId, bitmask`.
+   - Из `bitmask` через `CardActivationMatrix.rolesFromBitmask(...)` — список ordinal.
+   - Нужен `DRIVER` или `CARRIER_DISPATCHER`/`KRS_DISPATCHER` — иначе `CardStep.NOT_DRIVER`.
+   - Lookup `carrier` через `reference_rows` (`asop_user_carriers` payload) — `firstUserCarrierRow(userId)`.
+2. **Server `canClose(sessionId, requesterId)`** (matrix из промпт 011 §4, см. AGENTS.md/SQL там) — cascade scope:
+   - DRIVER (открыватель ИЛИ другой_водитель_того_же_carrier_id) → OK.
+   - CARRIER_DISPATCHER/KRS_DISPATCHER/CARRIER_ADMIN → OK если carrier_id matches.
+   - ORGANIZER_ADMIN → OK cascade на all carriers организатора (JOIN ASOP_ORGANIZER_TERRITORIES).
+   - KRS_ADMIN → OK cascade по auditServiceId.
+   - REGION_ADMIN/ADMIN/SUPER_ADMIN → OK всегда (с фильтром scope для REGION).
+
+**Race guards**:
+- 1 shift per terminal max (UI client-side check + server-side).
+- 1 active trip per shift (server-side 409 Conflict в `SessionCommandConsumer.handleSessionOpened`
+  через подзапрос `EXISTS (IN_PROGRESS WHERE parent=shift)`).
+
+**Offline-идемпотентность** (только для sessionId и paymentId — `TripPaymentEntity.id`):
+- Client генерирует UUIDv7 (`UuidCreator.getTimeOrderedEpoch()`).
+- Server `INSERT … ON CONFLICT (SESSION_ID) DO NOTHING` — повторный SyncWorker retry на reconnect безопасен.
+- Tap карты → store → emit PendingEvent → SyncWorker → POST.
+
+**GPS привязка к сменам**:
+- `ASOP_GPS_TRACKING.SESSION_ID = shift.id` (НЕ trip.id) — отчёты согласованы от открытия shift до закрытия.
+- `vehicleId/pathId` в GPS-отчёте = текущий открытый trip (или NULL, если trip закрыт).
+- При offline: GPS буферизация in-memory (max ~100 точек) → flush при reconnect.
+
+
+
 ### 5.4. Создание перевозчика (async)
 1. Клиент шлёт `POST /api/v1/carriers` с JWT
 2. Gateway проверяет JWT, извлекает `sub`

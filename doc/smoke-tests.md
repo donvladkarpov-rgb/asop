@@ -475,3 +475,109 @@ docker exec docker-gateway-service-1 bash -c '
 **Ожидаемый результат:** для каждой из 7 таблиц количество rows для `0101` и `0103` меньше, чем total. Например, для organizer-territories: 0101 → только organizer 0301 (Москва), 0103 → только 0303 (Крым), никакого взаимного overlap.
 
 ```
+
+## Smoke Test: Driver Session workflow (промпт 011)
+
+**Goal:** Проверить, что lifecycle «открыть смену → открыть рейс → валидации пассажиров → закрыть рейс → закрыть смену» работает end-to-end, с проверкой матрицы прав и 409 conflict guard для TRIP-ов.
+
+### Endpoint basic flow
+
+```bash
+SHIFT_TYPE="00000000-0000-0000-0000-000000000601"
+TRIP_TYPE="00000000-0000-0000-0000-000000000603"
+DRIVER_USER="019ff5b6-fc58-7865-a2c5-0d86e90699f7"  # Admin (driver role)
+CARRIER="00000000-0000-0000-0000-0000000001403"          # ГУП «Крымавтотранс»
+TERMINAL_ID="$(cat /tmp/terminal-id.txt 2>/dev/null || echo "00000000-0000-0000-0000-000000000001")"
+
+# Generate same client UUIDv7 twice → idempotency assurance
+SHIFT_CLIENT_ID="$(uuidgen | tr A-Z a-z)"
+TRIP_CLIENT_ID="$(uuidgen | tr A-Z a-z)"
+
+# 1. Open SHIFT
+docker exec docker-gateway-service-1 curl -k -s -X POST \
+  "https://gateway-service:8080/api/v1/sync/sessions/open" \
+  -H "Content-Type: application/json" \
+  -d "{\"sessionTypeId\":\"$SHIFT_TYPE\",\"tidId\":null,\"pathId\":null,\"vehicleId\":null,\"openedByUserId\":\"$DRIVER_USER\",\"cardId\":\"02B206F1-AAAA-BBBB-CCCC-000000000001\",\"carrierId\":\"$CARRIER\",\"regionId\":\"00000000-0000-0000-0000-0000000000103\",\"timezone\":\"Europe/Moscow\"}" \
+  | jq .eventId
+# Ожидаем 202 + X-Event-Id в ответе.
+
+# 2. Verify in DB
+docker exec docker-postgres-1 psql -U asop -d asop -c \
+  "SELECT session_type_code, parent_session_id, opened_by_user_id, status FROM asop_sessions WHERE opened_by_user_id='$DRIVER_USER' AND session_type_id='$SHIFT_TYPE' AND status='IN_PROGRESS';"
+# Ожидаем 1 row: SHIFT, parent=NULL, opened_by=DRIVER, IN_PROGRESS
+
+# 3. Open TRIP referencing shift.id as parent
+TRIP_ATTR="{\"carrierId\":\"$CARRIER\",\"regionId\":\"00000000-0000-0000-0000-0000000000103\"}"
+docker exec docker-gateway-service-1 curl -k -s -X POST \
+  "https://gateway-service:8080/api/v1/sync/sessions/open" \
+  -H "Content-Type: application/json" \
+  -d "{\"sessionTypeId\":\"$TRIP_TYPE\",\"parentSessionId\":\"$SHIFT_ID\",\"openedByUserId\":\"$DRIVER_USER\",\"tidId\":\"$TID_ID\",\"pathId\":\"$PATH_ID\",\"vehicleId\":\"$VEHICLE_ID\",\"carrierId\":\"$CARRIER\",\"regionId\":\"00000000-0000-0000-0000-0000000000103\"}"
+
+# 4. Try parallel Trip (should fail with 409 in production server, 202 here but DB-level will dedupe)
+docker exec docker-gateway-service-1 curl -k -s -X POST ...
+# Ожидаем либо 409 Conflict (если включен server-side check) либо вторую запись с другим sessionId;
+# после двух updates server-side SessionService должен вернуть либо 409 (включен guard) либо server detect duplicate.
+
+# 5. Close TRIP — same user or admin
+docker exec docker-gateway-service-1 curl -k -s -X PUT \
+  "https://gateway-service:8080/api/v1/sync/sessions/$TRIP_ID/close" \
+  -H "Content-Type: application/json" \
+  -d "{\"reason\":\"end_of_trip\",\"cardId\":\"$DRIVER_CARD_ID\"}"
+
+# 6. Tap passenger cards → INSERT trip_payments (offline) + emit Kafka transactions
+# ref. Phase 7 Android SyncApi.completeTransaction
+# Каждый tap → session=TRIP.id, typeCode=...0803 (VALIDATION), resultCode=...0903 (VALIDATION_ONLY), amount=0.
+
+# 7. Close SHIFT — by another driver of same carrier (auth matrix test)
+ANOTHER_DRIVER_USER="019ff5b6-fc58-7865-a2c5-000000000002"  # hypothetical same carrier
+docker exec docker-gateway-service-1 curl -k -s -X PUT \
+  "https://gateway-service:8080/api/v1/sync/sessions/$SHIFT_ID/close" \
+  -H "Content-Type: application/json" \
+  -d "{\"reason\":\"end_of_shift\",\"cardId\":\"$ANOTHER_DRIVER_CARD\"}"
+# Ожидаем 202 — `canCloseShift` через carrier_id из ATTRIBUTES JSONB и ANOTHER_DRIVER's
+# asop_user_carriers.carrier_id == $CARRIER → OK.
+
+# 8. Verify final DB state
+docker exec docker-postgres-1 psql -U asop -d asop -c \
+  "SELECT session_type_code, status FROM asop_sessions WHERE opened_by_user_id='$DRIVER_USER' ORDER BY started_at DESC LIMIT 3;"
+# Ожидаем: SHIFT (CLOSED), TRIP (CLOSED), and maybe TRIP (CLOSED).
+```
+
+### Authorization matrix verification
+
+Создайте seed users через Keycloak admin:
+- `DRIVER_A` (`CARRIER_DISPATCHER` нет, только DRIVER на carrier=1403)
+- `DRIVER_B` (`CARRIER_DISPATCHER` нет, только DRIVER на carrier=1403)
+- `DISPATCHER_C` (`CARRIER_DISPATCHER` на carrier=1403)
+- `DISPATCHER_F` (другой carrier, тот же region)
+- `ORGADMIN_D` (`ORGANIZER_ADMIN` для организатора 1403)
+- `REGADMIN_E` (`REGION_ADMIN` для региона 0103)
+- `ROOT` (`SUPER_ADMIN`)
+
+```sql
+-- Вставить userCarriers и userRegions через seed-data-delta-*.sql или прямой INSERT
+INSERT INTO asop_user_carriers (user_id, carrier_id) VALUES (USER_OF_DRIVER_A, CARRIER_1403);
+-- (аналогично для остальных)
+```
+
+Затем для каждой смены, открытой DRIVER_A на carrier=1403:
+- DRIVER_B → закрывает смену → **ОК** (тот же carrier_id)
+- DISPATCHER_C → закрывает смену → **ОК** (CARRIER_DISPATCHER на 1403)
+- DISPATCHER_F → закрывает смену → **403** (другой carrier)
+- ORGADMIN_D → закрывает смену → **ОК** (cascade через организатор → carrier)
+- REGADMIN_E → закрывает смену → **ОК** (cascade через region → organizer → carrier)
+- ROOT → закрывает смену → **ОК** (SUPER_ADMIN)
+
+### 409 Conflict guard (TRIP uniqueness inside SHIFT)
+
+```bash
+# Откройте shift один.
+# Попытайтесь открыть TRIP A.
+docker exec -i docker-postgres-1 psql -U asop -d asop -c \
+  "UPDATE asop_sessions SET status='CLOSED', closed_at=NOW() WHERE session_type_code='TRIP' AND parent_session_id='$SHIFT_ID';"
+# Попытайтесь открыть TRIP B (тот же parent).
+# Server-side guard в SessionCommandConsumer должен вернуть 409.
+docker exec docker-gateway-service-1 curl -k -s -w "%{http_code}\n" -X POST ...
+# Ожидаем 409 Conflict, т.к. существующий IN_PROGRESS TRIP для shift уже есть (если сохранился).
+# Если первая попытка TRIP закрылась — вторая должна пройти.
+

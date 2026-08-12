@@ -457,6 +457,23 @@ MIFARE Classic — один из самых клонируемых чипов в
 
 **Практика:** ты не читаешь SAK/ATQA из блока 0. После `Tag tag = intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)` — `tag.getId()` уже даёт UID, а tech-лист определён по SAK. Блок 0 содержит только UID + BCC + заводской мусор.
 
+## 8.1. ASOP сценарии использования (промпт 008/009/011)
+
+Sector 1 (`0x04`) приложения АСОП (CRYPTO1-protected) используется в трёх сценариях:
+
+1. **Активация карты водителя (промпт 008)**: VCM1 запись на сектор 1 при первом tap карты через activation flow.
+2. **Открытие смены водителем (промпт 011)**: 8-байтный UUID `ASOP_CARDS.card_id` в `sector 1.Block 1` используется как `ASOP_SESSIONS.card_id` поля. При tap для shift-open:
+   - `SessionFlowViewModel.onCardTappedForAuth()` читает VCM1 identity (`File 0`/`File 1` по DESFire NFC) или CRYPTO1 auth + MIFARE-Classic read (sector 1) для получения `cardId, userId, bitmask`.
+   - bitmask содержит роль `DRIVER` ordinal → резолвится carrier через `asop_user_carriers` payload в локальной таблице `reference_rows`.
+   - После успеха аутентификации: emit Kafka `asop.session.commands` с `sessionId = client-generated UUIDv7`.
+3. **Tap пассажирской карты внутри открытого TRIP**: запись в `TripPaymentEntity (amount=0, transactionResultId='VALIDATION_ONLY')`. Row-формат не отличается от driver-card; entity переиспользует sector 1.
+
+**Альтернативный путь** — бесконтактный DESFire EV1/EV2/EV3 (iCAR-класса):
+- AID `0xA05A01`, ISO-файл 0 = cardIdentity JSON, файл 1 = RSA-PSS подпись.
+- Тот же payload, но `IdentityMode = DESFIRE` кодирует как `File 0`/`File 1` чтение.
+
+Подробная последовательность write-операций описана в `prompts/prompt_008.md` (clean-break от SAC1 → VCM1).
+
 ## 9. Источники
 
 - libnfc `utils/mifare.h` — структуры трейлера: https://raw.githubusercontent.com/nfc-tools/libnfc/master/utils/mifare.h
