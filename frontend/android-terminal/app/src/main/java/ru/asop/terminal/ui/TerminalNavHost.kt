@@ -156,6 +156,82 @@ fun TerminalNavHost() {
                     modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
                 )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = "Операции водителя",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
+                )
+                NavigationDrawerItem(
+                    label = { Text("Зарегистрировать карту водителя") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-activation")
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Открыть смену") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("open-shift")
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Закрыть смену") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("close-shift")
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Открыть рейс") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("open-trip")
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Закрыть рейс") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("close-trip")
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = "Карты",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
+                )
+                NavigationDrawerItem(
+                    label = { Text("Прочитать карту") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-read")
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Активация карт (любая роль)") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-activation")
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = "Терминал",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp)
+                )
                 NavigationDrawerItem(
                     label = { Text("Сертификат") },
                     selected = false,
@@ -165,7 +241,7 @@ fun TerminalNavHost() {
                     }
                 )
                 NavigationDrawerItem(
-                    label = { Text("Регистрация") },
+                    label = { Text("Регистрация терминала") },
                     selected = false,
                     onClick = {
                         scope.launch { drawerState.close() }
@@ -198,59 +274,6 @@ fun TerminalNavHost() {
                     onClick = {
                         scope.launch { drawerState.close() }
                         referenceSyncViewModel.toggleDeltaJobs()
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Прочитать карту") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("card-read")
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Активация карт") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("card-activation")
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Зарегистрировать карту водителя") },
-                    selected = false,
-                    onClick = { scope.launch { drawerState.close() } }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Открыть смену") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("open-shift")
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Закрыть смену") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("close-shift")
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Открыть рейс") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("open-trip")
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Закрыть рейс") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("close-trip")
                     }
                 )
             }
