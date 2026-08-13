@@ -74,10 +74,21 @@ fun SessionFlowScreen(
     }
 
     DisposableEffect(nfcAdapter, activity, state.cardStep, nfcEnabled) {
-        val waitingForTap = nfcEnabled &&
-            (state.cardStep == SessionFlowViewModel.CardStep.WAITING_TAP ||
-                state.cardStep == SessionFlowViewModel.CardStep.IDLE)
-        if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled && waitingForTap) {
+        // ReaderMode + ForegroundDispatch держатся АКТИВНЫМИ пока мы в любом
+        // состоянии связанным с картой: IDLE (до первого тапа), WAITING_TAP
+        // (после экрана виден), PROCESSING (mid-read), и ERROR (чтобы пользователь
+        // мог повторно тапнуть после ошибки — red не означает «всё, уходи»).
+        // AUTH_OK — после успешного auth, ReaderMode не нужен (мы ждём подтверждения
+        // кнопки), но не выключаем во избежание race-condition с onPress.
+        val needsActiveReader = nfcEnabled && state.cardStep in setOf(
+            SessionFlowViewModel.CardStep.IDLE,
+            SessionFlowViewModel.CardStep.WAITING_TAP,
+            SessionFlowViewModel.CardStep.PROCESSING,
+            SessionFlowViewModel.CardStep.AUTH_DENIED,
+            SessionFlowViewModel.CardStep.NOT_DRIVER,
+            SessionFlowViewModel.CardStep.NFC_ERROR
+        )
+        if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled && needsActiveReader) {
             Log.i("SessionNFC", "try enableReaderMode on activity=${activity.javaClass.simpleName}")
             try {
                 nfcAdapter.enableReaderMode(
