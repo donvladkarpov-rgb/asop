@@ -162,6 +162,7 @@ fun SessionFlowScreen(
             // Step 1 — card tap
             val cardColor = when (state.cardStep) {
                 SessionFlowViewModel.CardStep.WAITING_TAP -> MaterialTheme.colorScheme.primaryContainer
+                SessionFlowViewModel.CardStep.PROCESSING -> Color(0xFFFFF4C2) // light amber
                 SessionFlowViewModel.CardStep.AUTH_OK -> Color(0xFFD7F8D7)  // light green
                 SessionFlowViewModel.CardStep.AUTH_DENIED,
                 SessionFlowViewModel.CardStep.NOT_DRIVER,
@@ -178,6 +179,7 @@ fun SessionFlowScreen(
                     Spacer(Modifier.height(8.dp))
                     val stateCard = when (state.cardStep) {
                         SessionFlowViewModel.CardStep.WAITING_TAP -> "Ожидание NFC tap"
+                        SessionFlowViewModel.CardStep.PROCESSING -> "⟳ Чтение карты…"
                         SessionFlowViewModel.CardStep.AUTH_OK -> "✓ Авторизован"
                         SessionFlowViewModel.CardStep.AUTH_DENIED -> "✗ Доступ запрещён"
                         SessionFlowViewModel.CardStep.NOT_DRIVER -> "✗ Роль не подходит"
@@ -185,6 +187,15 @@ fun SessionFlowScreen(
                         SessionFlowViewModel.CardStep.IDLE -> "Готов к tap"
                     }
                     Text("Статус: $stateCard", style = MaterialTheme.typography.bodyLarge)
+                    if (state.cardStep == SessionFlowViewModel.CardStep.PROCESSING &&
+                        state.lastTapUidHex != null
+                    ) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "UID=${state.lastTapUidHex}…",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     state.cardTap?.let { tap ->
                         Spacer(Modifier.height(8.dp))
                         Text("Водитель: ${tap.userFullName}", fontWeight = FontWeight.SemiBold)

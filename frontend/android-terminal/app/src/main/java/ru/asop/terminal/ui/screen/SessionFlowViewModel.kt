@@ -61,7 +61,15 @@ class SessionFlowViewModel @Inject constructor(
 ) : AndroidViewModel(application) {
 
     enum class FlowKind { OPEN_SHIFT, CLOSE_SHIFT, OPEN_TRIP, CLOSE_TRIP, TAP_PASSENGER }
-    enum class CardStep { WAITING_TAP, AUTH_OK, AUTH_DENIED, NOT_DRIVER, NFC_ERROR, IDLE }
+    enum class CardStep {
+        WAITING_TAP,      // экран ждёт tap
+        PROCESSING,        // tag detected, читаем VCM1 (UI показывает UID)
+        AUTH_OK,           // // успешно прочитана VCM1 + DRIVER/CARRIER_DISPATCHER-роль
+        AUTH_DENIED,       // // auth не прошёл / ключ не тот / карта не активирована
+        NOT_DRIVER,        // // карта ОК, но роль не подходит (не DRIVER)
+        NFC_ERROR,         // // quick-vcm1-reader упал / не MifareClassic / auth error и т. п.
+        IDLE               // // дефолт до setKind
+    }
     enum class SubmitState { IDLE, SUBMITTING, ACCEPTED, FAILED }
 
     data class CardTapInfo(
@@ -76,6 +84,8 @@ class SessionFlowViewModel @Inject constructor(
     data class State(
         val kind: FlowKind = FlowKind.OPEN_SHIFT,
         val cardStep: CardStep = CardStep.IDLE,
+        val lastTapUidHex: String? = null,
+        val lastTapAtMillis: Long? = null,
         val cardTap: CardTapInfo? = null,
         val submitState: SubmitState = SubmitState.IDLE,
         val errorMessage: String? = null,
@@ -639,6 +649,19 @@ class SessionFlowViewModel @Inject constructor(
      * через [QuickVcm1Reader].
      */
     fun onTagDiscovered(tag: Tag) {
+        try {
+            android.util.Log.i("SessionFlowVM", "onTagDiscovered: techList=${tag.techList.joinToString(",")}, uid=${tag.id.joinToString("") { "%02X".format(it) }}")
+            ru.asop.terminal.nfc.TonePlayer.tapBeep()
+        } catch (_: Exception) { }
+        // Шаг 1: мгновенный UI feedback — пользователь видит, что tap обнаружен.
+        _state.update {
+            it.copy(
+                cardStep = CardStep.PROCESSING,
+                lastTapUidHex = tag.id.joinToString("") { "%02X".format(it) },
+                lastTapAtMillis = System.currentTimeMillis(),
+                errorMessage = null
+            )
+        }
         viewModelScope.launch {
             try {
                 val rows = terminalKeyDao.getActive(limit = 20)
@@ -646,6 +669,7 @@ class SessionFlowViewModel @Inject constructor(
                     runCatching { terminalKeyCryptor.decrypt(entity.keyMaterialEnc) }
                         .getOrNull()
                 }
+                android.util.Log.i("SessionFlowVM", "ASOP-keys loaded: ${asopKeys.size}")
                 val outcome = QuickVcm1Reader.read(tag, asopKeys)
                 if (outcome == null) {
                     _state.update {
