@@ -4,11 +4,27 @@
 
 ## Build
 
+**ТОЛЬКО ПОЛНАЯ СБОРКА ВСЕХ МОДУЛЕЙ.** Incremental builds запрещены — приводят к скрытым regress'ам
+в compile (pre-existing сломанные файлы маскируются incremental кэшем KSP/kapt и не отлавливаются
+до случайной `clean build`).
+
 ```bash
-./gradlew build          # полная сборка
-./gradlew :backend:{module}:build  # сборка одного модуля
-./gradlew clean build    # с очисткой
+./gradlew clean build              # ПЕРЕД любыми изменениями которые трогают shared/* модули
+./gradlew :backend:session-service:backend:asop-common:backend:watermark-processor:backend:gateway-service:clean :backend:session-service:backend:asop-common:backend:watermark-processor:backend:gateway-service:build  # точечный clean+build для одной фичи
+./gradlew :frontend:android-terminal:app:clean :frontend:android-terminal:app:assembleDebug  # Android — допустимо (только свой модуль, никаких shared deps в kotlin)
 ```
+
+**Что НЕЛЬЗЯ использовать:**
+- `./gradlew assembleDebug` без `clean` (Android для уже broken SyncApi.kt — incremental пропустит)
+- `./gradlew compileKotlin` без `clean` (pre-existing ошибки CardActivationViewModel.kt маскируются incremental кэшем)
+- `./gradlew compileDebugKotlin` только с `-x :app:kaptDebugKotlin` (KSP cache stale → "Storage is already registered")
+
+**Если combo `clean + assembleDebug` не дает pass — НЕ устанавливать APK. Откатить изменения, исправить ошибки полностью, повторить с нуля.**
+```
+
+## Critical config
+
+- **JVM memory**: Gradle needs `-Xmx4g`, Kotlin daemon `-Xmx2g` (already in `gradle.properties`). Without this, build OOMs on 22 modules.
 
 ## Critical config
 
