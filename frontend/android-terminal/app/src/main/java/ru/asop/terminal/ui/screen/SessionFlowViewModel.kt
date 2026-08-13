@@ -31,7 +31,7 @@ import ru.asop.terminal.network.SyncApi
 import ru.asop.terminal.network.models.SessionCloseRequest
 import ru.asop.terminal.network.models.SessionOpenRequest
 import ru.asop.terminal.network.models.TransactionCompleteRequest
-import ru.asop.terminal.nfc.QuickVcm1Reader
+import ru.asop.terminal.nfc.Vcm1CardAuth
 import ru.asop.terminal.util.JsonUtil
 import ru.asop.terminal.worker.EventTypes
 import javax.inject.Inject
@@ -645,8 +645,12 @@ class SessionFlowViewModel @Inject constructor(
 
     /**
      * NFC tap event из SessionFlowScreen.enableReaderMode.
-     * Читает ASOP-ключи из terminal_keys, пытается прочитать sector 1 (VCM1)
-     * через [QuickVcm1Reader].
+     * Использует [Vcm1CardAuth] — единый читатель VCM1, идентичный процедуре «Прочитать карту».
+     * Раньше был свой QuickVcm1Reader. read() (упрощённый): он плохо обрабатывал
+     * TagLostException на clone-картах (CRYPTO1-сессия обрывалась посреди readBlock, и
+     * пользователь видел «Исключение при чтении: null» без объяснений). Vcm1CardAuth
+     * делегирует в MifareClassicReader.read() — у которого многопроходный retry на каждый
+     * сектор с правильной обработкой IOException / TagLostException.
      */
     fun onTagDiscovered(tag: Tag) {
         try {
@@ -670,31 +674,37 @@ class SessionFlowViewModel @Inject constructor(
                         .getOrNull()
                 }
                 android.util.Log.i("SessionFlowVM", "ASOP-keys loaded: ${asopKeys.size}")
-                val outcome = QuickVcm1Reader.read(tag, asopKeys)
-                if (outcome == null) {
-                    _state.update {
-                        it.copy(
-                            cardStep = CardStep.NFC_ERROR,
-                            errorMessage = "NFC reader вернул null. Попробуйте ещё раз."
-                        )
+                val outcome = ru.asop.terminal.nfc.Vcm1CardAuth.read(tag, asopKeys)
+                when (outcome) {
+                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Ok -> {
+                        android.util.Log.i("SessionFlowVM",
+                            "VCM1 auth OK: uid=${outcome.uidHex}, " +
+                                "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
+                                "cardId=${outcome.identity.cardId}")
+                        onCardTappedForAuth(outcome.uidHex, outcome.rawVcm1Bytes)
                     }
-                    return@launch
-                }
-                if (outcome.status != QuickVcm1Reader.ReadOutcome.Status.OK) {
-                    _state.update {
-                        it.copy(
-                            cardStep = CardStep.NFC_ERROR,
-                            errorMessage = outcome.details
-                        )
+                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
+                        android.util.Log.w("SessionFlowVM",
+                            "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
+                                "details=${outcome.details}")
+                        // NOT_DRIVER → формируется ниже на основе роли в identity; здесь же
+                        // уровень чтения карты. AUTH_FAILED / NOT_VCM1 / NOT_MIFARE_CLASSIC / READ_FAILED — NFC_ERROR.
+                        ru.asop.terminal.nfc.TonePlayer.errorBeep()
+                        _state.update {
+                            it.copy(
+                                cardStep = CardStep.NFC_ERROR,
+                                errorMessage = outcome.details
+                            )
+                        }
                     }
-                    return@launch
                 }
-                onCardTappedForAuth(outcome.uidHex, outcome.vcm1Bytes)
             } catch (e: Exception) {
+                android.util.Log.e("SessionFlowVM", "readVcm1 outer catch", e)
+                ru.asop.terminal.nfc.TonePlayer.errorBeep()
                 _state.update {
                     it.copy(
                         cardStep = CardStep.NFC_ERROR,
-                        errorMessage = "Ошибка чтения NFC: ${e.message}"
+                        errorMessage = "Ошибка чтения NFC: ${e.javaClass.simpleName} ${e.message ?: "(без сообщения)"}"
                     )
                 }
             }
