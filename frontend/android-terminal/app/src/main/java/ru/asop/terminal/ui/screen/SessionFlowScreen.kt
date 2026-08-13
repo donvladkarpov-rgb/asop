@@ -39,7 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.text.font.FontWeight
-import ru.asop.terminal.nfc.QuickVcm1Reader
+import ru.asop.terminal.nfc.Vcm1CardAuth
 
 /**
  * Промпт 011: shared layout для OpenShift/CloseShift/OpenTrip/CloseTrip.
