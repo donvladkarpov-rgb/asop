@@ -652,17 +652,45 @@ class SessionFlowViewModel @Inject constructor(
      * делегирует в MifareClassicReader.read() — у которого многопроходный retry на каждый
      * сектор с правильной обработкой IOException / TagLostException.
      */
+    /**
+     * Anti-duplicate debounce: Feitian PICC ReaderMode посылает `onTagDiscovered`
+     * callback ПОВТОРНО пока карта держится в поле (типично каждые ~250мс при hold
+     * ~1с). Без dedup второй callback стартует параллельный read, который
+     * приходит после первого состояния PROCESSING и перетирает state в READ_FAILED
+     * (race в Feitian PICC — пока первый read открыл mfc.connect, второй запускает
+     * mfc.connect с тем же tag handle → IOException). Драйвер видит, что на короткий
+     * tap всё работает, а если передержать — READ_FAILED.
+     *
+     * Решение: если новый callback пришёл с тем же UID в течение [DEBOUNCE_MS] —
+     * игнорируем. После [DEBOUNCE_MS] (читать закончили) — пускаем второй read,
+     * потому что пользователь мог переподнести карту.
+     */
+    private val debounceMs = 1500L
+
     fun onTagDiscovered(tag: Tag) {
         try {
             android.util.Log.i("SessionFlowVM", "onTagDiscovered: techList=${tag.techList.joinToString(",")}, uid=${tag.id.joinToString("") { "%02X".format(it) }}")
             ru.asop.terminal.nfc.TonePlayer.tapBeep()
         } catch (_: Exception) { }
+        val now = System.currentTimeMillis()
+        val newUidHex = tag.id.joinToString("") { "%02X".format(it) }
+        val lastUid = _state.value.lastTapUidHex
+        val lastAt = _state.value.lastTapAtMillis
+        val sameUid = lastUid != null && lastUid == newUidHex
+        val tooSoon = lastAt != null && (now - lastAt) < debounceMs
+        if (sameUid && tooSoon) {
+            android.util.Log.d(
+                "SessionFlowVM",
+                "debounce: ignored repeat tag within ${debounceMs}ms (uid=$newUidHex)"
+            )
+            return
+        }
         // Шаг 1: мгновенный UI feedback — пользователь видит, что tap обнаружен.
         _state.update {
             it.copy(
                 cardStep = CardStep.PROCESSING,
-                lastTapUidHex = tag.id.joinToString("") { "%02X".format(it) },
-                lastTapAtMillis = System.currentTimeMillis(),
+                lastTapUidHex = newUidHex,
+                lastTapAtMillis = now,
                 errorMessage = null
             )
         }
