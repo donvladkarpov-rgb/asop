@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import ru.asop.terminal.NfcTagBus
 import ru.asop.terminal.activation.AsopCardType
 import ru.asop.terminal.activation.CardIdentityVcm1
 import ru.asop.terminal.db.SyncPreferences
@@ -141,6 +142,25 @@ class SessionFlowViewModel @Inject constructor(
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
+
+    init {
+        // Feitian F20 fallback: опрос NfcTagBus на случай если ReaderMode binder не
+        // зарегистрирован и единственный путь к карте — через ForegroundDispatch /
+        // onNewIntent в MainActivity.
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(300L)
+                if (state.value.cardStep == CardStep.WAITING_TAP ||
+                    state.value.cardStep == CardStep.IDLE) {
+                    val pending = NfcTagBus.consume()
+                    if (pending != null) {
+                        android.util.Log.i("SessionFlowVM", "NFC bus yielded tag, calling onTagDiscovered")
+                        onTagDiscovered(pending)
+                    }
+                }
+            }
+        }
+    }
 
     fun setKind(kind: FlowKind) {
         _state.update {
@@ -604,23 +624,30 @@ class SessionFlowViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val rows = terminalKeyDao.getActive(limit = 20)
-                val asopKeys = rows.map { entity ->
+                val asopKeys = rows.mapNotNull { entity ->
                     runCatching { terminalKeyCryptor.decrypt(entity.keyMaterialEnc) }
-                        .getOrDefault(ByteArray(0))
-                }.filter { it.size >= 12 }
-                val result = QuickVcm1Reader.readVcm1Identity(tag, asopKeys)
-                if (result == null) {
+                        .getOrNull()
+                }
+                val outcome = QuickVcm1Reader.read(tag, asopKeys)
+                if (outcome == null) {
                     _state.update {
                         it.copy(
                             cardStep = CardStep.NFC_ERROR,
-                            errorMessage = "Не удалось прочитать сектор 1 карты. " +
-                                "Проверьте, что приложили MIFARE Classic 1K/4K карту с ASOP VCM1."
+                            errorMessage = "NFC reader вернул null. Попробуйте ещё раз."
                         )
                     }
                     return@launch
                 }
-                val (uid, vcm1Bytes) = result
-                onCardTappedForAuth(uid, vcm1Bytes)
+                if (outcome.status != QuickVcm1Reader.ReadOutcome.Status.OK) {
+                    _state.update {
+                        it.copy(
+                            cardStep = CardStep.NFC_ERROR,
+                            errorMessage = outcome.details
+                        )
+                    }
+                    return@launch
+                }
+                onCardTappedForAuth(outcome.uidHex, outcome.vcm1Bytes)
             } catch (e: Exception) {
                 _state.update {
                     it.copy(
