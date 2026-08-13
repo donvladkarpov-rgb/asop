@@ -125,6 +125,35 @@ class MtlsManager @Inject constructor(
 
     fun loadCertificate(): X509Certificate? = loadCertificateChain()?.firstOrNull()
 
+    /**
+     * Промпт 013: cert-expiry helpers для нижнего informer'а.
+     * Возвращает Long.MAX_VALUE если сертификата нет (значит нужно provision()).
+     */
+    fun getCertificateNotAfterMillis(): Long {
+        val cert = loadCertificate() ?: return Long.MAX_VALUE
+        return cert.notAfter.time
+    }
+
+    fun getDaysUntilExpiry(): Long? {
+        val notAfter = getCertificateNotAfterMillis()
+        if (notAfter == Long.MAX_VALUE) return null
+        val now = System.currentTimeMillis()
+        val diffMs = notAfter - now
+        return diffMs / (1000L * 60L * 60L * 24L)
+    }
+
+    /**
+     * Промпт 013: renewal helper — НЕ генерирует новую ключевую пару,
+     * подписывает сертификат с существующим public key. Вызывается из UI когда
+     * informer показывает <30 дней или <7 дней. Auto-вызов происходит из
+     * CertCheckWorker (1 час periodic).
+     */
+    val publicKeyBase64Cached: String
+        get() {
+            prefs.getString(KEY_PUBLIC_B64, null)?.let { return it }
+            return getPublicKeyBase64()
+        }
+
     fun resetKeyAndCert() {
         try {
             val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }

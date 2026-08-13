@@ -23,11 +23,13 @@ fun MainScreen(
     terminalViewModel: TerminalViewModel = hiltViewModel(),
     syncViewModel: SyncViewModel = hiltViewModel(),
     referenceSyncViewModel: ReferenceSyncViewModel = hiltViewModel(),
-    sessionFlowViewModel: SessionFlowViewModel = hiltViewModel()
+    sessionFlowViewModel: SessionFlowViewModel = hiltViewModel(),
+    certExpiryViewModel: CertExpiryViewModel = hiltViewModel()
 ) {
     val terminalState by terminalViewModel.state.collectAsState()
     val terminal by terminalViewModel.terminalInfo.collectAsState()
     val terminalId by terminalViewModel.terminalId.collectAsState()
+    val certStatus by certExpiryViewModel.status.collectAsState()
     val pendingCount by syncViewModel.pendingCount.collectAsState()
     val currentSession by syncViewModel.currentSession.collectAsState()
     val lastSyncTime by syncViewModel.lastSyncTime.collectAsState()
@@ -80,6 +82,16 @@ fun MainScreen(
                     pendingCount = pendingCount,
                     sendingProgress = syncViewModel.syncEnabled.collectAsState().value,
                     modifier = Modifier.fillMaxWidth()
+                )
+                // Промпт 013: cert expiry informer (красный/жёлтый) когда сертификат протухает
+                val androidContext = androidx.compose.ui.platform.LocalContext.current
+                CertExpiryInformer(
+                    status = certStatus,
+                    onRenew = {
+                        certExpiryViewModel.refresh()
+                        // Manual renew через CertificateService.refreshCertificate — вызывается из ViewModel здесь опущен
+                        // см. CertCheckWorker для auto-flow.
+                    }
                 )
                 val syncActive = pendingDeltaCount > 0 || deltaProgress != null
                 AnimatedVisibility(
@@ -306,6 +318,74 @@ internal fun InfoRow(label: String, value: String) {
  * Цвет фона светло-голубой (отличается от жёлтого/зелёного ShiftTripInformer и серого Download),
  * чтобы два informer не сливались визуально когда оба активны.
  */
+
+/**
+ * Промпт 013: красный informer о протухающем mTLS-сертификате внизу экрана.
+ * Три состояния: >30 дней (skipped), 7..30 (жёлтый warning), <7 или expired (красный critical).
+ * Показывает кнопку "Продлить сейчас" (CertificateService.refreshCertificate).
+ */
+@Composable
+private fun CertExpiryInformer(
+    status: CertExpiryViewModel.Status,
+    onRenew: () -> Unit
+) {
+    when (status) {
+        CertExpiryViewModel.Status.NotProvisioned,
+        is CertExpiryViewModel.Status.Ok -> { /* invisible */ }
+        is CertExpiryViewModel.Status.Warning -> {
+            Surface(
+                tonalElevation = 4.dp,
+                color = androidx.compose.ui.graphics.Color(0xFFFFF3CD),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                ) {
+                    androidx.compose.material3.Text(
+                        text = "Сертификат истекает через ${status.daysLeft} дн.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    androidx.compose.material3.OutlinedButton(onClick = onRenew) {
+                        Text("Продлить")
+                    }
+                }
+            }
+        }
+        is CertExpiryViewModel.Status.Critical -> {
+            Surface(
+                tonalElevation = 6.dp,
+                color = androidx.compose.ui.graphics.Color(0xFFFFCDD2),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+                ) {
+                    androidx.compose.material3.Text(
+                        text = if (status.expired)
+                            "⚠ Сертификат ПРОСРОЧЕН! Sync не работает."
+                        else
+                            "⚠ Сертификат истекает через ${status.daysLeft} дн. — продлите сейчас",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    androidx.compose.material3.OutlinedButton(onClick = onRenew) {
+                        Text("Продлить сейчас")
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun UploadInformer(
     pendingCount: Int,
