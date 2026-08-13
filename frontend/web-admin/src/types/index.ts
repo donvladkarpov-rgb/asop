@@ -48,6 +48,16 @@ export interface Card {
   status?: 'active' | 'blocked' | 'expired' | 'deleted';
 }
 
+export interface Transaction {
+  transactionId: string;
+  sessionId: string | null;
+  transactionTypeId: string;
+  transactionResultId: string;
+  amount: number;
+  metadata: string | null;
+  startedAt: string;
+}
+
 export interface Session {
   id: string;
   sessionTypeId: string;

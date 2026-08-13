@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import apiClient from '../api/client';
-import type { Session } from '../types';
+import type { Session, Transaction } from '../types';
 
 const SESSION_TYPE_IDS: Record<string, string> = {
   '00000000-0000-0000-0000-000000000601': 'Смена',
@@ -10,35 +10,36 @@ const SESSION_TYPE_IDS: Record<string, string> = {
 };
 
 const getSessions = (terminalId?: string) =>
-  apiClient
-    .get<Session[]>('/sessions', { params: terminalId ? { terminalId } : {} })
-    .then((r) => r.data);
+  apiClient.get<Session[]>('/sessions', { params: terminalId ? { terminalId } : {} }).then((r) => r.data);
 
-const fmt = (ts?: string | null) =>
-  ts ? new Date(ts).toLocaleString('ru-RU') : '—';
+const getTransactions = (sessionId: string) =>
+  apiClient.get<Transaction[]>('/transactions', { params: { sessionId } }).then((r) => r.data);
 
+const fmt = (ts?: string | null) => (ts ? new Date(ts).toLocaleString('ru-RU') : '—');
 const short = (id?: string | null) => (id ? `${id.slice(0, 8)}…` : '—');
-
-const typeLabel = (id?: string) =>
-  id ? SESSION_TYPE_IDS[id] || short(id) : '—';
-
+const typeLabel = (id?: string) => (id ? SESSION_TYPE_IDS[id] || short(id) : '—');
 const statusClass = (status: string) =>
   status === 'IN_PROGRESS' ? 'status-ok' : status === 'CLOSED' ? 'status-dim' : '';
 
 export function SessionsPage() {
   const [terminalId, setTerminalId] = useState('');
-  const { data, isLoading, error } = useQuery({
+  const { data: sessions, isLoading, error } = useQuery({
     queryKey: ['sessions', terminalId || undefined],
     queryFn: () => getSessions(terminalId || undefined),
   });
 
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { data: txs } = useQuery({
+    queryKey: ['tx', expandedId],
+    queryFn: () => getTransactions(expandedId!),
+    enabled: !!expandedId,
+  });
 
   if (isLoading) return <div>Загрузка...</div>;
   if (error) return <div>Ошибка: {(error as Error).message}</div>;
 
-  const shifts = data?.filter((s) => s.sessionTypeId?.endsWith('601')) ?? [];
-  const trips = data?.filter((s) => s.sessionTypeId?.endsWith('603')) ?? [];
+  const shifts = sessions?.filter((s) => s.sessionTypeId?.endsWith('601')) ?? [];
+  const trips = sessions?.filter((s) => s.sessionTypeId?.endsWith('603')) ?? [];
 
   return (
     <div>
@@ -46,12 +47,7 @@ export function SessionsPage() {
         <h1>Смены и рейсы</h1>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           Фильтр по терминалу:
-          <input
-            value={terminalId}
-            onChange={(e) => setTerminalId(e.target.value)}
-            placeholder="UUID терминала"
-            style={{ minWidth: 240 }}
-          />
+          <input value={terminalId} onChange={(e) => setTerminalId(e.target.value)} placeholder="UUID терминала" style={{ minWidth: 240 }} />
         </label>
       </div>
 
@@ -67,6 +63,7 @@ export function SessionsPage() {
             <th>Путь</th>
             <th>Открыта</th>
             <th>Закрыта</th>
+            <th>Валидации</th>
             <th></th>
           </tr>
         </thead>
@@ -85,6 +82,7 @@ export function SessionsPage() {
                   <td>—</td>
                   <td>{fmt(s.startedAt)}</td>
                   <td>{fmt(s.closedAt)}</td>
+                  <td>—</td>
                   <td>
                     {childTrips.length > 0 && (
                       <button onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}>
@@ -93,9 +91,9 @@ export function SessionsPage() {
                     )}
                   </td>
                 </tr>
-                {expandedId === s.id &&
-                  childTrips.map((t) => (
-                    <tr key={t.id} className="child-row" style={{ background: '#f8f9fa' }}>
+                {expandedId === s.id && childTrips.map((t) => (
+                  <Fragment key={t.id}>
+                    <tr className="child-row" style={{ background: '#f8f9fa' }}>
                       <td>— {typeLabel(t.sessionTypeId)}</td>
                       <td>{t.status === 'IN_PROGRESS' ? 'Активен' : 'Закрыт'}</td>
                       <td title={t.id}>{short(t.id)}</td>
@@ -105,25 +103,52 @@ export function SessionsPage() {
                       <td title={t.pathId ?? undefined}>{short(t.pathId)}</td>
                       <td>{fmt(t.startedAt)}</td>
                       <td>{fmt(t.closedAt)}</td>
+                      <td>{txs?.length ?? '…'}</td>
                       <td></td>
                     </tr>
-                  ))}
+                    {txs && txs.length > 0 && (
+                      <tr className="child-row">
+                        <td colSpan={11} style={{ padding: '4px 24px' }}>
+                          <details open>
+                            <summary style={{ cursor: 'pointer' }}>Валидации: {txs.length}</summary>
+                            <table style={{ width: '100%', marginTop: 4, fontSize: '0.85em' }}>
+                              <thead>
+                                <tr>
+                                  <th>ID</th>
+                                  <th>Сумма</th>
+                                  <th>Валюта</th>
+                                  <th>Статус</th>
+                                  <th>Время</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {txs.map((tx) => (
+                                  <tr key={tx.transactionId}>
+                                    <td>{short(tx.transactionId)}</td>
+                                    <td>{tx.amount}</td>
+                                    <td>RUB</td>
+                                    <td>{tx.metadata || '—'}</td>
+                                    <td>{fmt(tx.startedAt)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </details>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
                 {expandedId === s.id && childTrips.length === 0 && (
                   <tr key={`${s.id}-notrips`} className="child-row">
-                    <td colSpan={10} style={{ textAlign: 'center', color: '#888' }}>
-                      Нет рейсов в этой смене
-                    </td>
+                    <td colSpan={11} style={{ textAlign: 'center', color: '#888' }}>Нет рейсов в этой смене</td>
                   </tr>
                 )}
               </>
             );
           })}
           {shifts.length === 0 && (
-            <tr>
-              <td colSpan={10} style={{ textAlign: 'center' }}>
-                Смен нет
-              </td>
-            </tr>
+            <tr><td colSpan={11} style={{ textAlign: 'center' }}>Смен нет</td></tr>
           )}
         </tbody>
       </table>
