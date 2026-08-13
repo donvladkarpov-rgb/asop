@@ -92,27 +92,13 @@ export function Sidebar() {
       <div className="sidebar-header">
         <h2>ASOP Admin</h2>
       </div>
-      <nav className="sidebar-nav sidebar-nav-main">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            className={({ isActive }) =>
-              cn('nav-link', isActive && 'active')
-            }
-          >
-            <span className="nav-icon">{item.icon}</span>
-            <span className="nav-label">{item.label}</span>
-          </NavLink>
-        ))}
-      </nav>
-      <CollapsibleSection label="Пользователи и Безопасность">
-        <nav className="sidebar-nav">
-          {securityItems.map((item) => (
+      <div className="sidebar-scroll">
+        <nav className="sidebar-nav sidebar-nav-main">
+          {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.to === '/'}
               className={({ isActive }) =>
                 cn('nav-link', isActive && 'active')
               }
@@ -122,103 +108,119 @@ export function Sidebar() {
             </NavLink>
           ))}
         </nav>
-      </CollapsibleSection>
-      <CollapsibleSection label="Контрагенты">
-        <nav className="sidebar-nav">
-          {contractorItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn('nav-link', isActive && 'active')
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
-      <CollapsibleSection label="Регионы и территории">
-        <nav className="sidebar-nav">
-          {regionItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn('nav-link', isActive && 'active')
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
-      <CollapsibleSection label="Справочники">
-        <nav className="sidebar-nav">
-          {refItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn('nav-link', isActive && 'active')
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
-      <CollapsibleSection label="Транспорт">
-        <nav className="sidebar-nav">
-          {transportItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn('nav-link', isActive && 'active')
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
-      <CollapsibleSection label="Маршруты и Пути">
-        <nav className="sidebar-nav">
-          {routeItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn('nav-link', isActive && 'active')
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
-      <CollapsibleSection label="Ключи и параметры">
-        <nav className="sidebar-nav">
-          {keyItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn('nav-link', isActive && 'active')
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span className="nav-label">{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
+        <CollapsibleSection label="Пользователи и Безопасность">
+          <nav className="sidebar-nav">
+            {securityItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Контрагенты">
+          <nav className="sidebar-nav">
+            {contractorItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Регионы и территории">
+          <nav className="sidebar-nav">
+            {regionItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Справочники">
+          <nav className="sidebar-nav">
+            {refItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Транспорт">
+          <nav className="sidebar-nav">
+            {transportItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Маршруты и Пути">
+          <nav className="sidebar-nav">
+            {routeItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Ключи и параметры">
+          <nav className="sidebar-nav">
+            {keyItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+      </div>
       <div className="sidebar-footer">
         {bottomItems.map((item) => (
           <NavLink

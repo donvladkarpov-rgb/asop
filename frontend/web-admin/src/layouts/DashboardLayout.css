@@ -1,15 +1,24 @@
 .dashboard-layout {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
   width: 240px;
+  height: 100vh;
   background: #1a1a2e;
   color: #fff;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sidebar-header {
@@ -28,7 +37,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  flex: 1;
 }
 
 .sidebar-nav-main {
@@ -122,18 +130,32 @@
 
 .main-content {
   flex: 1;
+  height: 100vh;
   padding: 24px;
   background: #f5f5f9;
   overflow-y: auto;
+  min-width: 0;
 }
 
 .filter-sidebar {
   width: 260px;
+  height: 100vh;
   background: #fff;
   border-left: 1px solid #e0e0ea;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.filter-sidebar-body {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
 }
 
 .filter-sidebar-header {
@@ -146,13 +168,6 @@
   font-size: 14px;
   font-weight: 600;
   color: #333;
-}
-
-.filter-sidebar-body {
-  padding: 16px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
 }
 
 .filter-label {
