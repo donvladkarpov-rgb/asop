@@ -22,10 +22,13 @@ class FiscalCommandConsumer(
     @KafkaListener(topics = ["\${asop.kafka.topics.fiscal-commands}"])
     fun handleCommand(
         json: String,
-        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
+        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?,
+        @Header(name = "X-Terminal-Seq", required = false) terminalSeqHeader: ByteArray?
     ) {
-        log.debug("Received fiscal command: {}", json)
+        log.debug("Received fiscal command: {}", json.take(200))
         val eventId = parseEventId(eventIdHeader, json)
+        val seq = parseSeq(terminalSeqHeader)
+        log.debug("Fiscal receipt event seq={}", seq)
 
         try {
             val node = objectMapper.readTree(json)
@@ -57,16 +60,24 @@ class FiscalCommandConsumer(
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {
         val json = objectMapper.writeValueAsString(data)
         val result = CommandResult(eventId = eventId, status = "COMPLETED", resultData = json)
-        val record = ProducerRecord(KafkaTopic.FISCAL_EVENTS, eventId.toString(), result as Any)
-        record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-        kafkaTemplate.send(record).subscribe()
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
+    }
+
+    private fun publishPending(eventId: UUID, data: Map<String, String>) {
+        val json = objectMapper.writeValueAsString(data)
+        val result = CommandResult(eventId = eventId, status = "PENDING_WATERMARK", resultData = json)
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
     }
 
     private fun publishFailed(eventId: UUID, errorMessage: String) {
         val result = CommandResult(eventId = eventId, status = "FAILED", errorMessage = errorMessage)
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
+    }
+
+    private fun buildResultRecord(eventId: UUID, result: CommandResult): ProducerRecord<String, Any> {
         val record = ProducerRecord(KafkaTopic.FISCAL_EVENTS, eventId.toString(), result as Any)
         record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-        kafkaTemplate.send(record).subscribe()
+        return record
     }
 
     private fun parseEventId(header: ByteArray?, json: String): UUID {
@@ -77,7 +88,12 @@ class FiscalCommandConsumer(
         if (fromPayload != null) {
             try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
         }
-        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        log.error("No valid eventId in header or payload, generating random")
         return UUID.randomUUID()
+    }
+
+    private fun parseSeq(header: ByteArray?): Long {
+        if (header == null) return 0L
+        return try { String(header).toLong() } catch (_: NumberFormatException) { 0L }
     }
 }

@@ -8,7 +8,10 @@ import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
+import reactor.core.publisher.Mono
 import ru.asop.common.kafka.KafkaTopic
+import ru.asop.common.watermark.WatermarkProcessor
+import ru.asop.common.watermark.impl.WatermarkProcessorImpl
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.audit.AuditTaskCreatedEvent
 import java.time.Instant
@@ -21,14 +24,18 @@ class AuditCommandConsumer(
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val watermark: WatermarkProcessor = WatermarkProcessorImpl(db, objectMapper)
 
     @KafkaListener(topics = ["\${asop.kafka.topics.audit-commands}"])
     fun handleCommand(
         json: String,
-        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
+        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?,
+        @Header(name = "X-Terminal-Seq", required = false) terminalSeqHeader: ByteArray?
     ) {
-        log.debug("Received audit command: {}", json)
+        log.debug("Received audit command: {}", json.take(200))
         val eventId = parseEventId(eventIdHeader, json)
+        val seq = parseSeq(terminalSeqHeader)
+        val terminalId = parseTerminalId(json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -37,7 +44,7 @@ class AuditCommandConsumer(
             when (eventType) {
                 "AuditTaskCreated" -> {
                     val event = objectMapper.treeToValue(node, AuditTaskCreatedEvent::class.java)
-                    handleAuditTaskCreated(event, eventId)
+                    handleAuditTaskCreated(event, eventId, terminalId, seq, json)
                 }
                 else -> log.warn("Unknown audit event type: {}", eventType)
             }
@@ -47,21 +54,21 @@ class AuditCommandConsumer(
         }
     }
 
-    private fun handleAuditTaskCreated(event: AuditTaskCreatedEvent, eventId: UUID) {
-        log.info("Processing AuditTaskCreatedEvent: taskId={}", event.taskId)
+    private fun handleAuditTaskCreated(event: AuditTaskCreatedEvent, eventId: UUID, terminalId: UUID?, seq: Long, rawJson: String) {
+        log.info("Processing AuditTaskCreatedEvent: taskId={} seq={}", event.taskId, seq)
 
         val taskId = event.taskId ?: UUID.randomUUID()
         val issuerType = if (event.organizerId != null) "ORGANIZER" else "CARRIER"
         val now = Instant.now()
 
-        val sql = """INSERT INTO ASOP_AUDIT_TASKS 
-            (TASK_ID, TASK_NUMBER, ISSUER_TYPE, ORGANIZER_ID, CARRIER_ID, 
-             ASSIGNED_AUDIT_SERVICE_ID, TASK_START_DATE, STATUS, DESCRIPTION, CREATED_AT, UPDATED_AT) 
-            VALUES (:taskId, :taskNumber, :issuerType, :organizerId, :carrierId, 
-                    (SELECT AUDIT_SERVICE_ID FROM ASOP_AUDIT_SERVICES 
-                     WHERE (:issuerType = 'CARRIER' AND CARRIER_ID = :carrierId) 
-                        OR (:issuerType = 'ORGANIZER' AND ORGANIZER_ID = :organizerId) 
-                     LIMIT 1), 
+        val sql = """INSERT INTO ASOP_AUDIT_TASKS
+            (TASK_ID, TASK_NUMBER, ISSUER_TYPE, ORGANIZER_ID, CARRIER_ID,
+             ASSIGNED_AUDIT_SERVICE_ID, TASK_START_DATE, STATUS, DESCRIPTION, CREATED_AT, UPDATED_AT)
+            VALUES (:taskId, :taskNumber, :issuerType, :organizerId, :carrierId,
+                    (SELECT AUDIT_SERVICE_ID FROM ASOP_AUDIT_SERVICES
+                     WHERE (:issuerType = 'CARRIER' AND CARRIER_ID = :carrierId)
+                        OR (:issuerType = 'ORGANIZER' AND ORGANIZER_ID = :organizerId)
+                     LIMIT 1),
                     :taskStartDate, 'DRAFT', :description, :createdAt, :updatedAt)"""
 
         var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
@@ -83,31 +90,54 @@ class AuditCommandConsumer(
         spec = if (carrierId != null) spec.bind("carrierId", carrierId)
         else spec.bindNull("carrierId", UUID::class.java)
 
-        spec.fetch().rowsUpdated()
-            .doOnSuccess {
-                log.info("Audit task saved: {}", taskId)
-                publishComplete(eventId, mapOf("taskId" to taskId.toString(), "status" to "DRAFT"))
-            }
-            .doOnError { e ->
-                log.error("Failed to save audit task: {}", e.message, e)
-                publishFailed(eventId, e.message ?: "Save error")
-            }
-            .subscribe()
+        val applyMono: Mono<Void> = spec.fetch().rowsUpdated().then()
+
+        if (terminalId == null) {
+            applyMono
+                .doOnSuccess { publishComplete(eventId, mapOf("taskId" to taskId.toString(), "status" to "DRAFT")) }
+                .doOnError { e -> publishFailed(eventId, e.message ?: "Save error") }
+                .subscribe()
+        } else {
+            val tid = terminalId
+            watermark.applyInOrder(tid, seq, "AuditTaskCreated", rawJson, emptyMap(), applyMono)
+                .doOnSuccess { result ->
+                    when (result) {
+                        WatermarkProcessor.ApplyResult.APPLIED, WatermarkProcessor.ApplyResult.ALREADY_APPLIED -> {
+                            log.info("Audit task saved [seq={}]: {}", seq, taskId)
+                            publishComplete(eventId, mapOf("taskId" to taskId.toString(), "status" to "DRAFT"))
+                        }
+                        WatermarkProcessor.ApplyResult.DEFERRED -> {
+                            log.info("Audit task deferred [seq={}]: {}", seq, taskId)
+                            publishPending(eventId, mapOf("taskId" to taskId.toString(), "seq" to seq.toString()))
+                        }
+                    }
+                }
+                .doOnError { e -> publishFailed(eventId, e.message ?: "Save error") }
+                .subscribe()
+        }
     }
 
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {
         val json = objectMapper.writeValueAsString(data)
         val result = CommandResult(eventId = eventId, status = "COMPLETED", resultData = json)
-        val record = ProducerRecord(KafkaTopic.AUDIT_EVENTS, eventId.toString(), result as Any)
-        record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-        kafkaTemplate.send(record).subscribe()
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
+    }
+
+    private fun publishPending(eventId: UUID, data: Map<String, String>) {
+        val json = objectMapper.writeValueAsString(data)
+        val result = CommandResult(eventId = eventId, status = "PENDING_WATERMARK", resultData = json)
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
     }
 
     private fun publishFailed(eventId: UUID, errorMessage: String) {
         val result = CommandResult(eventId = eventId, status = "FAILED", errorMessage = errorMessage)
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
+    }
+
+    private fun buildResultRecord(eventId: UUID, result: CommandResult): ProducerRecord<String, Any> {
         val record = ProducerRecord(KafkaTopic.AUDIT_EVENTS, eventId.toString(), result as Any)
         record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-        kafkaTemplate.send(record).subscribe()
+        return record
     }
 
     private fun parseEventId(header: ByteArray?, json: String): UUID {
@@ -118,7 +148,18 @@ class AuditCommandConsumer(
         if (fromPayload != null) {
             try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
         }
-        log.error("No valid eventId in header or payload, generating random (correlation will break)")
+        log.error("No valid eventId in header or payload, generating random")
         return UUID.randomUUID()
     }
+
+    private fun parseSeq(header: ByteArray?): Long {
+        if (header == null) return 0L
+        return try { String(header).toLong() } catch (_: NumberFormatException) { 0L }
+    }
+
+    private fun parseTerminalId(json: String): UUID? = try {
+        val node = objectMapper.readTree(json)
+        val s = node.get("terminalId")?.asText() ?: return null
+        UUID.fromString(s)
+    } catch (_: Exception) { null }
 }

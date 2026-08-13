@@ -2206,5 +2206,30 @@ CREATE TRIGGER trg_delta_version_asop_audit_services BEFORE INSERT OR UPDATE ON 
 
 
 -- ============================================================
+-- Промпт 012: Terminal Event Watermark (per-terminal ordering)
+-- ============================================================
+CREATE TABLE ASOP_TERMINAL_EVENT_WATERMARK (
+    TERMINAL_ID UUID PRIMARY KEY REFERENCES ASOP_TERMINALS(TERMINAL_ID),
+    LAST_SEQ BIGINT NOT NULL DEFAULT 0,
+    UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ASOP_TERMINAL_PENDING_SEQ (
+    TERMINAL_ID UUID NOT NULL REFERENCES ASOP_TERMINALS(TERMINAL_ID),
+    SEQ BIGINT NOT NULL,
+    EVENT_TYPE VARCHAR(50) NOT NULL,
+    PAYLOAD TEXT NOT NULL,
+    HEADERS_JSON TEXT,
+    RECEIVED_AT TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ACKS_PUBLISHED_AT TIMESTAMPTZ,
+    PRIMARY KEY (TERMINAL_ID, SEQ)
+);
+
+CREATE INDEX idx_pending_seq_terminal_seq ON ASOP_TERMINAL_PENDING_SEQ (TERMINAL_ID, SEQ);
+CREATE INDEX idx_pending_seq_acks_pending ON ASOP_TERMINAL_PENDING_SEQ (ACKS_PUBLISHED_AT)
+    WHERE ACKS_PUBLISHED_AT IS NULL;
+
+
+-- ============================================================
 -- ГОТОВО! Все UUID — v7 (Time-Ordered), генерируются на уровне приложения.
 -- ============================================================

@@ -8,14 +8,22 @@ import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Component
+import reactor.core.publisher.Mono
 import ru.asop.card.repository.CardRepository
 import ru.asop.common.kafka.KafkaTopic
+import ru.asop.common.watermark.WatermarkProcessor
+import ru.asop.common.watermark.impl.WatermarkProcessorImpl
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.card.CardBlockedEvent
 import ru.asop.kafka.events.card.CardRegisteredEvent
 import java.time.Instant
 import java.util.UUID
 
+/**
+ * Промпт 012: [CardCommandConsumer] — CARD_REGISTER + CARD_BLOCK через watermark.
+ * CARD_REGISTER особенно важен — это базовая зависимость для SESSION_OPEN, так что
+ * seq=карты должен прийти раньше seq=открытия смены.
+ */
 @Component
 class CardCommandConsumer(
     private val cardRepository: CardRepository,
@@ -24,14 +32,18 @@ class CardCommandConsumer(
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
+    private val watermark: WatermarkProcessor = WatermarkProcessorImpl(db, objectMapper)
 
     @KafkaListener(topics = ["\${asop.kafka.topics.card-commands}"])
     fun handleCommand(
         json: String,
-        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
+        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?,
+        @Header(name = "X-Terminal-Seq", required = false) terminalSeqHeader: ByteArray?
     ) {
-        log.debug("Received card command: {}", json)
+        log.debug("Received card command: {}", json.take(200))
         val eventId = parseEventId(eventIdHeader, json)
+        val seq = parseSeq(terminalSeqHeader)
+        val terminalId = parseTerminalId(json)
 
         try {
             val node = objectMapper.readTree(json)
@@ -40,11 +52,11 @@ class CardCommandConsumer(
             when (eventType) {
                 "CardRegistered" -> {
                     val event = objectMapper.treeToValue(node, CardRegisteredEvent::class.java)
-                    handleCardRegistered(event, eventId)
+                    handleCardRegistered(event, eventId, terminalId, seq, json)
                 }
                 "CardBlocked" -> {
                     val event = objectMapper.treeToValue(node, CardBlockedEvent::class.java)
-                    handleCardBlocked(event, eventId)
+                    handleCardBlocked(event, eventId, terminalId, seq, json)
                 }
                 else -> log.warn("Unknown card event type: {}", eventType)
             }
@@ -54,11 +66,11 @@ class CardCommandConsumer(
         }
     }
 
-    private fun handleCardRegistered(event: CardRegisteredEvent, eventId: UUID) {
-        log.info("Processing CardRegisteredEvent: cardId={}", event.cardId)
+    private fun handleCardRegistered(event: CardRegisteredEvent, eventId: UUID, terminalId: UUID?, seq: Long, rawJson: String) {
+        log.info("Processing CardRegisteredEvent: cardId={} seq={}", event.cardId, seq)
 
-        val sql = """INSERT INTO ASOP_CARDS 
-            (CARD_ID, CARD_TYPE_ID, USER_ID, IS_PRIMARY, REGISTERED_AT, CREATED_AT, UPDATED_AT) 
+        val sql = """INSERT INTO ASOP_CARDS
+            (CARD_ID, CARD_TYPE_ID, USER_ID, IS_PRIMARY, REGISTERED_AT, CREATED_AT, UPDATED_AT)
             VALUES (:cardId, :cardTypeId, :userId, :isPrimary, :registeredAt, :createdAt, :updatedAt)"""
 
         val now = Instant.now()
@@ -73,37 +85,61 @@ class CardCommandConsumer(
         spec = if (ownerUserId != null) spec.bind("userId", ownerUserId)
         else spec.bindNull("userId", UUID::class.java)
 
-        spec.fetch().rowsUpdated()
-            .doOnSuccess {
-                log.info("Card saved: {}", event.cardId)
-                publishComplete(eventId, mapOf("cardId" to event.cardId.toString()))
-            }
-            .doOnError { e ->
-                log.error("Failed to save card: {}", e.message, e)
-                publishFailed(eventId, e.message ?: "Save error")
-            }
-            .subscribe()
+        val applyMono: Mono<Void> = spec.fetch().rowsUpdated().then()
+
+        if (terminalId == null) {
+            applyMono
+                .doOnSuccess { publishComplete(eventId, mapOf("cardId" to event.cardId.toString())) }
+                .doOnError { e -> publishFailed(eventId, e.message ?: "Save error") }
+                .subscribe()
+        } else {
+            val tid = terminalId
+            watermark.applyInOrder(tid, seq, "CardRegistered", rawJson, emptyMap(), applyMono)
+                .doOnSuccess { result ->
+                    when (result) {
+                        WatermarkProcessor.ApplyResult.APPLIED, WatermarkProcessor.ApplyResult.ALREADY_APPLIED -> {
+                            log.info("Card saved [seq={}]: {}", seq, event.cardId)
+                            publishComplete(eventId, mapOf("cardId" to event.cardId.toString()))
+                        }
+                        WatermarkProcessor.ApplyResult.DEFERRED -> {
+                            log.info("Card register deferred [seq={}]: {}", seq, event.cardId)
+                            publishPending(eventId, mapOf("cardId" to event.cardId.toString(), "seq" to seq.toString()))
+                        }
+                    }
+                }
+                .doOnError { e -> publishFailed(eventId, e.message ?: "Save error") }
+                .subscribe()
+        }
     }
 
-    private fun handleCardBlocked(event: CardBlockedEvent, eventId: UUID) {
-        log.info("Processing CardBlockedEvent: cardId={}, blockType={}", event.cardId, event.blockType)
-        publishFailed(eventId, "Card block not implemented: ASOP_CARDS has no STATUS/IS_BLOCKED column. " +
-            "Implement ASOP_CARD_BLOCKS table or add STATUS column to ASOP_CARDS.")
+    /** CARD_BLOCK пока не имеет backend-table для block-state — отправляем диагностический ACK. */
+    private fun handleCardBlocked(event: CardBlockedEvent, eventId: UUID, terminalId: UUID?, seq: Long, rawJson: String) {
+        log.info("Processing CardBlockedEvent: cardId={} seq={}", event.cardId, seq)
+        // TODO: when ASOP_CARD_BLOCKS implemented.
+        publishFailed(eventId, "Card block not implemented: ASOP_CARDS has no STATUS/IS_BLOCKED column yet.")
     }
 
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {
         val json = objectMapper.writeValueAsString(data)
         val result = CommandResult(eventId = eventId, status = "COMPLETED", resultData = json)
-        val record = ProducerRecord(KafkaTopic.CARD_EVENTS, eventId.toString(), result as Any)
-        record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-        kafkaTemplate.send(record).subscribe()
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
+    }
+
+    private fun publishPending(eventId: UUID, data: Map<String, String>) {
+        val json = objectMapper.writeValueAsString(data)
+        val result = CommandResult(eventId = eventId, status = "PENDING_WATERMARK", resultData = json)
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
     }
 
     private fun publishFailed(eventId: UUID, errorMessage: String) {
         val result = CommandResult(eventId = eventId, status = "FAILED", errorMessage = errorMessage)
+        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
+    }
+
+    private fun buildResultRecord(eventId: UUID, result: CommandResult): ProducerRecord<String, Any> {
         val record = ProducerRecord(KafkaTopic.CARD_EVENTS, eventId.toString(), result as Any)
         record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-        kafkaTemplate.send(record).subscribe()
+        return record
     }
 
     private fun parseEventId(header: ByteArray?, json: String): UUID {
@@ -117,4 +153,15 @@ class CardCommandConsumer(
         log.error("No valid eventId in header or payload, generating random (correlation will break)")
         return UUID.randomUUID()
     }
+
+    private fun parseSeq(header: ByteArray?): Long {
+        if (header == null) return 0L
+        return try { String(header).toLong() } catch (_: NumberFormatException) { 0L }
+    }
+
+    private fun parseTerminalId(json: String): UUID? = try {
+        val node = objectMapper.readTree(json)
+        val s = node.get("terminalId")?.asText() ?: return null
+        UUID.fromString(s)
+    } catch (_: Exception) { null }
 }

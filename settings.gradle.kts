@@ -11,7 +11,8 @@ include(
     ":backend:shared:asop-common",
     ":backend:shared:asop-dto",
     ":backend:shared:asop-kafka-contracts",
-    ":backend:shared:asop-proto"
+    ":backend:shared:asop-proto",
+    ":backend:shared:watermark-processor"
 )
 
 // ============ Shared API modules ============
