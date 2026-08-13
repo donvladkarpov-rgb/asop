@@ -26,6 +26,7 @@ import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.network.SyncApi
+import ru.asop.terminal.network.SeqHeaderHolder
 import ru.asop.terminal.network.models.GpsPositionReport
 import ru.asop.terminal.worker.EventTypes
 import ru.asop.terminal.worker.WorkScheduler
@@ -140,11 +141,14 @@ class GpsTrackingService : android.app.Service() {
         val event = PendingEventEntity(
             topic = "asop.gps.commands",
             payload = payload,
-            eventType = EventTypes.GPS_POSITION
+            eventType = EventTypes.GPS_POSITION,
+            seq = syncPreferences.nextSeqSync()
         )
         serviceScope.launch {
             try {
+                SeqHeaderHolder.setSeq(event.seq)
                 val response = syncApi.reportGpsPosition(report)
+                SeqHeaderHolder.clear()
                 if (response.isSuccessful) {
                     Log.d(TAG, "GPS position sent online")
                     return@launch

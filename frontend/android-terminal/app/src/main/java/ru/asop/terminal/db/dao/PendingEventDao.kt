@@ -13,11 +13,24 @@ interface PendingEventDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(event: PendingEventEntity)
 
-    @Query("SELECT * FROM pending_events WHERE status = 'PENDING' ORDER BY created_at ASC")
+    /**
+     * Промпт 012: SyncWorker читает pending events в порядке seq ASC (НЕ created_at ASC)
+     * чтобы серверный watermark применял их per гарантии порядка.
+     */
+    @Query("SELECT * FROM pending_events WHERE status = 'PENDING' ORDER BY seq ASC, created_at ASC")
     suspend fun getPending(): List<PendingEventEntity>
 
-    @Query("SELECT * FROM pending_events WHERE status = 'PENDING' ORDER BY created_at ASC")
+    @Query("SELECT * FROM pending_events WHERE status = 'PENDING' ORDER BY seq ASC, created_at ASC")
     fun observePending(): Flow<List<PendingEventEntity>>
+
+    @Query("SELECT COUNT(*) FROM pending_events WHERE status = 'PENDING' AND seq > 0")
+    suspend fun countPending(): Int
+
+    @Query("SELECT MAX(seq) FROM pending_events")
+    suspend fun maxSeq(): Long?
+
+    @Query("SELECT MIN(seq) FROM pending_events WHERE status = 'PENDING'")
+    suspend fun minPendingSeq(): Long?
 
     @Query("UPDATE pending_events SET status = :status, sent_at = :sentAt, error_message = NULL WHERE id = :id")
     suspend fun markSent(id: String, sentAt: Long = System.currentTimeMillis(), status: String = PendingEventEntity.STATUS_SENT)
@@ -31,14 +44,11 @@ interface PendingEventDao {
     @Query("UPDATE pending_events SET retry_count = retry_count + 1 WHERE id = :id")
     suspend fun incrementPollRetry(id: String)
 
-    @Query("SELECT * FROM pending_events WHERE status = 'SENDING' ORDER BY created_at ASC")
+    @Query("SELECT * FROM pending_events WHERE status = 'SENDING' ORDER BY seq ASC")
     suspend fun getSending(): List<PendingEventEntity>
 
-    @Query("SELECT * FROM pending_events WHERE status = 'SENDING' ORDER BY created_at ASC")
+    @Query("SELECT * FROM pending_events WHERE status = 'SENDING' ORDER BY seq ASC")
     fun observeSending(): Flow<List<PendingEventEntity>>
-
-    @Query("SELECT COUNT(*) FROM pending_events WHERE status = 'PENDING'")
-    suspend fun getPendingCount(): Int
 
     @Query("SELECT COUNT(*) FROM pending_events WHERE status = 'PENDING'")
     fun observePendingCount(): Flow<Int>

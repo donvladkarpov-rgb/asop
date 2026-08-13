@@ -14,6 +14,7 @@ import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.entity.PendingEventEntity
+import ru.asop.terminal.network.SeqHeaderHolder
 import ru.asop.terminal.network.SyncApi
 import ru.asop.terminal.network.models.*
 
@@ -57,6 +58,8 @@ class SyncWorker @AssistedInject constructor(
     }
 
     private suspend fun sendEvent(event: PendingEventEntity): String {
+        SeqHeaderHolder.setSeq(event.seq)
+
         val payload = event.payload
         val pathId = event.pathParam
         val carrierId = syncPreferences.carrierId.first()
@@ -151,7 +154,8 @@ class SyncWorker @AssistedInject constructor(
             }
             else -> throw IllegalArgumentException("Unknown event type: ${event.eventType}")
         }
-    }
+    
+        SeqHeaderHolder.clear()}
 
     private inline fun <reified T> deserialize(json: String): T {
         val adapter = moshi.adapter(T::class.java)

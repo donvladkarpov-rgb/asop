@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.syncDataStore by preferencesDataStore(name = "sync_preferences")
@@ -29,6 +30,16 @@ class SyncPreferences(private val context: Context) {
         private val KEY_LAST_CARD_UID = stringPreferencesKey("last_card_uid")
         private val KEY_LAST_CARD_ID = stringPreferencesKey("last_card_id")
         private val KEY_LAST_CARD_TAP_TIME = longPreferencesKey("last_card_tap_time")
+
+        // Промпт 012: per-terminal event seq watermark.
+        // KEY_NEXT_EVENT_SEQ — следующий seq для инкрементного назначения при INSERT в pending_events.
+        // KEY_LAST_EVENT_SEQ  — локально последний назначенный seq (для информации/диагностики).
+        // KEY_WATERMARK_FROM_SERVER — server lastSeq запрошенный через GET /api/v1/terminals/{id}/event-watermark.
+        //                                Используется для catch-up: если server's lastSeq > локальный nextSeq,
+        //                                то терминал пересинхронизирует (re-send pending events).
+        private val KEY_NEXT_EVENT_SEQ = longPreferencesKey("next_event_seq")
+        private val KEY_LAST_EVENT_SEQ = longPreferencesKey("last_event_seq")
+        private val KEY_WATERMARK_FROM_SERVER = longPreferencesKey("watermark_from_server")
     }
 
     val lastSyncTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
@@ -154,6 +165,88 @@ class SyncPreferences(private val context: Context) {
     suspend fun setServerPublicKey(pem: String) {
         context.syncDataStore.edit { prefs ->
             prefs[KEY_SERVER_PUBLIC_KEY] = pem
+        }
+    }
+
+    // ===========================================
+    // Промпт 012: per-terminal event seq watermark
+    // ===========================================
+
+    /**
+     * Читает текущий nextSeq, инкрементирует и сохраняет. Каждое сообщение получает
+     * уникальный монотонный seq — watermark на сервере гарантирует порядок применения.
+     *
+     * Если сервер ещё не синхронизирован с терминалом, возвращаемое значение начинается
+     * с (max(server_lastSeq, текущий_nextSeq) + 1) — никогда не возвращаем seq меньше
+     * уже подтверждённого сервером.
+     */
+    suspend fun nextSeq(): Long {
+        var nextValue: Long = 1L
+        context.syncDataStore.edit { prefs ->
+            val current = prefs[KEY_NEXT_EVENT_SEQ] ?: 0L
+            val serverWatermark = prefs[KEY_WATERMARK_FROM_SERVER] ?: 0L
+            // Монотонный: max(server.known.lastSeq, local.next) + 1.
+            val baseline = maxOf(current, serverWatermark + 1L)
+            // Не возвращать <= last_event_seq (гарантия монотонности).
+            val lastSent = prefs[KEY_LAST_EVENT_SEQ] ?: 0L
+            val finalSeq = maxOf(baseline, lastSent + 1L)
+            prefs[KEY_NEXT_EVENT_SEQ] = finalSeq
+            prefs[KEY_LAST_EVENT_SEQ] = finalSeq
+            nextValue = finalSeq
+        }
+        return nextValue
+    }
+
+    /**
+     * Sync-версия nextSeq для вызова из non-suspend контекстов (e.g. Service.onLocationChanged).
+     * Использует synchronized counter in-memory + DataStore commit при lifecycle events.
+     */
+    @Volatile private var cachedNextSeq: Long = -1L
+    @Synchronized
+    fun nextSeqSync(): Long {
+        if (cachedNextSeq <= 0L) {
+            // Lazy load from DataStore via runBlocking
+            val initial = kotlinx.coroutines.runBlocking {
+                var v = 0L
+                context.syncDataStore.edit { prefs ->
+                    val current = prefs[KEY_NEXT_EVENT_SEQ] ?: 0L
+                    val serverWatermark = prefs[KEY_WATERMARK_FROM_SERVER] ?: 0L
+                    v = maxOf(current, serverWatermark + 1L)
+                    prefs[KEY_NEXT_EVENT_SEQ] = v
+                }
+                v
+            }
+            cachedNextSeq = initial
+        }
+        val next = cachedNextSeq
+        cachedNextSeq = next + 1L
+        return next
+    }
+
+    val lastSeq: Flow<Long?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_LAST_EVENT_SEQ]
+    }
+
+    val watermarkFromServer: Flow<Long?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_WATERMARK_FROM_SERVER]
+    }
+
+    /**
+     * Вызывается [WatermarkSyncWorker] после получения ответа от
+     * `GET /api/v1/terminals/{id}/event-watermark`. Устанавливает baseline из
+     * которого `nextSeq()` будет инкрементировать от `serverLastSeq + 1`,
+     * гарантируя что терминал никогда не назначит seq меньше того, что сервер
+     * уже обработал.
+     */
+    suspend fun setServerWatermark(serverLastSeq: Long) {
+        context.syncDataStore.edit { prefs ->
+            prefs[KEY_WATERMARK_FROM_SERVER] = serverLastSeq
+            // Если локальный nextSeq оказался меньше server's lastSeq+1,
+            // сбросить — иначе при следующем nextSeq() упадёт в baseline.
+            val current = prefs[KEY_NEXT_EVENT_SEQ] ?: 0L
+            if (current <= serverLastSeq) {
+                prefs[KEY_NEXT_EVENT_SEQ] = serverLastSeq + 1L
+            }
         }
     }
 }

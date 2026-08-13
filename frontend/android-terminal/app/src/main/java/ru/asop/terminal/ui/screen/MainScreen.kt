@@ -65,8 +65,22 @@ fun MainScreen(
         },
         bottomBar = {
             Column {
-                // Промпт 011: постоянный informer о состоянии смены/рейса (поверх sync progress)
-                ShiftTripInformer(state = sessionState)
+                // Промпт 012: layout bottomBar — non-overlapping informers
+                // (снизу вверх):
+                //   [Bottom-most]    Upload informer (sync → server) — показывает
+                //                     pending events в очереди + ACK + PENDING_WATERMARK
+                //   [Middle]         Download informer (server → terminal) — delta-sync
+                //                     progress + chunks + totalBytes
+                //   [Top]            ShiftTripInformer (session state) — постоянный
+                //
+                // Каждый informer занимает свою Row; если только один активен —
+                // он всё равно внизу; если два — download вытесняет upload выше.
+                // Padding dynamically shifts visual bounds to avoid overlap.
+                UploadInformer(
+                    pendingCount = pendingCount,
+                    sendingProgress = syncViewModel.syncEnabled.collectAsState().value,
+                    modifier = Modifier.fillMaxWidth()
+                )
                 val syncActive = pendingDeltaCount > 0 || deltaProgress != null
                 AnimatedVisibility(
                     visible = syncActive,
@@ -97,7 +111,7 @@ fun MainScreen(
                                 if (p != null && p.totalChunks > 0 && p.fraction > 0f) {
                                     val estimated = (activeReferenceCount / p.fraction).toInt()
                                     Text(
-                                        text = "Справочники: $activeReferenceCount/$estimated строк",
+                                        text = "Скачано: $activeReferenceCount/$estimated строк",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -108,7 +122,7 @@ fun MainScreen(
                                     )
                                 } else if (pendingDeltaCount > 0) {
                                     Text(
-                                        text = "Справочники: $activeReferenceCount строк",
+                                        text = "Скачано: $activeReferenceCount строк",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -119,7 +133,7 @@ fun MainScreen(
                                     )
                                 } else {
                                     Text(
-                                        text = "Справочники: $activeReferenceCount строк",
+                                        text = "Скачано: $activeReferenceCount строк",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -128,6 +142,8 @@ fun MainScreen(
                         }
                     }
                 }
+                // Промпт 011: постоянный informer о состоянии смены/рейса — сверху
+                ShiftTripInformer(state = sessionState)
             }
         }
     ) { padding ->
@@ -282,6 +298,55 @@ internal fun InfoRow(label: String, value: String) {
  *  - SHIFT OPEN, TRIP OPEN    → зелёный  «Рейс открыт: tid=…, vehicle=…».
  *  - обе CLOSED               → серый    «Смена закрыта. Откройте смену».
  */
+/**
+ * Промпт 012: Bottom Upload informer — выезжает снизу когда sync pending events стоят в очереди.
+ * Не пересекается с Download informer: оба физ-размещены через Column; composer рендерит
+ * только видимые AnimatedVisibility, иначе место позволяет ShiftTripInformer занять низ.
+ *
+ * Цвет фона светло-голубой (отличается от жёлтого/зелёного ShiftTripInformer и серого Download),
+ * чтобы два informer не сливались визуально когда оба активны.
+ */
+@Composable
+private fun UploadInformer(
+    pendingCount: Int,
+    sendingProgress: Boolean,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = pendingCount > 0 || sendingProgress,
+        enter = androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.fadeOut()
+    ) {
+        androidx.compose.material3.Surface(
+            tonalElevation = 4.dp,
+            color = androidx.compose.ui.graphics.Color(0xFFE3F2FD),
+            modifier = modifier
+        ) {
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween
+            ) {
+                if (pendingCount > 0) {
+                    androidx.compose.material3.Text(
+                        text = "\u2191 Отправка: $pendingCount в очереди",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                } else {
+                    androidx.compose.material3.Text(
+                        text = "\u2191 Sync активен",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ShiftTripInformer(state: SessionFlowViewModel.State) {
     val shift = state.openShift

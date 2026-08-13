@@ -83,4 +83,14 @@ interface SyncApi {
     suspend fun rootLogin(
         @Body request: RootLoginRequest
     ): Response<RootLoginResponse>
+
+    /**
+     * Промпт 012: per-terminal watermark sync.
+     * Gateway proxy proxy-ит /api/v1/terminals/{id}/event-watermark к terminal-service.
+     * Терминал делает GET чтобы catch-up seq после reconnect / factory-reset.
+     */
+    @GET("api/v1/terminals/{id}/event-watermark")
+    suspend fun getEventWatermark(
+        @Path("id") terminalId: String
+    ): Response<TerminalEventWatermark>
 }

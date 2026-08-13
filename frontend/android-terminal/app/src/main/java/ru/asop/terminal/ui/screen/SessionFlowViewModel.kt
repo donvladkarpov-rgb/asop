@@ -336,7 +336,8 @@ class SessionFlowViewModel @Inject constructor(
                         payload = JsonUtil.encode(payload),
                         eventType = EventTypes.SESSION_OPEN,
                         pathParam = null
-                    )
+                   ,
+                        seq = syncPreferences.nextSeq())
                 )
                 syncPreferences.setLastCardTap(null, tap.cardId)
                 _state.update {
@@ -426,7 +427,8 @@ class SessionFlowViewModel @Inject constructor(
                         payload = JsonUtil.encode(payload),
                         eventType = EventTypes.SESSION_OPEN,
                         pathParam = null
-                    )
+                   ,
+                        seq = syncPreferences.nextSeq())
                 )
                 _state.update {
                     it.copy(
@@ -483,7 +485,8 @@ class SessionFlowViewModel @Inject constructor(
                         payload = JsonUtil.encode(payload),
                         eventType = EventTypes.SESSION_CLOSE,
                         pathParam = shift.id
-                    )
+                   ,
+                        seq = syncPreferences.nextSeq())
                 )
                 _state.update {
                     it.copy(
@@ -540,7 +543,8 @@ class SessionFlowViewModel @Inject constructor(
                         payload = JsonUtil.encode(payload),
                         eventType = EventTypes.SESSION_CLOSE,
                         pathParam = trip.id
-                    )
+                   ,
+                        seq = syncPreferences.nextSeq())
                 )
                 _state.update {
                     it.copy(
@@ -604,7 +608,8 @@ class SessionFlowViewModel @Inject constructor(
                         payload = JsonUtil.encode(payload),
                         eventType = EventTypes.TRANSACTION_COMPLETE,
                         pathParam = null
-                    )
+                   ,
+                        seq = syncPreferences.nextSeq())
                 )
                 _state.update {
                     it.copy(

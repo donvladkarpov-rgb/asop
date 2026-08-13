@@ -75,6 +75,20 @@ class WorkScheduler @Inject constructor(
             ExistingPeriodicWorkPolicy.KEEP,
             deltaPollRequest
         )
+
+        // Промпт 012: per-terminal watermark sync (1 час) — sync Preferences.KEY_WATERMARK_FROM_SERVER
+        val watermarkRequest = PeriodicWorkRequestBuilder<WatermarkSyncWorker>(
+            60, TimeUnit.MINUTES
+        )
+            .setConstraints(constraints)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            "watermark_sync",
+            ExistingPeriodicWorkPolicy.KEEP,
+            watermarkRequest
+        )
     }
 
     /** Отменяет периодические delta-джобы. Текущее in-flight задание завершится, новые не начнутся. */
