@@ -232,6 +232,7 @@ services:
       SPRING_REDIS_HOST: redis
       SPRING_REDIS_PORT: 6379
       ASOP_ENV: docker
+      ASOP_PORTAL_INJECT_TOKEN: ${ASOP_PORTAL_INJECT_TOKEN:-dev-allow}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
     depends_on:
@@ -704,6 +705,24 @@ services:
     networks:
       - asop-net
 
+
+  # Промпт 013: end-to-end Kafka event inject tool (kcat).
+  # Использовать:
+  #   docker compose exec kcat kcat -P -b kafka:9093 -t asop.session.commands \
+  #     -X 'headers=X-Terminal-Seq:5,X-Event-Id:f5c...' <<< '{"eventId":"...","eventType":"...",...}'
+  kcat:
+    image: confluentinc/cp-kcat:7.5.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: /bin/sh
+    command: -c "tail -f /dev/null"
+    networks:
+      - asop-net
+    volumes:
+      # Промпт 013: chain trust-store для SSL handshake при kcat -> kafka:9093
+      - ./cert-inject/ca-chain.pem:/tmp/inject-ca.pem:ro
   web-admin:
     mem_limit: 128m
     build:
