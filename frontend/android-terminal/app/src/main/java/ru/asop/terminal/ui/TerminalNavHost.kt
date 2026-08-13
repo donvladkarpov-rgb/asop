@@ -2,7 +2,10 @@ package ru.asop.terminal.ui
 
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.AlertDialog
@@ -139,6 +142,7 @@ fun TerminalNavHost() {
         drawerState = drawerState,
         drawerContent = {
             ModalDrawerSheet {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Spacer(Modifier.height(16.dp))
                 Text(
                     text = "ASOP Терминал",
@@ -176,6 +180,23 @@ fun TerminalNavHost() {
                         }
                     }
                 )
+                NavigationDrawerItem(
+                    label = { Text("Прочитать карту") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-read")
+                    }
+                )
+                NavigationDrawerItem(
+                    label = { Text("Активация карт") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("card-activation")
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 NavigationDrawerItem(
                     label = { Text("Открыть смену") },
                     selected = false,
@@ -232,22 +253,8 @@ fun TerminalNavHost() {
                         referenceSyncViewModel.toggleDeltaJobs()
                     }
                 )
-                NavigationDrawerItem(
-                    label = { Text("Прочитать карту") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("card-read")
-                    }
-                )
-                NavigationDrawerItem(
-                    label = { Text("Активация карт") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("card-activation")
-                    }
-                )
+                Spacer(Modifier.height(24.dp))
+                }
             }
         }
     ) {
