@@ -80,4 +80,57 @@ interface ReferenceRowDao {
         LIMIT 1
     """)
     suspend fun firstUserCarrierRow(userId: String): String?
+
+    /**
+     * Промпт 011: TID-пулы для перевозчика. payload JSON содержит
+     * `{"tidId":"...","carrierId":"...","tidValue":"...","status":"UNUSED"}`.
+     * Сортировка на клиенте по payloadJson.tidValue (Room не знает schema payload_json).
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_tids'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"carrierId":"' || :carrierId || '"%'
+    """)
+    fun observeTidsByCarrier(carrierId: String): Flow<List<String>>
+
+    /**
+     * Промпт 011: транспортные средства перевозчика. payload содержит
+     * `{"vehicleId":"...","carrierId":"...","modelId":"...","registrationNumber":"..."}`.
+     * Сортировка по registrationNumber делается на клиенте.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_vehicles'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"carrierId":"' || :carrierId || '"%'
+    """)
+    fun observeVehiclesByCarrier(carrierId: String): Flow<List<String>>
+
+    /**
+     * Промпт 011: все маршруты (роутинг по гео-зоне — на сервере, тут просто список).
+     * Сортировка по routeNumber делается на клиенте.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_routes'
+          AND deleted_at IS NULL
+    """)
+    fun observeAllRoutes(): Flow<List<String>>
+
+    /**
+     * Промпт 011: пути следования маршрута. payload содержит `{pathId, routeId, pathName, ...}`.
+     * Сортировка по pathName делается на клиенте.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_paths'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"routeId":"' || :routeId || '"%'
+    """)
+    fun observePathsByRoute(routeId: String): Flow<List<String>>
 }

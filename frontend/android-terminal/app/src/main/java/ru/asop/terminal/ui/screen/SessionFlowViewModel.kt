@@ -3,6 +3,7 @@ package ru.asop.terminal.ui.screen
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.nfc.Tag
 import com.github.f4b6a3.uuid.UuidCreator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.Flow
@@ -16,9 +17,11 @@ import org.json.JSONObject
 import ru.asop.terminal.activation.AsopCardType
 import ru.asop.terminal.activation.CardIdentityVcm1
 import ru.asop.terminal.db.SyncPreferences
+import ru.asop.terminal.db.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.SessionDao
+import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.dao.TripPaymentDao
 import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.entity.SessionEntity
@@ -27,6 +30,7 @@ import ru.asop.terminal.network.SyncApi
 import ru.asop.terminal.network.models.SessionCloseRequest
 import ru.asop.terminal.network.models.SessionOpenRequest
 import ru.asop.terminal.network.models.TransactionCompleteRequest
+import ru.asop.terminal.nfc.QuickVcm1Reader
 import ru.asop.terminal.util.JsonUtil
 import ru.asop.terminal.worker.EventTypes
 import javax.inject.Inject
@@ -48,12 +52,15 @@ class SessionFlowViewModel @Inject constructor(
     private val tripPaymentDao: TripPaymentDao,
     private val pendingEventDao: PendingEventDao,
     private val referenceRowDao: ReferenceRowDao,
+    private val terminalKeyDao: TerminalKeyDao,
+    private val terminalKeyCryptor: TerminalKeyCryptor,
     private val syncPreferences: SyncPreferences,
-    @Suppress("unused") private val syncApi: SyncApi
+    @Suppress("unused") private val syncApi: SyncApi,
+    private val terminalDao: ReferenceRowDao = referenceRowDao
 ) : AndroidViewModel(application) {
 
     enum class FlowKind { OPEN_SHIFT, CLOSE_SHIFT, OPEN_TRIP, CLOSE_TRIP, TAP_PASSENGER }
-    enum class CardStep { WAITING_TAP, AUTH_OK, AUTH_DENIED, NOT_DRIVER, IDLE }
+    enum class CardStep { WAITING_TAP, AUTH_OK, AUTH_DENIED, NOT_DRIVER, NFC_ERROR, IDLE }
     enum class SubmitState { IDLE, SUBMITTING, ACCEPTED, FAILED }
 
     data class CardTapInfo(
@@ -74,17 +81,77 @@ class SessionFlowViewModel @Inject constructor(
         val infoMessage: String? = null,
         val openShift: SessionEntity? = null,
         val openTrip: SessionEntity? = null,
-        val tripPayments: List<TripPaymentEntity> = emptyList()
+        val tripPayments: List<TripPaymentEntity> = emptyList(),
+        // Промпт 011: OpenTrip cascade picker (TID → Vehicle → Route → Path)
+        val tripTidId: String? = null,
+        val tripTidLabel: String? = null,
+        val tripVehicleId: String? = null,
+        val tripVehicleLabel: String? = null,
+        val tripRouteId: String? = null,
+        val tripRouteLabel: String? = null,
+        val tripPathId: String? = null,
+        val tripPathLabel: String? = null
     ) {
         val canConfirmOpenShift: Boolean
             get() = cardStep == CardStep.AUTH_OK && submitState == SubmitState.IDLE
+        val canConfirmOpenTrip: Boolean
+            get() = cardStep == CardStep.AUTH_OK &&
+                submitState == SubmitState.IDLE &&
+                openShift != null &&
+                tripVehicleId != null && tripPathId != null
+    }
+
+    fun setTripTid(id: String?, label: String?) {
+        _state.update { it.copy(tripTidId = id, tripTidLabel = label) }
+    }
+    fun setTripVehicle(id: String?, label: String?) {
+        _state.update { it.copy(tripVehicleId = id, tripVehicleLabel = label, tripRouteId = null, tripRouteLabel = null, tripPathId = null, tripPathLabel = null) }
+    }
+    fun setTripRoute(id: String?, label: String?) {
+        _state.update { it.copy(tripRouteId = id, tripRouteLabel = label, tripPathId = null, tripPathLabel = null) }
+    }
+    fun setTripPath(id: String?, label: String?) {
+        _state.update { it.copy(tripPathId = id, tripPathLabel = label) }
+    }
+
+    /**
+     * Реактивные потоки для cascade dropdowns (TID → Vehicle → Route → Path).
+     * Все фильтруются по carrierId из [State.openShift] (кроме маршрутов и путей,
+     * которые глобальные по routeId и перевозчику).
+     */
+    fun observeTids(): Flow<List<String>> {
+        val carrier = _state.value.cardTap?.carrierId ?: _state.value.openShift?.carrierId
+        return if (carrier.isNullOrEmpty()) kotlinx.coroutines.flow.flowOf(emptyList())
+        else terminalDao.observeTidsByCarrier(carrier)
+    }
+
+    fun observeVehicles(): Flow<List<String>> {
+        val carrier = _state.value.cardTap?.carrierId ?: _state.value.openShift?.carrierId
+        return if (carrier.isNullOrEmpty()) kotlinx.coroutines.flow.flowOf(emptyList())
+        else terminalDao.observeVehiclesByCarrier(carrier)
+    }
+
+    fun observeRoutes(): Flow<List<String>> = terminalDao.observeAllRoutes()
+
+    fun observePaths(): Flow<List<String>> {
+        val route = _state.value.tripRouteId
+        return if (route.isNullOrEmpty()) kotlinx.coroutines.flow.flowOf(emptyList())
+        else terminalDao.observePathsByRoute(route)
     }
 
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
     fun setKind(kind: FlowKind) {
-        _state.update { it.copy(kind = kind, cardStep = CardStep.IDLE, cardTap = null, errorMessage = null) }
+        _state.update {
+            it.copy(
+                kind = kind,
+                cardStep = CardStep.WAITING_TAP,
+                cardTap = null,
+                errorMessage = null,
+                infoMessage = null
+            )
+        }
         observeSessions()
     }
 
@@ -267,20 +334,27 @@ class SessionFlowViewModel @Inject constructor(
     }
 
     /**
-     * Открыть рейс (TRIP). Текущая открытая смена должна существовать.
-     * Cascade: TID → Vehicle → Route → Path (выбор из локального Room reference_rows).
+     * Открыть рейс (TRIP). Берёт tidId/vehicleId/pathId из state (выбранных в cascade dropdowns).
      */
-    fun confirmOpenTrip(tidId: String?, vehicleId: String?, pathId: String?) {
-        val shift = _state.value.openShift
+    fun confirmOpenTrip() {
+        val s = _state.value
+        val shift = s.openShift
         if (shift == null) {
             _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала откройте смену") }
             return
         }
-        if (_state.value.openTrip != null) {
+        if (s.openTrip != null) {
             _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Рейс уже открыт") }
             return
         }
-        val tap = _state.value.cardTap
+        if (s.tripVehicleId == null || s.tripPathId == null) {
+            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Выберите ТС и путь следования") }
+            return
+        }
+        val tidId = s.tripTidId
+        val vehicleId = s.tripVehicleId
+        val pathId = s.tripPathId
+        val tap = s.cardTap
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
         viewModelScope.launch {
             try {
@@ -519,6 +593,43 @@ class SessionFlowViewModel @Inject constructor(
                 extractFirstCarrierId(rowJson)
             } else carrierFilter
         } catch (e: Exception) { carrierFilter }
+    }
+
+    /**
+     * NFC tap event из SessionFlowScreen.enableReaderMode.
+     * Читает ASOP-ключи из terminal_keys, пытается прочитать sector 1 (VCM1)
+     * через [QuickVcm1Reader].
+     */
+    fun onTagDiscovered(tag: Tag) {
+        viewModelScope.launch {
+            try {
+                val rows = terminalKeyDao.getActive(limit = 20)
+                val asopKeys = rows.map { entity ->
+                    runCatching { terminalKeyCryptor.decrypt(entity.keyMaterialEnc) }
+                        .getOrDefault(ByteArray(0))
+                }.filter { it.size >= 12 }
+                val result = QuickVcm1Reader.readVcm1Identity(tag, asopKeys)
+                if (result == null) {
+                    _state.update {
+                        it.copy(
+                            cardStep = CardStep.NFC_ERROR,
+                            errorMessage = "Не удалось прочитать сектор 1 карты. " +
+                                "Проверьте, что приложили MIFARE Classic 1K/4K карту с ASOP VCM1."
+                        )
+                    }
+                    return@launch
+                }
+                val (uid, vcm1Bytes) = result
+                onCardTappedForAuth(uid, vcm1Bytes)
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        cardStep = CardStep.NFC_ERROR,
+                        errorMessage = "Ошибка чтения NFC: ${e.message}"
+                    )
+                }
+            }
+        }
     }
 
     private suspend fun lookupUserFullName(userId: String): String? {
