@@ -55,7 +55,15 @@ object MifareClassicReader {
         try {
             mfc.connect()
             mfc.timeout = 3000
+        } catch (e: java.io.IOException) {
+            // Промпт 013: rethrow connect() IOException to caller (Vcm1CardAuth.readWithRetry)
+            // — иначе sector-loop проглатывает exception в `outer catch` и возвращает
+            // ReadResult c error="Auth failed", скрывая реальную причину.
+            Log.w(TAG, "mfc.connect failed (rethrow for retry): ${e.javaClass.simpleName} ${e.message}")
+            throw e
+        }
 
+        try {
             val candidateKeys = buildCandidateKeys(asopKeyMaterial)
             notes.add("Candidate keys: ${candidateKeys.size} (factory=${FACTORY_KEYS.size}, asop=${asopKeyMaterial.size})")
 
