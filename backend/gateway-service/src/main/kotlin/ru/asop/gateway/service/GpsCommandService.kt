@@ -1,19 +1,34 @@
 package ru.asop.gateway.service
 
+import ru.asop.gateway.kafka.addTerminalSeq
+
 import ru.asop.common.event.EventService
 
+
 import org.apache.kafka.clients.producer.ProducerRecord
+
 import org.slf4j.LoggerFactory
+
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
+
 import org.springframework.stereotype.Service
+
 import reactor.core.publisher.Mono
+
 import reactor.kafka.sender.SenderResult
+
 import ru.asop.common.kafka.KafkaTopic
+
 import ru.asop.common.util.UuidUtils
+
 import ru.asop.kafka.events.gps.GpsPositionReported
+
 import ru.asop.api.gateway.dto.request.GpsPositionReport
+
 import java.security.Principal
+
 import java.util.UUID
+
 
 @Service
 class GpsCommandService(
@@ -28,7 +43,7 @@ class GpsCommandService(
         headers().add("X-Timezone", timezone?.encodeToByteArray())
     }
 
-    fun reportPosition(request: GpsPositionReport, principal: Principal?): Mono<UUID> {
+    fun reportPosition(request: GpsPositionReport, principal: Principal?, seq: Long = 0L): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val positionId = UuidUtils.newId()
@@ -55,6 +70,7 @@ class GpsCommandService(
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
             record.addContext(request.regionId, request.carrierId, request.timezone)
+            record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.GPS_COMMANDS)
                 .then(kafkaTemplate.send(record))

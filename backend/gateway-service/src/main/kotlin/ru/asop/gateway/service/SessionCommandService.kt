@@ -1,5 +1,7 @@
 package ru.asop.gateway.service
 
+import ru.asop.gateway.kafka.addTerminalSeq
+
 import ru.asop.common.event.EventService
 
 import org.apache.kafka.clients.producer.ProducerRecord
@@ -30,7 +32,7 @@ class SessionCommandService(
         headers().add("X-Timezone", timezone?.encodeToByteArray())
     }
 
-    fun openSession(request: SessionOpenRequest, principal: Principal?): Mono<UUID> {
+    fun openSession(request: SessionOpenRequest, principal: Principal?, seq: Long): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val sessionId = UuidUtils.newId()
@@ -60,13 +62,14 @@ class SessionCommandService(
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
             record.addContext(request.regionId, request.timezone)
+            record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
                 .then(kafkaTemplate.send(record))
                 .doOnSuccess { result: SenderResult<*> ->
                     log.info(
-                        "Sent SessionOpened to topic={}, eventId={}, sessionId={}",
-                        KafkaTopic.SESSION_COMMANDS, eventId, event.sessionId
+                        "Sent SessionOpened to topic={}, eventId={}, sessionId={}, seq={}",
+                        KafkaTopic.SESSION_COMMANDS, eventId, event.sessionId, seq
                     )
                 }
                 .doOnError { error ->
@@ -77,7 +80,7 @@ class SessionCommandService(
         }
     }
 
-    fun closeSession(id: UUID, request: SessionCloseRequest, principal: Principal?): Mono<UUID> {
+    fun closeSession(id: UUID, request: SessionCloseRequest, principal: Principal?, seq: Long): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val correlationId = UuidUtils.newId()
@@ -100,6 +103,7 @@ class SessionCommandService(
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
             record.addContext(request.regionId, request.timezone)
+            record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
                 .then(kafkaTemplate.send(record))

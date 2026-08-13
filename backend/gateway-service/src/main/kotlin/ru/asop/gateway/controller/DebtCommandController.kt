@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
 import ru.asop.gateway.service.DebtCommandService
@@ -23,12 +24,13 @@ class DebtCommandController(
     @PostMapping("/api/v1/sync/debts")
     fun createDebt(
         @Valid @RequestBody request: DebtCreateRequest,
+        @RequestHeader(value = "X-Event-Seq", required = false) seqHeader: Long?,
         principal: Mono<Principal>
     ): Mono<ResponseEntity<AcceptedResponse>> {
         return principal
             .defaultIfEmpty(EmptyPrincipal)
             .flatMap { p ->
-                debtCommandService.create(request, p)
+                debtCommandService.create(request, p, seqHeader ?: 0L)
                     .map { eventId ->
                         ResponseEntity.accepted()
                             .header("X-Event-Id", eventId.toString())
@@ -46,12 +48,13 @@ class DebtCommandController(
     fun recoverDebt(
         @PathVariable id: UUID,
         @RequestBody(required = false) request: DebtRecoverRequest?,
+        @RequestHeader(value = "X-Event-Seq", required = false) seqHeader: Long?,
         principal: Mono<Principal>
     ): Mono<ResponseEntity<AcceptedResponse>> {
         return principal
             .defaultIfEmpty(EmptyPrincipal)
             .flatMap { p ->
-                debtCommandService.recoverDebt(id, request ?: DebtRecoverRequest(), p)
+                debtCommandService.recoverDebt(id, request ?: DebtRecoverRequest(), p, seqHeader ?: 0L)
                     .map { eventId ->
                         ResponseEntity.accepted()
                             .header("X-Event-Id", eventId.toString())

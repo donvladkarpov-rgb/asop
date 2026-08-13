@@ -1,20 +1,36 @@
 package ru.asop.gateway.service
 
+import ru.asop.gateway.kafka.addTerminalSeq
+
 import ru.asop.common.event.EventService
 
+
 import org.apache.kafka.clients.producer.ProducerRecord
+
 import org.slf4j.LoggerFactory
+
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
+
 import org.springframework.stereotype.Service
+
 import reactor.core.publisher.Mono
+
 import reactor.kafka.sender.SenderResult
+
 import ru.asop.common.kafka.KafkaTopic
+
 import ru.asop.common.util.UuidUtils
+
 import ru.asop.kafka.events.audit.AuditTaskCreatedEvent
+
 import ru.asop.api.audit.dto.request.AuditTaskCreateRequest
+
 import java.security.Principal
+
 import java.time.Instant
+
 import java.util.UUID
+
 
 @Service
 class AuditCommandService(
@@ -29,7 +45,7 @@ class AuditCommandService(
         headers().add("X-Timezone", timezone?.encodeToByteArray())
     }
 
-    fun createTask(request: AuditTaskCreateRequest, principal: Principal?): Mono<UUID> {
+    fun createTask(request: AuditTaskCreateRequest, principal: Principal?, seq: Long = 0L): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val taskId = UuidUtils.newId()
@@ -53,6 +69,7 @@ class AuditCommandService(
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
             record.addContext(request.regionId, request.carrierId, request.timezone)
+            record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.AUDIT_COMMANDS)
                 .then(kafkaTemplate.send(record))

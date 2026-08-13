@@ -4,6 +4,7 @@ import jakarta.validation.Valid
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
 import ru.asop.gateway.service.FiscalCommandService
@@ -19,12 +20,13 @@ class FiscalCommandController(
     @PostMapping("/api/v1/sync/fiscal/receipts")
     fun requestReceipt(
         @Valid @RequestBody request: FiscalReceiptRequest,
+        @RequestHeader(value = "X-Event-Seq", required = false) seqHeader: Long?,
         principal: Mono<Principal>
     ): Mono<ResponseEntity<AcceptedResponse>> {
         return principal
             .defaultIfEmpty(EmptyPrincipal)
             .flatMap { p ->
-                fiscalCommandService.requestReceipt(request, p)
+                fiscalCommandService.requestReceipt(request, p, seqHeader ?: 0L)
                     .map { eventId ->
                         ResponseEntity.accepted()
                             .header("X-Event-Id", eventId.toString())

@@ -1,6 +1,8 @@
 package ru.asop.terminal.controller
 
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -11,12 +13,14 @@ import ru.asop.api.terminal.dto.request.TerminalStatusChangeRequest
 import ru.asop.api.terminal.dto.response.TerminalRegisterResponse
 import ru.asop.api.terminal.dto.response.TerminalResponse
 import ru.asop.terminal.service.TerminalService
+import ru.asop.terminal.service.WatermarkQueryService
 import java.security.Principal
 import java.util.UUID
 
 @RestController
 class TerminalController(
-    private val terminalService: TerminalService
+    private val terminalService: TerminalService,
+    private val watermarkQueryService: WatermarkQueryService
 ) : TerminalApi {
 
     override fun listTerminals(carrierId: UUID?, regionId: UUID?): Flux<TerminalResponse> =
@@ -50,6 +54,17 @@ class TerminalController(
         principal: Mono<Principal>
     ): Mono<ResponseEntity<TerminalResponse>> {
         return terminalService.assignCarrier(id, request.carrierId)
+            .map { ResponseEntity.ok(it) }
+            .defaultIfEmpty(ResponseEntity.notFound().build())
+    }
+
+    /**
+     * Промпт 012: GET /api/v1/terminals/{id}/event-watermark — публичный для терминала
+     * (mTLS-цепочка его пропускает). Возвращает last_seq + pending count.
+     */
+    @GetMapping("/api/v1/terminals/{id}/event-watermark")
+    fun getEventWatermark(@PathVariable id: UUID): Mono<ResponseEntity<ru.asop.terminal.model.TerminalEventWatermark>> {
+        return watermarkQueryService.getWatermark(id)
             .map { ResponseEntity.ok(it) }
             .defaultIfEmpty(ResponseEntity.notFound().build())
     }

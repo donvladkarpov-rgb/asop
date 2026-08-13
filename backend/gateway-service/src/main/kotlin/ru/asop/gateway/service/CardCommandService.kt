@@ -1,22 +1,40 @@
 package ru.asop.gateway.service
 
+import ru.asop.gateway.kafka.addTerminalSeq
+
 import ru.asop.common.event.EventService
 
+
 import org.apache.kafka.clients.producer.ProducerRecord
+
 import org.slf4j.LoggerFactory
+
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
+
 import org.springframework.stereotype.Service
+
 import reactor.core.publisher.Mono
+
 import reactor.kafka.sender.SenderResult
+
 import ru.asop.common.kafka.KafkaTopic
+
 import ru.asop.common.util.UuidUtils
+
 import ru.asop.kafka.events.card.CardRegisteredEvent
+
 import ru.asop.kafka.events.card.CardBlockedEvent
+
 import ru.asop.api.card.dto.request.CardRegisterRequest
+
 import ru.asop.api.card.dto.request.CardBlockRequest
+
 import java.security.Principal
+
 import java.time.Instant
+
 import java.util.UUID
+
 
 @Service
 class CardCommandService(
@@ -31,7 +49,7 @@ class CardCommandService(
         headers().add("X-Timezone", timezone?.encodeToByteArray())
     }
 
-    fun register(request: CardRegisterRequest, principal: Principal?): Mono<UUID> {
+    fun register(request: CardRegisterRequest, principal: Principal?, seq: Long = 0L): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val cardId = UuidUtils.newId()
@@ -55,6 +73,7 @@ class CardCommandService(
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
             record.addContext(request.regionId, request.carrierId, request.timezone)
+            record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.CARD_COMMANDS)
                 .then(kafkaTemplate.send(record))
@@ -72,7 +91,7 @@ class CardCommandService(
         }
     }
 
-    fun blockCard(id: UUID, request: CardBlockRequest, principal: Principal?): Mono<UUID> {
+    fun blockCard(id: UUID, request: CardBlockRequest, principal: Principal?, seq: Long = 0L): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
             val correlationId = UuidUtils.newId()
@@ -94,6 +113,7 @@ class CardCommandService(
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
             record.addContext(request.regionId, request.carrierId, request.timezone)
+            record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.CARD_COMMANDS)
                 .then(kafkaTemplate.send(record))

@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RestController
 import reactor.core.publisher.Mono
 import ru.asop.gateway.service.SessionCommandService
@@ -23,12 +24,13 @@ class SessionCommandController(
     @PostMapping("/api/v1/sync/sessions/open")
     fun openSession(
         @Valid @RequestBody request: SessionOpenRequest,
+        @RequestHeader(value = "X-Event-Seq", required = false) seqHeader: Long?,
         principal: Mono<Principal>
     ): Mono<ResponseEntity<AcceptedResponse>> {
         return principal
             .defaultIfEmpty(EmptyPrincipal)
             .flatMap { p ->
-                sessionCommandService.openSession(request, p)
+                sessionCommandService.openSession(request, p, seqHeader ?: 0L)
                     .map { eventId ->
                         ResponseEntity.accepted()
                             .header("X-Event-Id", eventId.toString())
@@ -46,12 +48,13 @@ class SessionCommandController(
     fun closeSession(
         @PathVariable id: UUID,
         @Valid @RequestBody request: SessionCloseRequest,
+        @RequestHeader(value = "X-Event-Seq", required = false) seqHeader: Long?,
         principal: Mono<Principal>
     ): Mono<ResponseEntity<AcceptedResponse>> {
         return principal
             .defaultIfEmpty(EmptyPrincipal)
             .flatMap { p ->
-                sessionCommandService.closeSession(id, request, p)
+                sessionCommandService.closeSession(id, request, p, seqHeader ?: 0L)
                     .map { eventId ->
                         ResponseEntity.accepted()
                             .header("X-Event-Id", eventId.toString())
@@ -59,13 +62,13 @@ class SessionCommandController(
                                 eventId = eventId,
                                 topic = "asop.session.commands",
                                 acceptedAt = java.time.Instant.now(),
-                                locationHint = null
+                                locationHint = "/api/v1/sessions/{id}"
                             ))
                     }
             }
     }
 
     private object EmptyPrincipal : Principal {
-        override fun getName(): String = "terminal"
+        override fun getName(): String = ""
     }
 }
