@@ -5,7 +5,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import ru.asop.terminal.nfc.TonePlayer
 
-/** Промпт 011: «Закрыть рейс» — только владелец смены (тот же userId). */
+/**
+ * Промпт 011 §12/§17: «Закрыть рейс» — может любой водитель перевозчика
+ * (открывший смену/рейс или другой), диспетчер, админ перевозчика /
+ * организатора / региона / root. Client-side НЕ ограничивает —
+ * cascading auth делает server-side SessionService.canClose().
+ */
 @Composable
 fun CloseTripScreen(
     onConfirmed: () -> Unit

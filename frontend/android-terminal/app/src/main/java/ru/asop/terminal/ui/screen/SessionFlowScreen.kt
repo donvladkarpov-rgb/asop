@@ -141,6 +141,24 @@ fun SessionFlowScreen(
         ) {
             Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
 
+            // Промпт 011 §13/§16/§17: подсказка кто может закрывать смену/рейс
+            val closeHint = when (state.kind) {
+                SessionFlowViewModel.FlowKind.CLOSE_SHIFT ->
+                    "Закрыть смену может любой водитель этого перевозчика, " +
+                        "диспетчер, админ перевозчика / организатора / региона / root."
+                SessionFlowViewModel.FlowKind.CLOSE_TRIP ->
+                    "Закрыть рейс может любой водитель этого перевозчика, " +
+                        "диспетчер, админ перевозчика / организатора / региона / root."
+                else -> null
+            }
+            if (closeHint != null) {
+                Text(
+                    closeHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             // Step 1 — card tap
             val cardColor = when (state.cardStep) {
                 SessionFlowViewModel.CardStep.WAITING_TAP -> MaterialTheme.colorScheme.primaryContainer
@@ -156,7 +174,7 @@ fun SessionFlowScreen(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Шаг 1: приложите карту водителя", fontWeight = FontWeight.Bold)
+                    Text("Шаг 1: приложите карту водителя/админа", fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     val stateCard = when (state.cardStep) {
                         SessionFlowViewModel.CardStep.WAITING_TAP -> "Ожидание NFC tap"

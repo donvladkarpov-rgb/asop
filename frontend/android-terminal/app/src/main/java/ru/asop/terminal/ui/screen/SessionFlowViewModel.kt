@@ -443,21 +443,26 @@ class SessionFlowViewModel @Inject constructor(
     }
 
     /**
-     * Закрыть смену.
-     * request = текущий водитель или admin уровня перевозчика/организатора/региона/root.
+     * Закрыть смену (промпт 011 §13, §16).
+     *
+     * Закрыть может ЛЮБОЙ из:
+     *  - водитель (сам открывший)
+     *  - другой водитель того же перевозчика
+     *  - диспетчер перевозчика
+     *  - админ перевозчика / организатора перевозок / региона / root
+     *
+     * Client-side НЕ ограничивает — серверная SessionService.canClose()
+     * делает cascading check через ASOP_USER_CARRIERS / ASOP_USER_REGIONS /
+     * ASOP_USER_ROLES.
      */
     fun confirmCloseShift() {
         val tap = _state.value.cardTap ?: run {
-            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту") }
+            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту водителя/админа") }
             return
         }
         val shift = _state.value.openShift
         if (shift == null) {
             _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Смена уже закрыта") }
-            return
-        }
-        if (tap.carrierId != shift.carrierId && tap.userId != shift.openedByUserId) {
-            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Карта другого перевозчика (server проверяет)") }
             return
         }
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
@@ -495,18 +500,26 @@ class SessionFlowViewModel @Inject constructor(
     }
 
     /**
-     * Закрыть рейс (только владелец смены). Тот же user_id, что открывал.
+     * Закрыть рейс (промпт 011 §12, §17).
+     *
+     * Закрыть может ЛЮБОЙ из:
+     *  - водитель, открывший смену (или открывший этот рейс)
+     *  - другой водитель того же перевозчика
+     *  - диспетчер / админ перевозчика / организатора / региона / root
+     *
+     * Client-side НЕ ограничивает — серверная SessionService.canClose()
+     * делает cascading check через ASOP_USER_CARRIERS / ASOP_USER_REGIONS /
+     * ASOP_USER_ROLES.
      */
     fun confirmCloseTrip() {
         val tap = _state.value.cardTap
         val trip = _state.value.openTrip
-        val shift = _state.value.openShift
         if (trip == null) {
             _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Рейс уже закрыт") }
             return
         }
-        if (tap == null || (tap.userId != (shift?.openedByUserId) && tap.userId != trip.openedByUserId)) {
-            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Закрыть рейс может только водитель, открывший смену") }
+        if (tap == null) {
+            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту водителя/админа") }
             return
         }
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }

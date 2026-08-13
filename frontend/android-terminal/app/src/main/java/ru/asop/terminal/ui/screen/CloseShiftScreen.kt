@@ -5,7 +5,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import ru.asop.terminal.nfc.TonePlayer
 
-/** Промпт 011: «Закрыть смену» — карта другого водителя/диспетчера/admin уровня перевозчика/организатора/региона/root. */
+/**
+ * Промпт 011 §13/§16: «Закрыть смену» — может ЛЮБОЙ водитель перевозчика
+ * (открывший или другой), диспетчер перевозчика, админ перевозчика /
+ * организатора перевозок / региона / root. Client-side НЕ ограничивает —
+ * cascading auth делает server-side SessionService.canClose().
+ */
 @Composable
 fun CloseShiftScreen(
     onConfirmed: () -> Unit
