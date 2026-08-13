@@ -28,11 +28,11 @@ export function SessionsPage() {
     queryFn: () => getSessions(terminalId || undefined),
   });
 
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const { data: txs } = useQuery({
-    queryKey: ['tx', expandedId],
-    queryFn: () => getTransactions(expandedId!),
-    enabled: !!expandedId,
+    queryKey: ['tx', expandedTripId],
+    queryFn: () => getTransactions(expandedTripId!),
+    enabled: !!expandedTripId,
   });
 
   if (isLoading) return <div>Загрузка...</div>;
@@ -63,16 +63,14 @@ export function SessionsPage() {
             <th>Путь</th>
             <th>Открыта</th>
             <th>Закрыта</th>
-            <th>Валидации</th>
-            <th></th>
           </tr>
         </thead>
         <tbody>
           {shifts.map((s) => {
             const childTrips = trips.filter((t) => t.parentSessionId === s.id);
             return (
-              <>
-                <tr key={s.id} className={statusClass(s.status)}>
+              <Fragment key={s.id}>
+                <tr className={statusClass(s.status)}>
                   <td>{typeLabel(s.sessionTypeId)}</td>
                   <td>{s.status === 'IN_PROGRESS' ? 'Активна' : 'Закрыта'}</td>
                   <td title={s.id}>{short(s.id)}</td>
@@ -82,19 +80,11 @@ export function SessionsPage() {
                   <td>—</td>
                   <td>{fmt(s.startedAt)}</td>
                   <td>{fmt(s.closedAt)}</td>
-                  <td>—</td>
-                  <td>
-                    {childTrips.length > 0 && (
-                      <button onClick={() => setExpandedId(expandedId === s.id ? null : s.id)}>
-                        {expandedId === s.id ? '▲' : `▼ ${childTrips.length}`}
-                      </button>
-                    )}
-                  </td>
                 </tr>
-                {expandedId === s.id && childTrips.map((t) => (
+                {childTrips.map((t) => (
                   <Fragment key={t.id}>
                     <tr className="child-row" style={{ background: '#f8f9fa' }}>
-                      <td>— {typeLabel(t.sessionTypeId)}</td>
+                      <td style={{ paddingLeft: 32 }}>— {typeLabel(t.sessionTypeId)}</td>
                       <td>{t.status === 'IN_PROGRESS' ? 'Активен' : 'Закрыт'}</td>
                       <td title={t.id}>{short(t.id)}</td>
                       <td title={t.terminalId ?? undefined}>{short(t.terminalId)}</td>
@@ -103,52 +93,66 @@ export function SessionsPage() {
                       <td title={t.pathId ?? undefined}>{short(t.pathId)}</td>
                       <td>{fmt(t.startedAt)}</td>
                       <td>{fmt(t.closedAt)}</td>
-                      <td>{txs?.length ?? '…'}</td>
-                      <td></td>
+                      <td style={{ textAlign: 'center' }}>
+                        <button
+                          onClick={() => setExpandedTripId(expandedTripId === t.id ? null : t.id)}
+                          style={{ cursor: 'pointer', fontSize: '1.1em', padding: '4px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fff' }}
+                        >
+                          {expandedTripId === t.id ? '▲' : '▼'}
+                        </button>
+                      </td>
                     </tr>
-                    {txs && txs.length > 0 && (
+                    {expandedTripId === t.id && (
                       <tr className="child-row">
-                        <td colSpan={11} style={{ padding: '4px 24px' }}>
-                          <details open>
-                            <summary style={{ cursor: 'pointer' }}>Валидации: {txs.length}</summary>
-                            <table style={{ width: '100%', marginTop: 4, fontSize: '0.85em' }}>
-                              <thead>
-                                <tr>
-                                  <th>ID</th>
-                                  <th>Сумма</th>
-                                  <th>Валюта</th>
-                                  <th>Статус</th>
-                                  <th>Время</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {txs.map((tx) => (
-                                  <tr key={tx.transactionId}>
-                                    <td>{short(tx.transactionId)}</td>
-                                    <td>{tx.amount}</td>
-                                    <td>RUB</td>
-                                    <td>{tx.metadata || '—'}</td>
-                                    <td>{fmt(tx.startedAt)}</td>
+                        <td colSpan={10} style={{ padding: '12px 24px', background: '#f0f4f8' }}>
+                          {!txs ? (
+                            <span style={{ color: '#888' }}>Загрузка валидаций...</span>
+                          ) : txs.length === 0 ? (
+                            <span style={{ color: '#888' }}>Нет валидаций</span>
+                          ) : (
+                            <div>
+                              <strong style={{ fontSize: '1.1em' }}>Валидации: {txs.length}</strong>
+                              <table style={{ width: '100%', marginTop: 8, borderCollapse: 'collapse' }}>
+                                <thead>
+                                  <tr style={{ background: '#e2e8f0' }}>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>ID</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Карта</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Пользователь</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Сумма</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Время</th>
                                   </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </details>
+                                </thead>
+                                <tbody>
+                                  {txs.map((tx) => (
+                                    <tr key={tx.transactionId} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                      <td style={{ padding: '4px 8px' }}>{short(tx.transactionId)}</td>
+                                      <td style={{ padding: '4px 8px' }}>{short(tx.cardId)}</td>
+                                      <td style={{ padding: '4px 8px' }} title={tx.userId ?? undefined}>{short(tx.userId)}</td>
+                                      <td style={{ padding: '4px 8px' }}>{tx.amount}</td>
+                                      <td style={{ padding: '4px 8px' }}>{fmt(tx.startedAt)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )}
                   </Fragment>
                 ))}
-                {expandedId === s.id && childTrips.length === 0 && (
-                  <tr key={`${s.id}-notrips`} className="child-row">
-                    <td colSpan={11} style={{ textAlign: 'center', color: '#888' }}>Нет рейсов в этой смене</td>
+                {childTrips.length === 0 && (
+                  <tr className="child-row">
+                    <td colSpan={10} style={{ textAlign: 'center', color: '#888', paddingLeft: 32 }}>
+                      Нет рейсов
+                    </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
           {shifts.length === 0 && (
-            <tr><td colSpan={11} style={{ textAlign: 'center' }}>Смен нет</td></tr>
+            <tr><td colSpan={10} style={{ textAlign: 'center' }}>Смен нет</td></tr>
           )}
         </tbody>
       </table>

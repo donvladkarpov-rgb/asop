@@ -56,6 +56,9 @@ export interface Transaction {
   amount: number;
   metadata: string | null;
   startedAt: string;
+  completedAt: string | null;
+  cardId: string | null;
+  userId: string | null;
 }
 
 export interface Session {
