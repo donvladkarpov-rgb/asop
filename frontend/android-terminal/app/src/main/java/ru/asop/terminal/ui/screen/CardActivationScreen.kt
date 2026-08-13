@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ru.asop.terminal.activation.AsopCardType
+import ru.asop.terminal.nfc.NfcReaderRefCount
 
 /**
  * Экран активации карт АСОП (промпт 005, п.9).
@@ -73,6 +74,7 @@ fun CardActivationScreen(
     val activeAdapter = nfcAdapter
 
     DisposableEffect(activeAdapter, activity, needsNfc) {
+        var didAcquire = false
         if (activeAdapter != null && activity != null && activeAdapter.isEnabled && needsNfc) {
             activeAdapter.enableReaderMode(
                 activity,
@@ -82,11 +84,25 @@ fun CardActivationScreen(
                     NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS,
                 null
             )
+            // Промпт 014: общий рефкаунт всех NFC-экранов. Поздний onDispose этого
+            // экрана (или SessionFlow/CardRead) не должен убивать чужой reader.
+            NfcReaderRefCount.acquire()
+            didAcquire = true
         } else if (activeAdapter != null && activity != null && !needsNfc) {
-            activeAdapter.disableReaderMode(activity)
+            // Step.Success / другие шаги без NFC. НЕ дизейблим напрямую: если другой
+            // экран (например SessionFlowScreen в стеке) держит reader — оставляем его.
+            if (NfcReaderRefCount.activeCount() == 0) {
+                activeAdapter.disableReaderMode(activity)
+            }
         }
         onDispose {
-            if (activeAdapter != null && activity != null) {
+            // Промпт 014: physical disable только когда НИКТО больше не держит reader
+            // (иначе late onDispose активации убивал reader «Открыть смену»).
+            // release делаем ТОЛЬКО если этот инстанс сам армил (didAcquire) — иначе
+            // невинное onDispose экрана без NFC уведёт счётчик в минус и убьёт чужой reader.
+            if (activeAdapter != null && activity != null && didAcquire &&
+                NfcReaderRefCount.releaseAndShouldDisable()
+            ) {
                 activeAdapter.disableReaderMode(activity)
             }
         }
@@ -414,8 +430,17 @@ private fun UserSearchField(
                 }
             }
         } else {
+            val needsCarrier = state.cardType?.needsCarrier == true
+            val carrierMissing = needsCarrier && state.selectedCarrierId.isNullOrBlank()
+            val msg = if (carrierMissing) {
+                "Сначала выберите перевозчика в поле выше"
+            } else if (state.selectedCarrierId != null && state.selectedCarrierId.isNotBlank()) {
+                "Нет пользователей, привязанных к этому перевозчику"
+            } else {
+                "Нет пользователей по запросу «${state.userQuery}»"
+            }
             Text(
-                "Нет пользователей по запросу «${state.userQuery}»",
+                msg,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(top = 8.dp)

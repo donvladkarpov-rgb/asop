@@ -16,6 +16,7 @@ import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.session.SessionOpenedEvent
 import ru.asop.kafka.events.session.SessionClosedEvent
 import ru.asop.session.repository.SessionRepository
+import ru.asop.session.service.SessionService
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
@@ -38,7 +39,8 @@ class SessionCommandConsumer(
     private val sessionRepository: SessionRepository,
     private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
-    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
+    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>,
+    private val sessionService: SessionService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val watermark: WatermarkProcessor = WatermarkProcessorImpl(db, objectMapper)
@@ -204,19 +206,35 @@ class SessionCommandConsumer(
         val closeFn: Mono<Void> = sessionRepository.findById(event.sessionId)
             .switchIfEmpty(Mono.error(IllegalStateException("Session not found: ${event.sessionId}")))
             .flatMap { _ ->
-                val sql = """UPDATE ASOP_SESSIONS
-                    SET STATUS = 'CLOSED',
-                        CLOSED_AT = :closedAt,
-                        CLOSED_AT_LOCAL = :closedAt,
-                        CLOSED_BY_USER_ID = :closedByUserId
-                    WHERE SESSION_ID = :sessionId AND STATUS <> 'CLOSED'"""
-                val spec = db.sql(sql)
-                    .bind("closedAt", event.closedAt)
-                    .bind("sessionId", event.sessionId)
-                val closed: UUID? = event.closedByUserId
-                val finalSpec = if (closed != null) spec.bind("closedByUserId", closed)
-                else spec.bindNull("closedByUserId", UUID::class.java)
-                finalSpec.fetch().rowsUpdated().then()
+                val requester = event.closedByUserId
+                val authCheck = if (requester != null) {
+                    sessionService.canClose(event.sessionId, requester)
+                } else {
+                    // Промпт 011 §4: без реального closedByUserId (term. CN = null после орт.) —
+                    // оставляем закрытие для совместимости (легаси-поток без карты-ключа).
+                    Mono.just(true)
+                }
+                authCheck.flatMap { allowed ->
+                    if (!allowed) {
+                        Mono.error(SecurityException(
+                            "Requester $requester is not authorized to close session ${event.sessionId}"
+                        ))
+                    } else {
+                        val sql = """UPDATE ASOP_SESSIONS
+                            SET STATUS = 'CLOSED',
+                                CLOSED_AT = :closedAt,
+                                CLOSED_AT_LOCAL = :closedAt,
+                                CLOSED_BY_USER_ID = :closedByUserId
+                            WHERE SESSION_ID = :sessionId AND STATUS <> 'CLOSED'"""
+                        val spec = db.sql(sql)
+                            .bind("closedAt", event.closedAt)
+                            .bind("sessionId", event.sessionId)
+                        val closed: UUID? = event.closedByUserId
+                        val finalSpec = if (closed != null) spec.bind("closedByUserId", closed)
+                        else spec.bindNull("closedByUserId", UUID::class.java)
+                        finalSpec.fetch().rowsUpdated().then()
+                    }
+                }
             }
 
         if (terminalId == null) {

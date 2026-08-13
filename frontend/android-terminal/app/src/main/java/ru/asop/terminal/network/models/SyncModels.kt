@@ -20,6 +20,7 @@ data class AcceptedResponse(
 
 @JsonClass(generateAdapter = true)
 data class SessionOpenRequest(
+    @Json(name = "sessionId") val sessionId: String? = null,        // client UUIDv7 (idempotency, промпт 011 §5)
     @Json(name = "sessionTypeId") val sessionTypeId: String,
     @Json(name = "parentSessionId") val parentSessionId: String? = null,
     @Json(name = "terminalId") val terminalId: String? = null,
@@ -39,7 +40,8 @@ data class SessionCloseRequest(
     @Json(name = "reason") val reason: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "timezone") val timezone: String? = null,
-    @Json(name = "cardId") val cardId: String? = null              // карта-ключ того, кто закрывает смену
+    @Json(name = "cardId") val cardId: String? = null,              // карта-ключ того, кто закрывает смену
+    @Json(name = "closedByUserId") val closedByUserId: String? = null // userId закрывающего (карта-ключ)
 )
 
 @JsonClass(generateAdapter = true)

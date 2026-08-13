@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
 import ru.asop.terminal.nfc.DesfireCardReader
+import ru.asop.terminal.nfc.NfcReaderRefCount
 import ru.asop.terminal.nfc.decodeSectorOne
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,9 +69,13 @@ fun CardReadScreen(
                 null
             )
             viewModel.onReadingStarted()
+            // Промпт 014: общий рефкаунт — поздний onDispose другого NFC-экрана
+            // (SessionFlow/CardActivation) не должен убивать наш reader. Physical
+            // disable только когда никто больше не держит reader.
+            NfcReaderRefCount.acquire()
         }
         onDispose {
-            if (nfcAdapter != null && activity != null) {
+            if (nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
                 nfcAdapter.disableReaderMode(activity)
             }
         }

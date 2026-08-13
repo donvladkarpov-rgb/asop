@@ -7,5 +7,9 @@ data class SessionCloseRequest(
 
     val regionId: UUID? = null,
 
-    val timezone: String? = null
+    val timezone: String? = null,
+
+    // Промпт 011 §12: кто реально закрывает смену (userId из карты-ключа терминала).
+    // Gateway использовал principal.name (CN терминала = hex) — это всегда ноль.
+    val closedByUserId: UUID? = null
 )

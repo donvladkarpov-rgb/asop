@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.nfc.NfcAdapter
 import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -32,7 +34,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -40,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.text.font.FontWeight
 import ru.asop.terminal.nfc.Vcm1CardAuth
+import ru.asop.terminal.nfc.NfcReaderRefCount
 
 /**
  * Промпт 011: shared layout для OpenShift/CloseShift/OpenTrip/CloseTrip.
@@ -67,27 +69,44 @@ fun SessionFlowScreen(
     }
 
     LaunchedEffect(state.submitState) {
-        if (state.submitState == SessionFlowViewModel.SubmitState.ACCEPTED) {
+        if (state.submitState == SessionFlowViewModel.SubmitState.ACCEPTED &&
+            state.kind != SessionFlowViewModel.FlowKind.TAP_PASSENGER
+        ) {
             kotlinx.coroutines.delay(700)
             onConfirmedNavigateBack()
         }
     }
 
-    DisposableEffect(nfcAdapter, activity, state.cardStep, nfcEnabled) {
-        // ReaderMode + ForegroundDispatch держатся АКТИВНЫМИ пока мы в любом
-        // состоянии связанным с картой: IDLE (до первого тапа), WAITING_TAP
-        // (после экрана виден), PROCESSING (mid-read), и ERROR (чтобы пользователь
-        // мог повторно тапнуть после ошибки — red не означает «всё, уходи»).
-        // AUTH_OK — после успешного auth, ReaderMode не нужен (мы ждём подтверждения
-        // кнопки), но не выключаем во избежание race-condition с onPress.
-        val needsActiveReader = nfcEnabled && state.cardStep in setOf(
-            SessionFlowViewModel.CardStep.IDLE,
-            SessionFlowViewModel.CardStep.WAITING_TAP,
-            SessionFlowViewModel.CardStep.PROCESSING,
-            SessionFlowViewModel.CardStep.AUTH_DENIED,
-            SessionFlowViewModel.CardStep.NOT_DRIVER,
-            SessionFlowViewModel.CardStep.NFC_ERROR
-        )
+    // Промпт 014: если рейс уже открыт (перезапуск приложения), переключаемся
+    // в режим ожидания пассажиров, не показывая cascade dropdowns.
+    LaunchedEffect(state.openTrip, state.kind) {
+        android.util.Log.d("SessionFlowScreen", "openTrip=${state.openTrip?.id?.take(12)}, kind=${state.kind}")
+        if (state.openTrip != null && state.kind == SessionFlowViewModel.FlowKind.OPEN_TRIP) {
+            android.util.Log.i("SessionFlowScreen", "auto-switch to TAP_PASSENGER")
+            kotlinx.coroutines.delay(100)
+            viewModel.switchToPassengerMode()
+        }
+    }
+
+    DisposableEffect(nfcAdapter, activity, nfcEnabled) {
+        // Промпт 013: НЕ кейаться на state.cardStep! Раньше при переходе в
+        // PROCESSING DisposableEffect перезапускался: disabled → re-enabled
+        // ReaderMode/ForegroundDispatch ПРЯМО посреди read (между Room-запросом
+        // ключей и mfc.connect()), из-за чего Feitian PiccService терял tag
+        // ("not detect tag !") и connect() падал с IOException 'null'
+        // → READ_FAILED "Исключение при чтении".
+        // Вместо этого держим активный reader всё время жизни экрана: IDLE,
+        // WAITING_TAP, PROCESSING, ERROR (повторный тап после ошибки), даже
+        // AUTH_OK (после успешного auth ждём кнопку; выключение — race).
+        //
+        // Промпт 013b/014: при ре-навигации старый экран может «доживать»
+        // в composition и его onDispose выполняется ПОЗЖЕ (в логах — через ~440мс
+        // после того как новый экран уже заармил reader). Без рефкаунта этот
+        // поздний onDispose вызывал disableReaderMode + disableForegroundDispatch
+        // и убивал читалку нового экрана → tap после повторного входа «ничего не делал».
+        // Решение: общий NfcReaderRefCount (SessionFlow + CardActivation + CardRead) —
+        // disable только когда НИКТО больше не держит reader.
+        val needsActiveReader = nfcEnabled
         if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled && needsActiveReader) {
             Log.i("SessionNFC", "try enableReaderMode on activity=${activity.javaClass.simpleName}")
             try {
@@ -130,9 +149,13 @@ fun SessionFlowScreen(
             } catch (e: Exception) {
                 Log.w("SessionNFC", "enableForegroundDispatch failed: ${e.message}")
             }
+            NfcReaderRefCount.acquire()
         }
         onDispose {
-            if (nfcAdapter != null && activity != null) {
+            // Промпт 013b/014: не вызываем disable без рефкаунта — иначе late onDispose
+            // старого экрана убивает reader активного. Дизейблим только если refcount==0.
+            if (nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
+                Log.i("SessionNFC", "onDispose: refcount==0, disabling reader")
                 try { nfcAdapter.disableReaderMode(activity) } catch (_: Exception) {}
                 try { nfcAdapter.disableForegroundDispatch(activity) } catch (_: Exception) {}
             }
@@ -143,6 +166,12 @@ fun SessionFlowScreen(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
+        if (state.kind == SessionFlowViewModel.FlowKind.TAP_PASSENGER) {
+            // Промпт 014: режим ожидания пассажиров — только круг/галочка/крест + счётчик
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                extraChildren?.invoke(state)
+            }
+        } else {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -264,6 +293,7 @@ fun SessionFlowScreen(
                 }
             }
         }
+        } // end else (non-passenger)
     }
 }
 

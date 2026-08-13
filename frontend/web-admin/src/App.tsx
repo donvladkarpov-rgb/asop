@@ -43,6 +43,7 @@ import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
 import { AsopKeysPage } from './pages/AsopKeys';
 import { ConfigParamsPage } from './pages/ConfigParams';
+import { SessionsPage } from './pages/Sessions';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -119,6 +120,7 @@ function AppRoutes() {
         <Route path="user-regions" element={<UserRegionsPage />} />
         <Route path="asop-keys" element={<AsopKeysPage />} />
         <Route path="config-params" element={<ConfigParamsPage />} />
+        <Route path="sessions" element={<SessionsPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

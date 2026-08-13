@@ -139,18 +139,24 @@ object MifareClassicReader {
                     }
                     Log.d(TAG, "Outer loop pass $pass: starting sector $sector (elapsed ${System.currentTimeMillis() - readStart}ms)")
                     val sr = readSectorBlocks(mfc, sector, candidateKeys, notes)
-                    // КРИТИЧНО: никогда не затираем existing! Если в pass 0 успели прочитать
-                    // sector 1 (4 OK blocks), а в pass 1 auth-fail и sr.blocks пришёл пустым
-                    // (size=0 != existing.size=4) — старый data должен остаться. Иначе мы
-                    // теряем 4 OK блока из-за одного failed retтеста.
+                    // PROMpt 013 merge-fix: старая логика хранила `existing=[]` для сектора,
+                    // упавшего в pass 0 по auth-fail, и НИКОГДА не заменяла его данными из
+                    // pass 1/2 (условие "existing != null → existing" затирало хороший результат
+                    // 4/4 OK пустым списком). Итог: "readSectorBlocks 4/4 OK" + "blocks.size=0",
+                    // VCM1-magic не находился → NOT_VCM1 на рабочей карте.
+                    // Правильное merge: объединяем блочно, хорошее из любого pass побеждает.
                     val merged: List<String> = when {
-                        existing != null && sr.blocks.size == existing.size -> {
+                        sr.blocks.isEmpty() && (existing == null || existing.isEmpty()) -> {
+                            sr.blocks // оба пустые — отдаём пустой, сектор остаётся "(не прочитан)"
+                        }
+                        sr.blocks.isEmpty() -> existing!! // новый pass не прочитал — сохраняем existing
+                        existing == null || existing.isEmpty() -> sr.blocks // existing пуст — берём хороший результат
+                        existing.size == sr.blocks.size -> {
                             existing.zip(sr.blocks).map { (old, new) ->
                                 if (old != "(read failed)") old else new
                             }
                         }
-                        existing != null -> existing  // размер mismatch — pass 1 вернул меньше; НЕ затираем
-                        else -> sr.blocks
+                        else -> sr.blocks // размер mismatch при обоих непустых — берём более свежий
                     }
                     blocksMap[sector] = merged
                     if (merged == sr.blocks || labelsMap[sector] == null) {

@@ -12,4 +12,4 @@ export const getTerminal = (id: string) =>
   apiClient.get<Terminal>(`/terminals/${id}`).then((r) => r.data);
 
 export const blockTerminal = (id: string) =>
-  apiClient.post<Terminal>(`/terminals/${id}/status`, { newStatus: 'BLOCKED' }).then((r) => r.data);
+  apiClient.put<Terminal>(`/terminals/${id}/status`, { newStatus: 'BLOCKED' }).then((r) => r.data);

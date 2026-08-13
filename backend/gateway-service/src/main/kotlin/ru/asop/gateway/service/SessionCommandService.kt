@@ -27,15 +27,18 @@ class SessionCommandService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    private fun ProducerRecord<String, Any>.addContext(regionId: UUID?, timezone: String?) {
+    private fun ProducerRecord<String, Any>.addContext(regionId: UUID?, carrierId: UUID?, timezone: String?) {
         headers().add("X-Region-Id", regionId?.toString()?.encodeToByteArray())
+        headers().add("X-Carrier-Id", carrierId?.toString()?.encodeToByteArray())
         headers().add("X-Timezone", timezone?.encodeToByteArray())
     }
 
     fun openSession(request: SessionOpenRequest, principal: Principal?, seq: Long): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
-            val sessionId = UuidUtils.newId()
+            // Промпт 011 §5: клиент генерирует sessionId для идемпотентности при offline retry.
+            // Используем его, fallback на server-generated только если клиент не передал.
+            val sessionId = request.sessionId ?: UuidUtils.newId()
             val correlationId = UuidUtils.newId()
 
             val event = SessionOpenedEvent(
@@ -49,7 +52,7 @@ class SessionCommandService(
                 cardId = request.cardId,
                 openedByUserId = request.openedByUserId,
                 startedAt = Instant.now(),
-                attributes = request.attributes,
+                attributes = mergeAttributes(request),
                 correlationId = correlationId
             )
 
@@ -61,7 +64,7 @@ class SessionCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-            record.addContext(request.regionId, request.timezone)
+            record.addContext(request.regionId, request.carrierId, request.timezone)
             record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
@@ -88,7 +91,8 @@ class SessionCommandService(
             val event = SessionClosedEvent(
                 sessionId = id,
                 status = "CLOSED",
-                closedByUserId = principal?.name?.let { runCatching { UUID.fromString(it) }.getOrNull() },
+                closedByUserId = request.closedByUserId
+                    ?: principal?.name?.let { runCatching { UUID.fromString(it) }.getOrNull() },
                 reason = request.reason,
                 closedAt = Instant.now(),
                 correlationId = correlationId
@@ -102,7 +106,7 @@ class SessionCommandService(
                 event as Any
             )
             record.headers().add("X-Event-Id", eventId.toString().encodeToByteArray())
-            record.addContext(request.regionId, request.timezone)
+            record.addContext(request.regionId, null, request.timezone)
             record.addTerminalSeq(seq)
 
             eventService.createPending(eventId, KafkaTopic.SESSION_COMMANDS)
@@ -120,4 +124,27 @@ class SessionCommandService(
                 .thenReturn(eventId)
         }
     }
+}
+
+/**
+ * Мержит top-level carrierId/regionId/timezone из запроса в attributes-JSON, чтобы
+ * session-service мог сохранить контекст в ASOP_SESSIONS.ATTRIBUTES (промпт 011 §4:
+ * canClose() зависит от carrierId/regionId в attributes).
+ */
+private fun mergeAttributes(request: SessionOpenRequest): String? {
+    val attrs = mutableMapOf<String, String>()
+    if (!request.attributes.isNullOrBlank()) {
+        runCatching {
+            val node = com.fasterxml.jackson.databind.ObjectMapper().readTree(request.attributes)
+            if (node.isObject) node.fieldNames().forEachRemaining { name ->
+                node.get(name)?.takeIf { it.isTextual }?.asText()?.let { attrs[name] = it }
+            }
+        }
+    }
+    request.carrierId?.let { attrs["carrierId"] = it.toString() }
+    request.regionId?.let { attrs["regionId"] = it.toString() }
+    val tz = request.timezone
+    if (!tz.isNullOrBlank()) attrs["timezone"] = tz
+    if (attrs.isEmpty()) return null
+    return attrs.entries.joinToString(",", "{", "}") { (k, v) -> "\"$k\":\"$v\"" }
 }

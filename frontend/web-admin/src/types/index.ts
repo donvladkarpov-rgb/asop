@@ -22,20 +22,30 @@ export interface Terminal {
 
 export interface Card {
   id: string;
-  uid: string;
-  type: 'MIFARE' | 'bank';
-  /** Технология NFC-карты (промпт 007): "DESFIRE" (по умолчанию) или "CLASSIC". */
-  cardTech?: 'DESFIRE' | 'CLASSIC';
-  status: 'active' | 'blocked' | 'expired';
-  holderName?: string;
-  issuedAt: string;
-  expiresAt?: string;
-  /**
-   * VCM1 bitmask (промпт 008) для CLASSIC карт. Decoded из
-   * ASOP_CARD_MIFARES.IDENTITY_JSON (новый формат `format: VCM1`).
-   * Bit-0 = SUPER_ADMIN, Bit-1 = REGION_ADMIN, etc.
-   */
+  cardTypeId: string;
+  userId?: string;
+  carrierId?: string;
+  isClassic: boolean;
+  isPrimary: boolean;
+  /** VCM1 bitmask (промпт 008) для CLASSIC карт. Decoded из ASOP_CARD_MIFARES.IDENTITY_JSON. */
   bitmask?: number;
+  registeredAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  /** UID NFC-карты (hex). null если карта не MIFARE. */
+  uid?: string;
+  /** Технология NFC-карты (промпт 007): "DESFIRE" | "CLASSIC". */
+  cardTech?: 'DESFIRE' | 'CLASSIC' | string;
+  /** ASOP_CARD_MIFARES.CARD_ROLE (14 ролей АСОП). */
+  cardRole?: string;
+  /** ASOP_CARD_TYPES.CARD_TYPE_NAME. */
+  cardTypeName?: string;
+  /** ФИО владельца из ASOP_USERS. */
+  holderName?: string;
+  validUntil?: string;
+  revokedAt?: string;
+  /** Производный статус: active | blocked | expired | deleted. */
+  status?: 'active' | 'blocked' | 'expired' | 'deleted';
 }
 
 export interface Session {

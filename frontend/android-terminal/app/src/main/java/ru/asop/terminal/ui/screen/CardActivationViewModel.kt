@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -59,7 +60,8 @@ class CardActivationViewModel @Inject constructor(
     private val syncApi: SyncApi,
     private val terminalKeyDao: TerminalKeyDao,
     private val terminalKeyCryptor: TerminalKeyCryptor,
-    private val referenceRowDao: ReferenceRowDao
+    private val referenceRowDao: ReferenceRowDao,
+    private val syncPreferences: ru.asop.terminal.db.SyncPreferences
 ) : ViewModel() {
 
     companion object {
@@ -245,7 +247,18 @@ class CardActivationViewModel @Inject constructor(
 
     // ---------- Шаг 3: NFC ----------
 
+    // Промпт 014: debounce повторных onTagDiscovered (~250мс при hold карты).
+    private var lastTapUidHex: String? = null
+    private var lastTapAtMillis: Long = 0L
+    private val debounceMs = 1500L
+
     fun onTagDiscovered(tag: Tag) {
+        val now = System.currentTimeMillis()
+        val newUid = tag.id.joinToString("") { "%02X".format(it) }
+        if (newUid == lastTapUidHex && (now - lastTapAtMillis) < debounceMs) return
+        lastTapUidHex = newUid
+        lastTapAtMillis = now
+
         val s = _state.value
         if (s.busy || s.finalResult != null) return
         // Step.Success — финальное состояние после успешной прошивки карты.
@@ -309,10 +322,10 @@ class CardActivationViewModel @Inject constructor(
     }
 
     /**
-     * Classic-ветка авторизации (промпт 007 §5):
-     * - перебирает ASOP ключи → auth sector 1;
-     * - читает SAC1 payload → proto → roles.
-     * - factory auth без ASOP означает «карта не активирована».
+     * Classic-ветка авторизации (промпт 014 — fast path):
+     * - перебирает ASOP ключи → auth sector 1 → читает 4 блока VCM1;
+     * - без сканирования всех 16 секторов (было раньше через MifareClassicReader.read(),
+     *   что давало ~6с чтения и многократные писки).
      */
     private fun identifyClassicAuthCard(tag: Tag) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -320,55 +333,54 @@ class CardActivationViewModel @Inject constructor(
             val keys = terminalKeyDao.getActive(30)
             val candidates = keys.map { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
 
-            // Промпт 008: используем ТОТ ЖЕ путь, что и в "Прочитать карту".
-            // MifareClassicReader.read() — единая точка чтения всех 16 секторов,
-            // гарантированно работает на clone-картах (multi-pass с hard-reset и
-            // per-block retry уже отлажены). Не дублируем transceive-flow в CardWriter.
-            val result = MifareClassicReader.read(tag, candidates)
-            val info = result.classicInfo
-            val vcm1 = info?.vcm1Identity
-
-            if (vcm1 != null) {
-                // Берём реальный ASOP-ключ из БД (тот, который auth прошёл)
-                val workingKey = candidates.firstOrNull { it.size >= 12 }
-                    ?: candidateForAuth(candidates)
-                if (workingKey != null) {
-                    val keyA = workingKey.copyOfRange(0, 6)
-                    val keyB = workingKey.copyOfRange(6, 12)
-                    val roles = ru.asop.terminal.activation.AsopCardType
-                        .allRolesForBitmask(vcm1.bitmask).map { it.role }
-                    if (roles.isNotEmpty()) {
-                        finalizeAuth(roles, keyA, keyB, "Classic VCM1 (MifareClassicReader)")
-                        return@launch
+            val mfc = try { MifareClassic.get(tag) } catch (_: Exception) { null }
+            if (mfc == null) {
+                _state.update { it.copy(message = "Карта не MifareClassic") }
+                return@launch
+            }
+            try { mfc.connect() } catch (e: Exception) {
+                _state.update { it.copy(message = "Не удалось подключиться: ${e.message}") }
+                return@launch
+            }
+            try {
+                // Промпт 014: перебираем 24-байтные ASOP-ключи, auth sector 1 → VCM1.
+                val sector = 1
+                val base = mfc.sectorToBlock(sector)
+                for (fullKey in candidates) {
+                    if (fullKey.size < 12) continue
+                    val keyA = fullKey.copyOfRange(0, 6)
+                    val keyB = fullKey.copyOfRange(6, 12)
+                    try { mfc.authenticateSectorWithKeyA(sector, keyA) } catch (_: Exception) { continue }
+                    val blocks = (0 until 3).map { i ->
+                        try { mfc.readBlock(base + i) } catch (_: Exception) { null }
                     }
+                    if (blocks.any { it == null }) continue
+                    val all = blocks.filterNotNull()
+                    val raw = ByteArray(48)
+                    var pos = 0
+                    for (b in all) { b.copyInto(raw, pos); pos += b.size }
+                    try {
+                        val identity = ru.asop.terminal.activation.CardIdentityVcm1.decodeFromBytes(raw)
+                        if (identity != null) {
+                            val roles = ru.asop.terminal.activation.AsopCardType
+                                .allRolesForBitmask(identity.bitmask).map { it.role }
+                            if (roles.isNotEmpty()) {
+                                finalizeAuth(roles, keyA, keyB, "Classic VCM1 (fast)")
+                                return@launch
+                            }
+                        }
+                    } catch (_: Exception) { /* не VCM1 */ }
                 }
-            }
 
-            // Legacy SAC1 fallback. Используем уже прочитанные блоки из ClassicInfo,
-            // без повторной transceive (для clone-карт критично).
-            val sac1Match = tryFindSac1Identity(info?.allBlocks ?: emptyMap())
-            if (sac1Match != null) {
-                val (payload, workingKey) = sac1Match
-                if (workingKey.size >= 12) {
-                    val proto = parseSac1(payload) ?: return@launch
-                    val keyA = workingKey.copyOfRange(0, 6)
-                    val keyB = workingKey.copyOfRange(6, 12)
-                    finalizeAuth(proto.rolesList, keyA, keyB, "Classic SAC1 (MifareClassicReader)")
-                    return@launch
-                }
-            }
-
-            // Ничего не сработало — определяем причину по result.error
             _state.update {
-                if (result.error == "Auth failed with all keys") {
-                    it.copy(message = "Не удалось прочитать авторизующую карту (Classic, неизвестный ключ)")
-                } else {
-                    it.copy(message = "Авторизующая карта не активирована в системе АСОП (Classic)")
-                }
+                it.copy(message = "Авторизующая карта не опознана — ни один ASOP-ключ не подошёл")
+            }
+            } finally {
+                try { mfc.close() } catch (_: Exception) {}
             }
         }
     }
-
+    
     /**
      * Промпт 008: единая точка финализации auth (вызывается из SAC1 / VCM1 веток).
      * Сохраняет operatorRoles + working keys + переходит в Step.TargetCard.
@@ -725,6 +737,12 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
 
             regionByCarrier = readRawMap("asop_carriers") { it.optString("carrierId") to it.optString("regionId") }
 
+            // Промпт 014: автозаполнение региона/перевозчика из настроек терминала
+            // (terminalCarrierId, terminalRegionId из SyncPreferences). Это позволяет
+            // не выбирать их заново при активации: терминал уже зарегистрирован на перевозчика.
+            val terminalRegionId = syncPreferences.regionId.first()
+            val terminalCarrierId = syncPreferences.carrierId.first()
+
             val s = _state.value
             addReceipt("Загружены справочники: ${regions.size} регионов, ${carriers.size} перевозчиков, ${users.size} пользователей")
             _state.update {
@@ -733,12 +751,17 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     carriers = carriers, distributors = distributors,
                     auditServices = auditServices, users = users,
                     step = Step.ReferenceForm,
-                    selectedRegionId = s.previousRegionId ?: s.selectedRegionId,
+                    selectedRegionId = s.previousRegionId ?: terminalRegionId ?: s.selectedRegionId,
                     selectedOrganizerId = s.previousOrganizerId ?: s.selectedOrganizerId,
-                    selectedCarrierId = s.previousCarrierId ?: s.selectedCarrierId,
+                    selectedCarrierId = s.previousCarrierId ?: terminalCarrierId ?: s.selectedCarrierId,
                     selectedDistributorId = s.previousDistributorId ?: s.selectedDistributorId,
                     selectedAuditServiceId = s.previousAuditServiceId ?: s.selectedAuditServiceId,
-                    selectedUserId = s.previousUserId ?: s.selectedUserId
+                    // Промпт 014: если previousUserId==null (fresh card detect, не перевыбор),
+                    // не оставляем старый (возможно невалидный) selectedUserId — заставляем
+                    // оператора явно выбрать пользователя. Иначе сочетался с carrier-фильтром:
+                    // фильтр прятал не-1403 пользователей, но selectedUserId оставался старым
+                    // и кнопка «Активировать» была доступна — оператор жал её не поменяв user.
+                    selectedUserId = s.previousUserId ?: null
                 )
             }
         }
@@ -813,22 +836,42 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
         // Если операторская карта имеет SUPER_ADMIN в operatorRoles — тоже без фильтра.
         if (_state.value.operatorRoles.contains("SUPER_ADMIN")) return _state.value.users
 
+        // Промпт 014: если роль требует перевозчика (needsCarrier=true), а перевозчик не выбран —
+        // не показываем ВСЕХ пользователей (как было раньше), а пустой список с подсказкой.
+        // Иначе оператор может выбрать «левого» пользователя, не привязанного к выбранному carrier,
+        // и карта не сможет открыть смену на терминале этого перевозчика.
+        val st = _state.value
+        val role = st.cardType
+        val needsCarrier = role?.needsCarrier == true
+        val regionId = st.selectedRegionId
+        val carrierId = st.selectedCarrierId
+        if (needsCarrier && carrierId.isNullOrBlank()) return emptyList()
+
         // Промпт 009: каскадная фильтрация. Применяются ВСЕ активные фильтры (AND).
         // - regionId: user в ASOP_USER_REGIONS с этим регионом (если selected)
         // - carrierId: user в ASOP_USER_CARRIERS с этим carrier (если selected)
-        // - Если ни один фильтр не задан — ВСЕ пользователи.
-        val st = _state.value
-        val regionId = st.selectedRegionId
-        val carrierId = st.selectedCarrierId
+        // - Если ни один фильтр не задан — ВСЕ пользователи (для ролей без needsCarrier).
         if (regionId.isNullOrBlank() && carrierId.isNullOrBlank()) return st.users
 
-        return st.users.filter { u ->
-            val matchesRegion = regionId.isNullOrBlank() ||
+        val result = st.users.filter { u ->
+            // Промпт 014: если выбран carrier, проверку по региону пропускаем —
+            // carrier уже implicitly привязан к региону. Иначе пользователи, которые
+            // есть в asop_user_carriers (carrier 1403) но НЕ в asop_user_regions,
+            // отфильтровываются — и оператор видит «Нет пользователей».
+            val skipRegionCheck = !carrierId.isNullOrBlank()
+            val matchesRegion = skipRegionCheck || regionId.isNullOrBlank() ||
                 regionsOfUser[u.id]?.contains(regionId) == true
             val matchesCarrier = carrierId.isNullOrBlank() ||
                 carriersOfUser[u.id]?.contains(carrierId) == true
             matchesRegion && matchesCarrier
         }
+        if (result.isEmpty() && !carrierId.isNullOrBlank()) {
+            Log.d("CardActivationVM", "filteredUsers empty: carrierId=$carrierId, " +
+                "carriersOfUser.size=${carriersOfUser.size}, " +
+                "users.size=${st.users.size}, " +
+                "firstUC=" + carriersOfUser.entries.firstOrNull())
+        }
+        return result
     }
 
     /** Смена региона сбрасывает зависимые подчинённые выборы (промпт 009 cascade). */
@@ -1030,34 +1073,46 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     }
                 } else {
                     // DESFire-flow: signature + identityJson (legacy).
-                    val signResp = syncApi.signCardIdentity(CardIdentitySignRequest(canonical))
+                    // Промпт: если UID уже зарегистрирован на сервере — server-master cardId
+                    // переопределяет клиентский. canonical/подпись должны строиться ПОСЛЕ override,
+                    // иначе на карту прошьётся подпись над устаревшим cardId.
+                    val existingCardId = runCatching {
+                        val resp = syncApi.getCardByUid(uid)
+                        if (resp.isSuccessful) resp.body()?.cardId else null
+                    }.getOrNull()
+                    val finalIdentity: org.json.JSONObject
+                    val finalCanonical: String
+                    if (existingCardId != null) {
+                        identity.put("cardId", existingCardId)
+                        finalIdentity = identity
+                        finalCanonical = canonicalString(finalIdentity)
+                    } else {
+                        finalIdentity = identity
+                        finalCanonical = canonical
+                    }
+
+                    val signResp = syncApi.signCardIdentity(CardIdentitySignRequest(finalCanonical))
                     if (!signResp.isSuccessful) throw IllegalStateException("sign HTTP ${signResp.code()}")
                     val signatureBase64 = signResp.body()?.signatureBase64
                         ?: throw IllegalStateException("пустая подпись")
 
                     _state.update { it.copy(message = "Регистрация на сервере…") }
-                    val existingCardId = runCatching {
-                        val resp = syncApi.getCardByUid(uid)
-                        if (resp.isSuccessful) resp.body()?.cardId else null
-                    }.getOrNull()
-                    if (existingCardId != null) {
-                        identity.put("cardId", existingCardId)
-                    } else {
+                    if (existingCardId == null) {
                         val role = roleEnum.role
                         val activateResp = syncApi.activateCard(
                             CardActivateRequest(
                                 cardIdentity = CardIdentity(
-                                    cardId = identity.optString("cardId"),
-                                    uid = identity.optString("uid"),
-                                    regionId = identity.optString("regionId").takeIf { it.isNotBlank() },
-                                    organizerId = identity.optString("organizerId").takeIf { it.isNotBlank() },
-                                    carrierId = identity.optString("carrierId").takeIf { it.isNotBlank() },
-                                    cardsDistributorId = identity.optString("cardsDistributorId").takeIf { it.isNotBlank() },
-                                    auditServiceId = identity.optString("auditServiceId").takeIf { it.isNotBlank() },
-                                    userId = identity.optString("userId").takeIf { it.isNotBlank() },
+                                    cardId = finalIdentity.optString("cardId"),
+                                    uid = finalIdentity.optString("uid"),
+                                    regionId = finalIdentity.optString("regionId").takeIf { it.isNotBlank() },
+                                    organizerId = finalIdentity.optString("organizerId").takeIf { it.isNotBlank() },
+                                    carrierId = finalIdentity.optString("carrierId").takeIf { it.isNotBlank() },
+                                    cardsDistributorId = finalIdentity.optString("cardsDistributorId").takeIf { it.isNotBlank() },
+                                    auditServiceId = finalIdentity.optString("auditServiceId").takeIf { it.isNotBlank() },
+                                    userId = finalIdentity.optString("userId").takeIf { it.isNotBlank() },
                                     roles = listOf(role)
                                 ),
-                                identityJson = canonical,
+                                identityJson = finalCanonical,
                                 identitySignature = signatureBase64,
                                 operatorRoles = s2.operatorRoles,
                                 authorizedByRoot = s2.authorizedByRoot,
@@ -1070,7 +1125,7 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     _state.update { it.copy(serverRegistered = true, busy = false,
                         message = "Карта зарегистрирована. Приложите карту повторно для прошивки.") }
 
-                    val identityJson = JSONObject(canonical)
+                    val identityJson = JSONObject(finalCanonical)
                     val identityProto = CardIdentityCodec.fromJson(identityJson)
                     pendingWriteProto = identityProto.toByteArray()
                     pendingWriteSignature = signatureBase64

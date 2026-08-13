@@ -91,7 +91,7 @@ interface ReferenceRowDao {
         FROM reference_rows
         WHERE table_name = 'asop_tids'
           AND deleted_at IS NULL
-          AND payload_json LIKE '%"carrierId":"' || :carrierId || '"%'
+          AND payload_json LIKE '%"carrierId": "' || :carrierId || '"%'
     """)
     fun observeTidsByCarrier(carrierId: String): Flow<List<String>>
 
@@ -105,7 +105,7 @@ interface ReferenceRowDao {
         FROM reference_rows
         WHERE table_name = 'asop_vehicles'
           AND deleted_at IS NULL
-          AND payload_json LIKE '%"carrierId":"' || :carrierId || '"%'
+          AND payload_json LIKE '%"carrierId": "' || :carrierId || '"%'
     """)
     fun observeVehiclesByCarrier(carrierId: String): Flow<List<String>>
 
@@ -130,7 +130,7 @@ interface ReferenceRowDao {
         FROM reference_rows
         WHERE table_name = 'asop_paths'
           AND deleted_at IS NULL
-          AND payload_json LIKE '%"routeId":"' || :routeId || '"%'
+          AND payload_json LIKE '%"routeId": "' || :routeId || '"%'
     """)
     fun observePathsByRoute(routeId: String): Flow<List<String>>
 }

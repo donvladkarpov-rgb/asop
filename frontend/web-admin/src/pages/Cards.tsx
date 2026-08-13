@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
-import { getCards } from '../api';
+import { getCards } from '../api/cards';
+import { getCarriers } from '../api/carriers';
 import { formatDate, statusColor } from '../lib/utils';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 
 /**
  * VCM1 (промпт 008) — bitmask → role badges для UI Cards page.
@@ -24,8 +26,8 @@ const VCM1_ROLE_BITS: Array<{ bit: number; label: string; color: string }> = [
   { bit: 13, label: 'PASSENGER_ANONYMOUS', color: 'status-gray' }
 ];
 
-function BitmaskBadges({ bitmask, cardTech }: { bitmask?: number; cardTech?: 'DESFIRE' | 'CLASSIC' }) {
-  if (cardTech !== 'CLASSIC') return <span className="status-badge status-gray">—</span>;
+function BitmaskBadges({ bitmask, isClassic }: { bitmask?: number; isClassic?: boolean }) {
+  if (!isClassic) return <span className="status-badge status-gray">—</span>;
   if (bitmask == null) return <span className="status-badge status-gray">—</span>;
   const tags: ReactElement[] = [];
   let firstBit = -1;
@@ -48,13 +50,23 @@ function BitmaskBadges({ bitmask, cardTech }: { bitmask?: number; cardTech?: 'DE
 }
 
 export function CardsPage() {
+  const { regionId, carrierId } = useGlobalFilter();
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
   const { data, isLoading, error } = useQuery({
-    queryKey: ['cards'],
-    queryFn: () => getCards(),
+    queryKey: ['cards', regionId, carrierId],
+    queryFn: () => getCards({
+      regionId: regionId || undefined,
+      carrierId: carrierId || undefined,
+    }),
   });
 
   if (isLoading) return <div>Загрузка...</div>;
-  if (error) return <div>Ошибка: {error.message}</div>;
+  if (error) return <div>Ошибка: {(error as Error).message}</div>;
+
+  const carrierName = (id?: string) => {
+    if (!id) return '—';
+    return carriers?.find((c) => c.id === id)?.carrierName || id.slice(0, 8) + '…';
+  };
 
   return (
     <div>
@@ -67,18 +79,19 @@ export function CardsPage() {
             <th>UID</th>
             <th>Тип</th>
             <th>Технология</th>
-            <th>Bitmask (роли)</th>
+            <th>Роли (bitmask)</th>
             <th>Владелец</th>
+            <th>Перевозчик</th>
             <th>Статус</th>
-            <th>Выпущена</th>
+            <th>Зарегистрирована</th>
             <th>Истекает</th>
           </tr>
         </thead>
         <tbody>
-          {data?.content.map((card) => (
+          {data?.map((card) => (
             <tr key={card.id}>
-              <td><code>{card.uid}</code></td>
-              <td>{card.type}</td>
+              <td><code>{card.uid || '—'}</code></td>
+              <td>{card.cardTypeName || card.cardRole || '—'}</td>
               <td>
                 {card.cardTech === 'CLASSIC' ? (
                   <span className="status-badge status-orange">Classic</span>
@@ -86,11 +99,16 @@ export function CardsPage() {
                   <span className="status-badge status-green">DESFire</span>
                 )}
               </td>
-              <td><BitmaskBadges bitmask={card.bitmask} cardTech={card.cardTech} /></td>
-              <td>{card.holderName || '—'}</td>
-              <td><span className={`status-badge status-${statusColor(card.status)}`}>{card.status}</span></td>
-              <td>{formatDate(card.issuedAt)}</td>
-              <td>{formatDate(card.expiresAt)}</td>
+              <td><BitmaskBadges bitmask={card.bitmask} isClassic={card.isClassic} /></td>
+              <td>{card.holderName || (card.userId ? card.userId.slice(0, 8) + '…' : '—')}</td>
+              <td>{card.carrierId ? carrierName(card.carrierId) : '—'}</td>
+              <td>
+                <span className={`status-badge status-${statusColor(card.status || 'active')}`}>
+                  {card.status || 'active'}
+                </span>
+              </td>
+              <td>{formatDate(card.registeredAt)}</td>
+              <td>{formatDate(card.validUntil)}</td>
             </tr>
           ))}
         </tbody>

@@ -255,26 +255,27 @@ class MifareClassicCardWriter {
                         }
                     }
                 }
-                // Перейти к следующему сектору — нужен его auth (ключ тот же)
+                // Перейти к следующему сектору — нужен его auth (ключ тот же).
+                // NB: раньше здесь был `mfc.readBlock(trailer следующего сектора)` для
+                // извлечения KeyB — это читало trailer БЕЗ auth следующего сектора и
+                // всегда падало с IOException на защищённых картах (readStream терял
+                // сессию). Теперь просто пробуем те же candidate-ключи.
                 if (sector < LAST_IDENTITY_SECTOR) {
-                    if (!tryAuth(mfc, sector + 1, mfc.readBlock(mfc.sectorToBlock(sector + 1) + mfc.getBlockCountInSector(sector + 1) - 1).copyOfRange(10, 16))) {
-                        // fallback к ASOP-ключам
-                        var ok = false
-                        for (key in candidateKeys) {
-                            if (key.size < 12) continue
-                            if (tryAuth(mfc, sector + 1, key.copyOfRange(0, 6)) ||
-                                tryAuth(mfc, sector + 1, key.copyOfRange(6, 12))
-                            ) { ok = true; break }
+                    var ok = false
+                    for (key in candidateKeys) {
+                        if (key.size < 12) continue
+                        if (tryAuth(mfc, sector + 1, key.copyOfRange(0, 6)) ||
+                            tryAuth(mfc, sector + 1, key.copyOfRange(6, 12))
+                        ) { ok = true; break }
+                    }
+                    if (!ok) {
+                        for (factory in FACTORY_KEYS) {
+                            if (tryAuth(mfc, sector + 1, factory)) { ok = true; break }
                         }
-                        if (!ok) {
-                            for (factory in FACTORY_KEYS) {
-                                if (tryAuth(mfc, sector + 1, factory)) { ok = true; break }
-                            }
-                        }
-                        if (!ok) {
-                            Log.w(TAG, "readStream: auth lost on sector ${sector + 1}")
-                            return null
-                        }
+                    }
+                    if (!ok) {
+                        Log.w(TAG, "readStream: auth lost on sector ${sector + 1}")
+                        return null
                     }
                 }
             }
@@ -428,7 +429,7 @@ class MifareClassicCardWriter {
             } else {
                 FACTORY_KEYS + listOf(NULL_KEY_A) + listOf(workingKeyA, workingKeyB)
             }
-            writeVcm1Internal(mfc, payload, authCandidates, keyA, keyB, isExisting)
+            writeVcm1Internal(mfc, payload, authCandidates, keyA, keyB, isExisting, workingKeyA, workingKeyB)
         }
     }
 
@@ -442,7 +443,9 @@ class MifareClassicCardWriter {
         authKeys: List<ByteArray>,
         keyA: ByteArray,
         keyB: ByteArray,
-        isExisting: Boolean
+        isExisting: Boolean,
+        workingKeyA: ByteArray = keyA,
+        workingKeyB: ByteArray = keyB
     ): Triple<Boolean, List<String>, String?> {
         val steps = mutableListOf<String>()
         val sector = FIRST_IDENTITY_SECTOR
@@ -452,11 +455,14 @@ class MifareClassicCardWriter {
 
         // 1. Auth sector 1
         var authed = false
+        // Карта уже активирована и auth прошёл НАШИМ рабочим ключом → trailer уже содержит
+        // наши ключи, перезаписывать не нужно. Если auth прошёл factory/NULL-key — карта
+        // была не защищена → обязательно пишем trailer (защита).
         var usedExistingKey = false
         for (k in authKeys) {
             if (tryAuth(mfc, sector, k)) {
                 authed = true
-                usedExistingKey = (k == keyA || k == keyB) && k.contentEquals(if (isExisting) workingKeyPlaceholder else k)
+                usedExistingKey = isExisting && (k.contentEquals(workingKeyA) || k.contentEquals(workingKeyB))
                 break
             }
         }
@@ -487,10 +493,10 @@ class MifareClassicCardWriter {
         }
         steps += "VCM1 3 data-блока записано и verified"
 
-        // 3. Write trailer (record-level write) — если NEW (factory auth) or NULL-keyA.
-        // Если карта была уже наша (isExisting=true) И уже использовала тот же keyA/keyB —
-        // skip trailer (ключи не меняются).
-        if (!isExisting) {
+        // 3. Write trailer — если карта была НЕ защищена нашим ключом (factory/NULL auth):
+        //    пишем наши ключи, чтобы защитить sector 1. Если auth прошёл РАБОЧИМ ключом
+        //    (карта уже наша, trailer уже содержит те же ключи) — skip.
+        if (!usedExistingKey) {
             val trailer = ByteArray(BLOCK_SIZE)
             System.arraycopy(keyA, 0, trailer, 0, 6)
             System.arraycopy(ACCESS_BITS, 0, trailer, 6, 4)
@@ -510,7 +516,7 @@ class MifareClassicCardWriter {
             steps += "trailer written + reauth OK newKey"
             Log.d(TAG, "writeVcm1: trailer written, reauth OK newKey")
         } else {
-            steps += "trailer skipped (isExisting=true)"
+            steps += "trailer skipped (карта уже защищена нашим ключом)"
             Log.d(TAG, "writeVcm1: skipping trailer (card already has ASOP trailer)")
         }
 
@@ -615,8 +621,6 @@ class MifareClassicCardWriter {
             runCatching { mfc.close() }
         }
     }
-
-    private val workingKeyPlaceholder: ByteArray = byteArrayOf(0)
 
     /** Probe-read: читаем первый блок сектора для верификации что auth был реальный. */
     private fun tryReadFirstBlock(mfc: MifareClassic, sector: Int, base: Int): ByteArray? = try {

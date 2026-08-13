@@ -662,18 +662,18 @@ class CardActivationService(
          */
         private val ROLE_BY_ORDINAL = listOf(
             "SUPER_ADMIN",          // bit 0
-            "REGION_ADMIN",         // bit 1
-            "ORGANIZER_ADMIN",      // bit 2
-            "CARRIER_ADMIN",        // bit 3
-            "DISTRIBUTOR_ADMIN",    // bit 4
-            "KRS_ADMIN",            // bit 5
-            "CARRIER_DISPATCHER",   // bit 6
-            "DISTRIBUTOR_DISPATCHER", // bit 7
-            "KRS_DISPATCHER",       // bit 8
-            "DRIVER",               // bit 9
-            "KRS_FOREMAN",          // bit 10
-            "KRS_CONTROLLER",        // bit 11
-            "PASSENGER",            // bit 12
+            "PASSENGER",            // bit 1
+            "REGION_ADMIN",         // bit 2
+            "ORGANIZER_ADMIN",      // bit 3
+            "CARRIER_ADMIN",        // bit 4
+            "DISTRIBUTOR_ADMIN",    // bit 5
+            "KRS_ADMIN",            // bit 6
+            "CARRIER_DISPATCHER",   // bit 7
+            "DISTRIBUTOR_DISPATCHER", // bit 8
+            "KRS_DISPATCHER",       // bit 9
+            "DRIVER",               // bit 10
+            "KRS_FOREMAN",          // bit 11
+            "KRS_CONTROLLER",        // bit 12
             "PASSENGER_ANONYMOUS"   // bit 13
         )
 

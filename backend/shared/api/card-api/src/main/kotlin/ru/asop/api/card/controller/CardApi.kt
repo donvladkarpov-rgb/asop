@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.card.dto.request.CardActivateRequest
 import ru.asop.api.card.dto.request.CardRegisterRequest
@@ -18,6 +20,19 @@ import java.util.UUID
 
 @RequestMapping("/api/v1/cards")
 interface CardApi {
+
+    /**
+     * Список карт (JOIN ASOP_CARDS + ASOP_CARD_MIFARES + ASOP_CARD_TYPES + ASOP_USERS).
+     * Доступен web-admin через gateway sync-proxy (GET), используется без Kafka.
+     */
+    @GetMapping
+    fun listCards(
+        @RequestParam(required = false) regionId: UUID?,
+        @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false) userId: UUID?,
+        @RequestParam(required = false, defaultValue = "false") includeDeleted: Boolean,
+        @RequestParam(required = false, defaultValue = "500") limit: Int
+    ): Flux<CardResponse>
 
     @PostMapping("/register")
     fun registerCard(

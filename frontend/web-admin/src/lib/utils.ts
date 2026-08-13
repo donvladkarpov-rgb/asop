@@ -13,6 +13,7 @@ export function statusColor(status: string): string {
     active: 'green',
     inactive: 'gray',
     blocked: 'red',
+    deleted: 'red',
     open: 'green',
     closed: 'gray',
     expired: 'orange',

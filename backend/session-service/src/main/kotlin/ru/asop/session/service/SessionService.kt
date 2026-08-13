@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.stereotype.Service
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.session.dto.request.SessionOpenRequest
 import ru.asop.api.session.dto.request.SessionCloseRequest
@@ -37,7 +38,7 @@ class SessionService(
         val now = Instant.now()
         val attrs = mergeAttributes(request.attributes, request.carrierId, request.regionId, request.timezone)
         val entity = SessionEntity(
-            sessionId = UuidUtils.newId(),
+            sessionId = request.sessionId ?: UuidUtils.newId(),
             sessionTypeId = request.sessionTypeId,
             parentSessionId = request.parentSessionId,
             terminalId = request.terminalId,
@@ -56,22 +57,59 @@ class SessionService(
     fun close(id: UUID, request: SessionCloseRequest): Mono<SessionResponse> {
         val now = Instant.now()
         return sessionRepository.findById(id)
+            .switchIfEmpty(Mono.error(IllegalStateException("Session not found: $id")))
             .flatMap { existing ->
                 if (existing.status == "CLOSED") {
                     Mono.error(IllegalStateException("Session already closed: $id"))
                 } else {
-                    val updated = existing.copy(
-                        status = "CLOSED",
-                        closedAt = now,
-                        closedAtLocal = now
-                    )
-                    sessionRepository.save(updated).map { it.toResponse() }
+                    val requester = request.closedByUserId
+                    val auth = if (requester != null) canClose(id, requester) else Mono.just(false)
+                    auth.flatMap { allowed ->
+                        if (!allowed) {
+                            Mono.error(IllegalStateException(
+                                "Requester $requester is not authorized to close session $id"
+                            ))
+                        } else {
+                            val updated = existing.copy(
+                                status = "CLOSED",
+                                closedAt = now,
+                                closedAtLocal = now
+                            )
+                            sessionRepository.save(updated).map { it.toResponse() }
+                        }
+                    }
                 }
             }
     }
 
     fun getById(id: UUID): Mono<SessionResponse> {
         return sessionRepository.findById(id).map { it.toResponse() }
+    }
+
+    /** Список смен (web-admin): по умолчанию последние 200, фильтр по терминалу. */
+    fun list(terminalId: UUID?): Flux<SessionResponse> {
+        val sql = StringBuilder(
+            "SELECT * FROM ASOP_SESSIONS WHERE 1=1"
+        )
+        if (terminalId != null) sql.append(" AND TERMINAL_ID = :terminalId")
+        sql.append(" ORDER BY STARTED_AT DESC LIMIT 200")
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql.toString())
+        if (terminalId != null) spec = spec.bind("terminalId", terminalId)
+        return spec.map { row, _ ->
+            SessionResponse(
+                id = row.get("SESSION_ID", UUID::class.java)!!,
+                sessionTypeId = row.get("SESSION_TYPE_ID", UUID::class.java)!!,
+                parentSessionId = row.get("PARENT_SESSION_ID", UUID::class.java),
+                terminalId = row.get("TERMINAL_ID", UUID::class.java),
+                pathId = row.get("PATH_ID", UUID::class.java),
+                vehicleId = row.get("VEHICLE_ID", UUID::class.java),
+                status = row.get("STATUS", String::class.java)!!,
+                startedAt = row.get("STARTED_AT", Instant::class.java)!!,
+                closedAt = row.get("CLOSED_AT", Instant::class.java),
+                createdAt = row.get("STARTED_AT", Instant::class.java)!!,
+                updatedAt = row.get("STARTED_AT", Instant::class.java)!!
+            )
+        }.all()
     }
 
     /**
@@ -89,42 +127,37 @@ class SessionService(
     fun canClose(sessionId: UUID, requesterId: UUID): Mono<Boolean> {
         return sessionRepository.findById(sessionId)
             .flatMap { session ->
-                val attrs = parseAttributes(session.attributes)
-                val sessionCarrierId = attrs["carrierId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-                if (sessionCarrierId != null) {
-                    log.debug("Checking canClose: sessionCarrierId={}, requesterId={}", sessionCarrierId, requesterId)
+                // Промпт 011 §4: открыватель (DRIVER) всегда может закрыть свою смену.
+                if (session.openedByUserId == requesterId) {
+                    Mono.just(true)
+                } else {
+                    val attrs = parseAttributes(session.attributes)
+                    val sessionCarrierId = attrs["carrierId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                    val sessionRegionId = attrs["regionId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+                    if (sessionCarrierId != null) {
+                        log.debug("Checking canClose: sessionCarrierId={}, requesterId={}", sessionCarrierId, requesterId)
+                    }
+                    // Delphi-style cascade через UserRolesAndCarriers: либо carrier, либо organizer/region, либо root.
+                    isRequesterInSessionScope(requesterId, sessionCarrierId, sessionRegionId)
                 }
-                // Delphi-style cascade через UserRolesAndCarriers: либо carrier, либо organizer/region, либо root.
-                isRequesterInSessionScope(requesterId, sessionCarrierId, attrs["regionId"]?.let { runCatching { UUID.fromString(it) }.getOrNull() })
             }
             .defaultIfEmpty(false)
     }
 
     /**
-     * Реализация промпт 011 §4 assert. SQL — cascade query:
-     * ASOP_USERS.OPENED_BY = requesterId ∧
-     *   (requesterId ∈ asop_user_carriers.carrier_id == session.carrier_id)
-     *   ∨ (requesterId ∈ asop_user_regions.region_id == session.region_id)  [если перевозчик имеет region]
-     *   ∨ requesterId в ADMIN/SUPER_ADMIN role.
+     * Реализация промпт 011 §4 assert без scope-escape.
+     * Root (ADMIN/SUPER_ADMIN) — глобальный доступ (задумано).
+     * Для всех остальных ролей requester обязан быть привязан к scope сессии:
+     *   - carrier-scope роли (DRIVER, CARRIER_DISPATCHER, KRS_DISPATCHER, CARRIER_ADMIN, ORGANIZER_ADMIN):
+     *     requester ∈ asop_user_carriers.carrier_id == session.carrier_id
+     *   - region-scope роли (REGION_ADMIN, ORGANIZER_ADMIN, KRS_ADMIN):
+     *     requester ∈ asop_user_regions.region_id == session.region_id
+     * Раньше `OR EXISTS (role IN ...)` был глобальным — любой REGION_ADMIN любого региона
+     * мог закрыть чужую смену (scope-escape). Теперь роль проверяется ТОЛЬКО внутри линка.
      */
     private fun isRequesterInSessionScope(requesterId: UUID, sessionCarrierId: UUID?, sessionRegionId: UUID?): Mono<Boolean> {
-        if (sessionCarrierId == null && sessionRegionId == null) {
-            // Может закрыть только ADMIN/SUPER_ADMIN.
-            return db.sql("""
-                SELECT 1 FROM ASOP_USER_ROLES ur
-                JOIN ASOP_ROLES r ON r.role_id = ur.role_id
-                WHERE ur.user_id = :requesterId
-                  AND r.role_code IN ('ADMIN','SUPER_ADMIN')
-                LIMIT 1
-            """)
-                .bind("requesterId", requesterId)
-                .fetch().one().map { true }.defaultIfEmpty(false)
-        }
-        val sql = StringBuilder("""
-            WITH session_carrier AS (
-              SELECT :sessionCarrierId::uuid AS carrier_id,
-                     :sessionRegionId::uuid AS region_id
-            ), requester_scope AS (
+        val sql = """
+            WITH requester_scope AS (
               SELECT uc.carrier_id AS cid, NULL::uuid AS rid
               FROM ASOP_USER_CARRIERS uc WHERE uc.user_id = :requesterId
               UNION ALL
@@ -133,19 +166,38 @@ class SessionService(
             )
             SELECT 1
             FROM requester_scope rs
-            WHERE (
-              (:sessionCarrierId::uuid IS NOT NULL AND rs.cid = :sessionCarrierId::uuid)
-              OR (:sessionRegionId::uuid IS NOT NULL AND rs.rid = :sessionRegionId::uuid)
-            )
-              OR EXISTS (
+            WHERE
+              -- Root: глобальный доступ (только ADMIN/SUPER_ADMIN).
+              EXISTS (
                 SELECT 1 FROM ASOP_USER_ROLES ur
                 JOIN ASOP_ROLES r ON r.role_id = ur.role_id
-                WHERE ur.user_id = :requesterId
-                  AND r.role_code IN ('ADMIN','SUPER_ADMIN','REGION_ADMIN','ORGANIZER_ADMIN','CARRIER_ADMIN','CARRIER_DISPATCHER','KRS_DISPATCHER')
+                WHERE ur.user_id = :requesterId AND r.role_code IN ('ADMIN','SUPER_ADMIN')
+              )
+              OR
+              -- Carrier-scope: линк на перевозчика сессии + роль из carrier-множества.
+              (
+                :sessionCarrierId IS NOT NULL AND rs.cid = :sessionCarrierId
+                AND EXISTS (
+                  SELECT 1 FROM ASOP_USER_ROLES ur
+                  JOIN ASOP_ROLES r ON r.role_id = ur.role_id
+                  WHERE ur.user_id = :requesterId
+                    AND r.role_code IN ('DRIVER','CARRIER_DISPATCHER','KRS_DISPATCHER','CARRIER_ADMIN','ORGANIZER_ADMIN')
+                )
+              )
+              OR
+              -- Region-scope: линк на регион сессии + роль из region-множества.
+              (
+                :sessionRegionId IS NOT NULL AND rs.rid = :sessionRegionId
+                AND EXISTS (
+                  SELECT 1 FROM ASOP_USER_ROLES ur
+                  JOIN ASOP_ROLES r ON r.role_id = ur.role_id
+                  WHERE ur.user_id = :requesterId
+                    AND r.role_code IN ('REGION_ADMIN','ORGANIZER_ADMIN','KRS_ADMIN')
+                )
               )
             LIMIT 1
-        """)
-        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql.toString())
+        """
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
             .bind("requesterId", requesterId)
         spec = if (sessionCarrierId != null) spec.bind("sessionCarrierId", sessionCarrierId)
         else spec.bindNull("sessionCarrierId", UUID::class.java)

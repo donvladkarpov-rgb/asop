@@ -57,6 +57,7 @@ class SessionFlowViewModel @Inject constructor(
     private val terminalKeyCryptor: TerminalKeyCryptor,
     private val syncPreferences: SyncPreferences,
     @Suppress("unused") private val syncApi: SyncApi,
+    private val workScheduler: ru.asop.terminal.worker.WorkScheduler,
     private val terminalDao: ReferenceRowDao = referenceRowDao
 ) : AndroidViewModel(application) {
 
@@ -93,6 +94,9 @@ class SessionFlowViewModel @Inject constructor(
         val openShift: SessionEntity? = null,
         val openTrip: SessionEntity? = null,
         val tripPayments: List<TripPaymentEntity> = emptyList(),
+        // Промпт 014: feedback для экрана ожидания пассажиров
+        val validationResult: Boolean? = null,
+        val validationResultTime: Long = 0L,
         // Промпт 011: OpenTrip cascade picker (TID → Vehicle → Route → Path)
         val tripTidId: String? = null,
         val tripTidLabel: String? = null,
@@ -101,7 +105,9 @@ class SessionFlowViewModel @Inject constructor(
         val tripRouteId: String? = null,
         val tripRouteLabel: String? = null,
         val tripPathId: String? = null,
-        val tripPathLabel: String? = null
+        val tripPathLabel: String? = null,
+        // Промпт 011: подпись для ShiftTripInformer (вернее — имена, а не ID).
+        val informerText: String? = null
     ) {
         val canConfirmOpenShift: Boolean
             get() = cardStep == CardStep.AUTH_OK && submitState == SubmitState.IDLE
@@ -150,6 +156,37 @@ class SessionFlowViewModel @Inject constructor(
         else terminalDao.observePathsByRoute(route)
     }
 
+    private var passengerModeEnabled = false
+
+    /** Промпт 014: переключение в режим приёма пассажиров после открытия рейса. */
+    fun switchToPassengerMode() {
+        if (passengerModeEnabled) return
+        passengerModeEnabled = true
+        _state.update {
+            it.copy(
+                kind = FlowKind.TAP_PASSENGER,
+                cardStep = CardStep.IDLE,
+                submitState = SubmitState.IDLE,
+                infoMessage = "Рейс активен. Ждите карты пассажиров",
+                cardTap = null
+            )
+        }
+    }
+
+    fun exitPassengerMode() {
+        // НЕ сбрасываем passengerModeEnabled — он защищает auto-switch LaunchedEffect
+        // от повторного входа при изменении kind с OPEN_TRIP → TAP_PASSENGER.
+        _state.update {
+            it.copy(
+                kind = FlowKind.OPEN_TRIP,
+                submitState = SubmitState.ACCEPTED,
+                cardStep = CardStep.IDLE,
+                infoMessage = "Режим ожидания завершён. Рейс активен.",
+                cardTap = null
+            )
+        }
+    }
+
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
@@ -176,6 +213,7 @@ class SessionFlowViewModel @Inject constructor(
         _state.update {
             it.copy(
                 kind = kind,
+                submitState = SubmitState.IDLE,
                 cardStep = CardStep.WAITING_TAP,
                 cardTap = null,
                 errorMessage = null,
@@ -195,11 +233,13 @@ class SessionFlowViewModel @Inject constructor(
         viewModelScope.launch {
             sessionDao.observeCurrentOpenShift().collect { shift ->
                 _state.update { it.copy(openShift = shift) }
+                refreshInformer()
             }
         }
         viewModelScope.launch {
             sessionDao.observeCurrentOpenTrip().collect { trip ->
                 _state.update { it.copy(openTrip = trip) }
+                refreshInformer()
                 tripPaymentsJob?.cancel()
                 if (trip != null) {
                     tripPaymentsJob = viewModelScope.launch {
@@ -209,6 +249,33 @@ class SessionFlowViewModel @Inject constructor(
                     _state.update { it.copy(tripPayments = emptyList()) }
                 }
             }
+        }
+    }
+
+    /** Промпт 011: informer на MainScreen показывает ИМЕНА (а не UUID). */
+    private fun refreshInformer() {
+        viewModelScope.launch {
+            val s = _state.value
+            val shift = s.openShift
+            val trip = s.openTrip
+            val text = when {
+                trip != null && shift != null -> {
+                    val driver = if (shift.openedByUserId != null)
+                        lookupUserFullName(shift.openedByUserId) ?: shift.openedByUserId.take(8)
+                    else "—"
+                    val vehicle = trip.vehicleId?.let { lookupVehicleLabel(it) } ?: "—"
+                    val path = trip.pathId?.let { lookupPathLabel(it) } ?: "—"
+                    "Рейс открыт: водитель=$driver, ТС=$vehicle, маршрут=$path"
+                }
+                shift != null -> {
+                    val driver = if (shift.openedByUserId != null)
+                        lookupUserFullName(shift.openedByUserId) ?: shift.openedByUserId.take(8)
+                    else "—"
+                    "Смена открыта: водитель=$driver"
+                }
+                else -> "Смена закрыта. Откройте смену через меню."
+            }
+            _state.update { it.copy(informerText = text) }
         }
     }
 
@@ -228,6 +295,7 @@ class SessionFlowViewModel @Inject constructor(
             val identity = vcm1Bytes?.let { CardIdentityVcm1.decodeFromBytes(it) }
             if (identity == null) {
                 _state.update { it.copy(cardStep = CardStep.AUTH_DENIED, errorMessage = "Карта не распознана (VCM1)") }
+                ru.asop.terminal.nfc.TonePlayer.errorBeep()
                 return
             }
             val userId = identity.entity?.id?.toString()
@@ -236,6 +304,7 @@ class SessionFlowViewModel @Inject constructor(
 
             if (userId.isNullOrEmpty()) {
                 _state.update { it.copy(cardStep = CardStep.AUTH_DENIED, errorMessage = "Карта не активирована") }
+                ru.asop.terminal.nfc.TonePlayer.errorBeep()
                 return
             }
 
@@ -252,6 +321,7 @@ class SessionFlowViewModel @Inject constructor(
                         errorMessage = "Роль карты не позволяет открывать/закрывать смены"
                     )
                 }
+                ru.asop.terminal.nfc.TonePlayer.errorBeep()
                 return
             }
 
@@ -264,6 +334,7 @@ class SessionFlowViewModel @Inject constructor(
                             errorMessage = "Пользователь $userId не привязан к перевозчику"
                         )
                     }
+                    ru.asop.terminal.nfc.TonePlayer.errorBeep()
                     return@launch
                 }
                 val fullName = lookupUserFullName(userId) ?: userId
@@ -276,9 +347,11 @@ class SessionFlowViewModel @Inject constructor(
                     tapTimestamp = System.currentTimeMillis()
                 )
                 _state.update { it.copy(cardStep = CardStep.AUTH_OK, cardTap = tap) }
+                ru.asop.terminal.nfc.TonePlayer.tapBeep()
             }
         } catch (e: Exception) {
             _state.update { it.copy(cardStep = CardStep.AUTH_DENIED, errorMessage = "Ошибка парсинга карты: ${e.message}") }
+            ru.asop.terminal.nfc.TonePlayer.errorBeep()
         }
     }
 
@@ -326,6 +399,7 @@ class SessionFlowViewModel @Inject constructor(
                 sessionDao.insert(entity)
 
                 val payload = SessionOpenRequest(
+                    sessionId = sessionId,
                     sessionTypeId = shiftTypeId,
                     parentSessionId = null,
                     terminalId = terminalId,
@@ -350,6 +424,7 @@ class SessionFlowViewModel @Inject constructor(
                         seq = syncPreferences.nextSeq())
                 )
                 syncPreferences.setLastCardTap(null, tap.cardId)
+                workScheduler.enqueueOneShotSync()
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -417,6 +492,7 @@ class SessionFlowViewModel @Inject constructor(
                 sessionDao.insert(entity)
 
                 val payload = SessionOpenRequest(
+                    sessionId = tripId,
                     sessionTypeId = tripTypeId,
                     parentSessionId = shift.id,
                     terminalId = shift.terminalId,
@@ -440,12 +516,22 @@ class SessionFlowViewModel @Inject constructor(
                    ,
                         seq = syncPreferences.nextSeq())
                 )
+                workScheduler.enqueueOneShotSync()
                 _state.update {
                     it.copy(
-                        submitState = SubmitState.ACCEPTED,
-                        infoMessage = "Рейс открыт: tid=${tidId?.take(8) ?: "—"}, vehicle=${vehicleId?.take(8) ?: "—"}",
+                        submitState = SubmitState.IDLE,
+                        kind = FlowKind.TAP_PASSENGER,
+                        infoMessage = "Рейс открыт. Ждите карты пассажиров",
                         cardStep = CardStep.IDLE,
-                        cardTap = null
+                        cardTap = null,
+                        tripTidId = null,
+                        tripTidLabel = null,
+                        tripVehicleId = null,
+                        tripVehicleLabel = null,
+                        tripRouteId = null,
+                        tripRouteLabel = null,
+                        tripPathId = null,
+                        tripPathLabel = null,
                     )
                 }
             } catch (e: Exception) {
@@ -486,7 +572,8 @@ class SessionFlowViewModel @Inject constructor(
                     reason = null,
                     regionId = shift.regionId,
                     timezone = shift.timezone,
-                    cardId = tap.cardId
+                    cardId = tap.cardId,
+                    closedByUserId = tap.userId
                 )
                 pendingEventDao.insert(
                     PendingEventEntity(
@@ -544,7 +631,8 @@ class SessionFlowViewModel @Inject constructor(
                     reason = null,
                     regionId = trip.regionId,
                     timezone = trip.timezone,
-                    cardId = tap.cardId
+                    cardId = tap.cardId,
+                    closedByUserId = tap.userId
                 )
                 pendingEventDao.insert(
                     PendingEventEntity(
@@ -621,15 +709,39 @@ class SessionFlowViewModel @Inject constructor(
                    ,
                         seq = syncPreferences.nextSeq())
                 )
+                workScheduler.enqueueOneShotSync()
+                val resultTime = System.currentTimeMillis()
                 _state.update {
                     it.copy(
-                        submitState = SubmitState.ACCEPTED,
+                        submitState = SubmitState.IDLE,
                         infoMessage = "Валидация зафиксирована",
-                        cardStep = CardStep.IDLE
+                        cardStep = CardStep.IDLE,
+                        validationResult = true,
+                        validationResultTime = resultTime
                     )
                 }
+                kotlinx.coroutines.delay(1200)
+                _state.update {
+                    if (it.validationResultTime == resultTime) {
+                        it.copy(validationResult = null, validationResultTime = 0L)
+                    } else it
+                }
             } catch (e: Exception) {
-                _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Ошибка: ${e.message}") }
+                val resultTime = System.currentTimeMillis()
+                _state.update {
+                    it.copy(
+                        submitState = SubmitState.IDLE,
+                        validationResult = false,
+                        validationResultTime = resultTime,
+                        errorMessage = "Ошибка валидации: ${e.message}"
+                    )
+                }
+                kotlinx.coroutines.delay(1200)
+                _state.update {
+                    if (it.validationResultTime == resultTime) {
+                        it.copy(validationResult = null, validationResultTime = 0L)
+                    } else it
+                }
             }
         }
     }
@@ -670,7 +782,8 @@ class SessionFlowViewModel @Inject constructor(
     fun onTagDiscovered(tag: Tag) {
         try {
             android.util.Log.i("SessionFlowVM", "onTagDiscovered: techList=${tag.techList.joinToString(",")}, uid=${tag.id.joinToString("") { "%02X".format(it) }}")
-            ru.asop.terminal.nfc.TonePlayer.tapBeep()
+            // Промпт 014: писк убран отсюда — не сигнализируем «карта обнаружена»,
+            // а пищим только после завершения операции (AUTH_OK / AUTH_DENIED).
         } catch (_: Exception) { }
         val now = System.currentTimeMillis()
         val newUidHex = tag.id.joinToString("") { "%02X".format(it) }
@@ -709,20 +822,50 @@ class SessionFlowViewModel @Inject constructor(
                             "VCM1 auth OK: uid=${outcome.uidHex}, " +
                                 "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
                                 "cardId=${outcome.identity.cardId}")
-                        onCardTappedForAuth(outcome.uidHex, outcome.rawVcm1Bytes)
+                        android.util.Log.d("SessionFlowVM", "VCM1 OK handler: kind=${_state.value.kind}")
+                        if (_state.value.kind == FlowKind.TAP_PASSENGER) {
+                            val roles = ru.asop.terminal.activation.AsopCardType
+                                .allRolesForBitmask(outcome.identity.bitmask)
+                            val isDriver = roles.any {
+                                it == ru.asop.terminal.activation.AsopCardType.DRIVER ||
+                                it == ru.asop.terminal.activation.AsopCardType.CARRIER_DISPATCHER ||
+                                it == ru.asop.terminal.activation.AsopCardType.KRS_DISPATCHER
+                            }
+                            if (isDriver) {
+                                ru.asop.terminal.nfc.TonePlayer.tapBeep()
+                                exitPassengerMode()
+                            } else {
+                                recordTripPayment(
+                                    cardId = outcome.identity.cardId?.toString(),
+                                    tapUserId = outcome.identity.entity?.id?.toString()
+                                )
+                            }
+                        } else {
+                            onCardTappedForAuth(outcome.uidHex, outcome.rawVcm1Bytes)
+                        }
                     }
                     is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
                         android.util.Log.w("SessionFlowVM",
                             "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
                                 "details=${outcome.details}")
-                        // NOT_DRIVER → формируется ниже на основе роли в identity; здесь же
-                        // уровень чтения карты. AUTH_FAILED / NOT_VCM1 / NOT_MIFARE_CLASSIC / READ_FAILED — NFC_ERROR.
                         ru.asop.terminal.nfc.TonePlayer.errorBeep()
+                        val failTime = System.currentTimeMillis()
                         _state.update {
-                            it.copy(
+                            val s = it.copy(
                                 cardStep = CardStep.NFC_ERROR,
                                 errorMessage = outcome.details
                             )
+                            if (s.kind == FlowKind.TAP_PASSENGER) {
+                                s.copy(validationResult = false, validationResultTime = failTime)
+                            } else s
+                        }
+                        if (_state.value.kind == FlowKind.TAP_PASSENGER) {
+                            kotlinx.coroutines.delay(1200)
+                            _state.update {
+                                if (it.validationResultTime == failTime) {
+                                    it.copy(validationResult = null, validationResultTime = 0L)
+                                } else it
+                            }
                         }
                     }
                 }
@@ -738,7 +881,6 @@ class SessionFlowViewModel @Inject constructor(
             }
         }
     }
-
     private suspend fun lookupUserFullName(userId: String): String? {
         return try {
             val rowJson = referenceRowDao.rawUserByIdRow(userId) ?: return null
@@ -746,6 +888,31 @@ class SessionFlowViewModel @Inject constructor(
             val first = obj.optString("firstName", "")
             val last = obj.optString("lastName", "")
             if (first.isNotEmpty() && last.isNotEmpty()) "$first $last" else first.ifEmpty { null }
+        } catch (e: Exception) { null }
+    }
+
+    /** Подпись ТС из справочника vehicles (reference_rows) по UUID. */
+    private suspend fun lookupVehicleLabel(vehicleId: String): String? {
+        return lookupLabelFromTable("vehicles", vehicleId, "name", "registrationNumber", "plateNumber")
+    }
+
+    /** Подпись маршрута/пути из справочника по UUID. */
+    private suspend fun lookupPathLabel(pathId: String): String? {
+        return lookupLabelFromTable("paths", pathId, "name", "code", "routeName")
+    }
+
+    /** Ищет payload-строку по id в reference_rows и возвращает первое непустое поле-метку. */
+    private suspend fun lookupLabelFromTable(table: String, id: String, vararg fields: String): String? {
+        return try {
+            val row = referenceRowDao.getActiveByTable(table).firstOrNull { row ->
+                val json = org.json.JSONObject(row.payloadJson)
+                json.optString("id") == id || json.optString("pathId") == id || json.optString("vehicleId") == id
+            } ?: return null
+            val obj = org.json.JSONObject(row.payloadJson)
+            fields.firstNotNullOfOrNull { f ->
+                val v = obj.optString(f)
+                v.takeIf { it.isNotBlank() }
+            }
         } catch (e: Exception) { null }
     }
 

@@ -436,11 +436,13 @@ private fun ShiftTripInformer(state: SessionFlowViewModel.State) {
         shift != null -> androidx.compose.ui.graphics.Color(0xFFFFE8C5) // light amber
         else -> MaterialTheme.colorScheme.surfaceVariant
     }
-    val msg = when {
-        trip != null && shift != null -> "Рейс открыт: vehicle=${trip.vehicleId?.take(8) ?: "—"}, path=${trip.pathId?.take(8) ?: "—"}"
-        shift != null -> "Смена открыта: ${shift.openedByUserId?.take(8) ?: "—"}"
-        else -> "Смена закрыта. Откройте смену через меню."
-    }
+    // Промпт 011: informer использует подпись из ViewModel (имена, а не UUID).
+    val msg = state.informerText
+        ?: when {
+            trip != null && shift != null -> "Рейс открыт: vehicle=${trip.vehicleId?.take(8) ?: "—"}, path=${trip.pathId?.take(8) ?: "—"}"
+            shift != null -> "Смена открыта: ${shift.openedByUserId?.take(8) ?: "—"}"
+            else -> "Смена закрыта. Откройте смену через меню."
+        }
     Surface(
         tonalElevation = 3.dp,
         modifier = Modifier.fillMaxWidth(),

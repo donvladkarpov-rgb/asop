@@ -2,6 +2,7 @@ package ru.asop.session.controller
 
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.RestController
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.session.controller.SessionApi
 import ru.asop.api.session.dto.request.SessionOpenRequest
@@ -36,5 +37,9 @@ class SessionController(
     override fun getSession(id: UUID): Mono<ResponseEntity<SessionResponse>> {
         return sessionService.getById(id)
             .map { ResponseEntity.ok(it) }
+    }
+
+    override fun listSessions(terminalId: UUID?): Flux<SessionResponse> {
+        return sessionService.list(terminalId)
     }
 }

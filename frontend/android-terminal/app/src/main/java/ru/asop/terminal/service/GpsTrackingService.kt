@@ -77,8 +77,15 @@ class GpsTrackingService : android.app.Service() {
                 val shift = sessionDao.getCurrentOpenShift()
                 val trip = shift?.let { sessionDao.getCurrentOpenTrip(it.id) }
                 val sessionId = shift?.id
-                val vehicleId = trip?.vehicleId ?: ""
-                val pathId = trip?.pathId ?: ""
+                // VCM1/DESFire: ASOP_GPS_TRACKING.VEHICLE_ID/PATH_ID NOT NULL на сервере.
+                // Раньше здесь было `trip?.vehicleId ?: ""` (@NotNull UUID) → 400 при отсутствии
+                // рейса. Теперь берём vehicleId/pathId из рейса, fallback на смену; если of них
+                // нет — пропускаем точку (GPS без привязки к маршруту невалиден).
+                val vehicleId = trip?.vehicleId ?: shift?.vehicleId
+                val pathId = trip?.pathId ?: shift?.pathId
+                if (vehicleId == null || pathId == null) {
+                    return@launch
+                }
                 val report = GpsPositionReport(
                     vehicleId = vehicleId,
                     pathId = pathId,

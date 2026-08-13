@@ -6,6 +6,9 @@ import java.util.UUID
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 data class SessionOpenRequest(
+    /** Client-generated UUIDv7 (идемпотентность при offline retry). null → server generates. */
+    val sessionId: UUID? = null,
+
     @field:NotNull
     val sessionTypeId: UUID,
 

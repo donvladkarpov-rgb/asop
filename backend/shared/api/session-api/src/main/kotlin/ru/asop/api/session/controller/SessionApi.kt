@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.session.dto.request.SessionOpenRequest
 import ru.asop.api.session.dto.request.SessionCloseRequest
@@ -35,4 +37,10 @@ interface SessionApi {
     fun getSession(
         @PathVariable id: UUID
     ): Mono<ResponseEntity<SessionResponse>>
+
+    // Промпт 011: список смен для web-admin (страница «Смены»).
+    @GetMapping
+    fun listSessions(
+        @RequestParam(required = false) terminalId: UUID?
+    ): Flux<SessionResponse>
 }
