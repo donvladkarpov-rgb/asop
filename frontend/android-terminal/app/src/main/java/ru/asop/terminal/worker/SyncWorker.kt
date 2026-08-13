@@ -35,6 +35,17 @@ class SyncWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result {
+        // Промпт 014: если есть PENDING, повторяем через 30 сек, не дожидаясь 15 мин.
+        val pendingCount = pendingEventDao.countPending()
+        if (pendingCount > 0) {
+            android.util.Log.d(TAG, "doWork: $pendingCount pending, scheduling follow-up in 30s")
+            val followUp = androidx.work.OneTimeWorkRequestBuilder<SyncWorker>()
+                .setInitialDelay(3L, java.util.concurrent.TimeUnit.SECONDS)
+                .setConstraints(androidx.work.Constraints.Builder()
+                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
+                .build()
+            androidx.work.WorkManager.getInstance(applicationContext).enqueue(followUp)
+        }
         val pending = pendingEventDao.getPending()
         if (pending.isEmpty()) return Result.success()
 
@@ -154,8 +165,7 @@ class SyncWorker @AssistedInject constructor(
             }
             else -> throw IllegalArgumentException("Unknown event type: ${event.eventType}")
         }
-    
-        SeqHeaderHolder.clear()}
+    }
 
     private inline fun <reified T> deserialize(json: String): T {
         val adapter = moshi.adapter(T::class.java)

@@ -50,11 +50,20 @@ export interface Card {
 
 export interface Session {
   id: string;
-  terminalId: string;
-  operatorId: string;
-  openedAt: string;
-  closedAt?: string;
-  status: 'open' | 'closed';
+  sessionTypeId: string;
+  parentSessionId: string | null;
+  terminalId: string | null;
+  tidId: string | null;
+  openedByUserId: string | null;
+  closedByUserId: string | null;
+  cardId: string | null;
+  pathId: string | null;
+  vehicleId: string | null;
+  status: string;
+  startedAt: string;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type PageResponse<T> = {

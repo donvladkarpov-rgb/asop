@@ -51,13 +51,14 @@ class SessionCommandConsumer(
         @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?,
         @Header(name = "X-Terminal-Seq", required = false) terminalSeqHeader: ByteArray?
     ) {
-        log.debug("Received session command: {}", json.take(200))
+        log.info("RAW session command: {}", json.take(300))
         val eventId = parseEventId(eventIdHeader, json)
         val seq = parseSeq(terminalSeqHeader)
 
         try {
             val node = objectMapper.readTree(json)
             val eventType = node.get("eventType")?.asText()
+            log.info("Parsed eventType={}, seq={}", eventType, seq)
 
             when (eventType) {
                 "SessionOpened" -> {
@@ -115,7 +116,7 @@ class SessionCommandConsumer(
              ATTRIBUTES, STARTED_AT, CLOSED_AT, STARTED_AT_LOCAL, CLOSED_AT_LOCAL, EXPIRATION_TIME, STATUS)
             VALUES (:sessionId, :sessionTypeId, :parentSessionId, :terminalId, :tidId,
                     :openedByUserId, :cardId, :pathId, :vehicleId,
-                    :attributes, :startedAt, NULL, :startedAtLocal, NULL, :expirationTime, :status)
+                    CAST(:attributes AS jsonb), :startedAt, NULL, :startedAtLocal, NULL, :expirationTime, :status)
             ON CONFLICT (SESSION_ID) DO NOTHING"""
 
         val builder: (DatabaseClient.GenericExecuteSpec) -> DatabaseClient.GenericExecuteSpec = { base ->
@@ -147,127 +148,82 @@ class SessionCommandConsumer(
             spec
         }
 
-        val applyMono: Mono<Void> = conflictCheckFuture.flatMap { _ ->
+        // Промпт 014: .then() а не .flatMap()! conflictCheckFuture может быть Mono.empty()
+        // (когда parent==null, нет конфликта). flatMap НЕ вызывается на empty — INSERT не бежит.
+        // .then() выполняется на completion независимо от значения.
+        val applyMono: Mono<Void> = conflictCheckFuture.then(
             db.sql(insertSql).let(builder).fetch().rowsUpdated().then()
-        }
+        )
 
-        val terminalId: UUID? = event.terminalId
-        if (terminalId == null) {
-            // legacy path: apply directly without watermark (no terminal_id = нельзя watermark)
-            applyMono
-                .doOnSuccess {
-                    log.info("Session saved: {}", event.sessionId)
-                    publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "IN_PROGRESS"))
-                }
-                .doOnError { e ->
-                    log.error("Failed to save session: {}", e.message, e)
-                    val msg = e.message ?: "Save error"
-                    publishFailed(eventId, if (msg.startsWith("409")) msg else msg)
-                }
-                .subscribe()
-        } else {
-            val headers = mapOf("X-Carrier-Id" to (event.attributes ?: ""))
-            val tid = terminalId
-            watermark.applyInOrder(tid, seq, "SessionOpened", rawJson, headers, applyMono)
-                .doOnSuccess { result ->
-                    when (result) {
-                        WatermarkProcessor.ApplyResult.APPLIED -> {
-                            log.info("Session saved [seq={}]: sessionId={}", seq, event.sessionId)
-                            publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "IN_PROGRESS"))
-                        }
-                        WatermarkProcessor.ApplyResult.DEFERRED -> {
-                            log.info("Session deferred to watermark pending [seq={}]: sessionId={}", seq, event.sessionId)
-                            publishPendingWatermark(eventId, mapOf("sessionId" to event.sessionId.toString(), "seq" to seq.toString()))
-                        }
-                        WatermarkProcessor.ApplyResult.ALREADY_APPLIED -> {
-                            log.info("Session already applied [seq={}]: sessionId={}", seq, event.sessionId)
-                            publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "IN_PROGRESS"))
-                        }
-                    }
-                }
-                .doOnError { e ->
-                    log.error("Failed to save session: {}", e.message, e)
-                    val msg = e.message ?: "Save error"
-                    publishFailed(eventId, if (msg.startsWith("409")) msg else msg)
-                }
-                .subscribe()
+        // Промпт 014: block() — без него Kafka коммитит offset до завершения INSERT.
+        try {
+            applyMono.block()
+            log.info("Session saved: {} (seq={})", event.sessionId, seq)
+            publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "IN_PROGRESS"))
+        } catch (e: Exception) {
+            log.error("Failed to save session: {}", e.message, e)
+            publishFailed(eventId, e.message ?: "Save error")
         }
     }
 
     private fun handleSessionClosed(event: SessionClosedEvent, eventId: UUID, seq: Long, rawJson: String) {
         log.info("Processing SessionClosedEvent: sessionId={} seq={}", event.sessionId, seq)
-
-        val terminalId: UUID? = sessionRepository.findById(event.sessionId)
-            .map { it.terminalId ?: throw IllegalStateException("Session ${event.sessionId} has no terminal_id") }
-            .defaultIfEmpty(java.util.UUID(0L, 0L))
-            .map { if (it == java.util.UUID(0L, 0L)) null else it }
-            .block()
-
-        val closeFn: Mono<Void> = sessionRepository.findById(event.sessionId)
-            .switchIfEmpty(Mono.error(IllegalStateException("Session not found: ${event.sessionId}")))
-            .flatMap { _ ->
-                val requester = event.closedByUserId
-                val authCheck = if (requester != null) {
-                    sessionService.canClose(event.sessionId, requester)
-                } else {
-                    // Промпт 011 §4: без реального closedByUserId (term. CN = null после орт.) —
-                    // оставляем закрытие для совместимости (легаси-поток без карты-ключа).
-                    Mono.just(true)
-                }
-                authCheck.flatMap { allowed ->
-                    if (!allowed) {
-                        Mono.error(SecurityException(
-                            "Requester $requester is not authorized to close session ${event.sessionId}"
-                        ))
-                    } else {
-                        val sql = """UPDATE ASOP_SESSIONS
-                            SET STATUS = 'CLOSED',
-                                CLOSED_AT = :closedAt,
-                                CLOSED_AT_LOCAL = :closedAt,
-                                CLOSED_BY_USER_ID = :closedByUserId
-                            WHERE SESSION_ID = :sessionId AND STATUS <> 'CLOSED'"""
-                        val spec = db.sql(sql)
-                            .bind("closedAt", event.closedAt)
-                            .bind("sessionId", event.sessionId)
-                        val closed: UUID? = event.closedByUserId
-                        val finalSpec = if (closed != null) spec.bind("closedByUserId", closed)
-                        else spec.bindNull("closedByUserId", UUID::class.java)
-                        finalSpec.fetch().rowsUpdated().then()
-                    }
-                }
+        try {
+            val terminalId: UUID? = try {
+                sessionRepository.findById(event.sessionId)
+                    .map { it.terminalId ?: throw IllegalStateException("Session ${event.sessionId} has no terminal_id") }
+                    .defaultIfEmpty(java.util.UUID(0L, 0L))
+                    .map { if (it == java.util.UUID(0L, 0L)) null else it }
+                    .block()
+            } catch (e: Exception) {
+                log.warn("Session not found for close, may be already closed: {}", e.message)
+                publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "CLOSED"))
+                return
             }
 
-        if (terminalId == null) {
-            closeFn
-                .doOnSuccess {
-                    log.info("Session closed: {}", event.sessionId)
-                    publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "CLOSED"))
-                }
-                .doOnError { e ->
-                    log.error("Failed to close session: {}", e.message, e)
-                    publishFailed(eventId, e.message ?: "Close error")
-                }
-                .subscribe()
-        } else {
-            val headers = emptyMap<String, String>()
-            watermark.applyInOrder(terminalId, seq, "SessionClosed", rawJson, headers, closeFn)
-                .doOnSuccess { result ->
-                    when (result) {
-                        WatermarkProcessor.ApplyResult.APPLIED, WatermarkProcessor.ApplyResult.ALREADY_APPLIED -> {
-                            log.info("Session closed [seq={}]: sessionId={}", seq, event.sessionId)
-                            publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "CLOSED"))
-                        }
-                        WatermarkProcessor.ApplyResult.DEFERRED -> {
-                            log.info("Session close deferred [seq={}]: sessionId={}", seq, event.sessionId)
-                            publishPendingWatermark(eventId, mapOf("sessionId" to event.sessionId.toString(), "seq" to seq.toString()))
+            val closeFn: Mono<Void> = sessionRepository.findById(event.sessionId)
+                .switchIfEmpty(Mono.error(IllegalStateException("Session not found: ${event.sessionId}")))
+                .flatMap { _ ->
+                    val requester = event.closedByUserId
+                    val authCheck = if (requester != null) {
+                        sessionService.canClose(event.sessionId, requester)
+                    } else {
+                        Mono.just(true)
+                    }
+                    authCheck.flatMap { allowed ->
+                        if (!allowed) {
+                            Mono.error(SecurityException(
+                                "Requester $requester is not authorized to close session ${event.sessionId}"
+                            ))
+                        } else {
+                            val sql = """UPDATE ASOP_SESSIONS
+                                SET STATUS = 'CLOSED',
+                                    CLOSED_AT = :closedAt,
+                                    CLOSED_AT_LOCAL = :closedAt,
+                                    CLOSED_BY_USER_ID = :closedByUserId
+                                WHERE SESSION_ID = :sessionId AND STATUS <> 'CLOSED'"""
+                            val spec = db.sql(sql)
+                                .bind("closedAt", event.closedAt)
+                                .bind("sessionId", event.sessionId)
+                            val closed: UUID? = event.closedByUserId
+                            val finalSpec = if (closed != null) spec.bind("closedByUserId", closed)
+                            else spec.bindNull("closedByUserId", UUID::class.java)
+                            finalSpec.fetch().rowsUpdated().then()
                         }
                     }
                 }
-                .doOnError { e ->
-                    log.error("Failed to close session: {}", e.message, e)
-                    publishFailed(eventId, e.message ?: "Close error")
-                }
-                .subscribe()
+
+            try {
+                closeFn.block()
+                log.info("Session closed: {} (seq={})", event.sessionId, seq)
+                publishComplete(eventId, mapOf("sessionId" to event.sessionId.toString(), "status" to "CLOSED"))
+            } catch (e: Exception) {
+                log.error("Failed to close session: {}", e.message, e)
+                publishFailed(eventId, e.message ?: "Close error")
+            }
+        } catch (e: Exception) {
+            log.error("Unhandled error in handleSessionClosed: {}", e.message, e)
+            publishFailed(eventId, e.message ?: "Unhandled close error")
         }
     }
 

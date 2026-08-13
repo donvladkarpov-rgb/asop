@@ -9,8 +9,10 @@ import javax.inject.Singleton
 
 @Singleton
 class WorkScheduler @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val pendingEventPoller: PendingEventPoller
 ) {
+    init { pendingEventPoller.start() }
     companion object {
         private const val SYNC_WORK_NAME = "sync_pending_events"
         private const val POLL_WORK_NAME = "poll_pending_events"
@@ -131,13 +133,16 @@ class WorkScheduler @Inject constructor(
         )
     }
 
-    fun enqueueOneShotSync() {
+    fun enqueueOneShotSync() = enqueueOneShotSync(0L)
+
+    fun enqueueOneShotSync(delayMs: Long) {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(constraints)
+            .setInitialDelay(delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()
 
         WorkManager.getInstance(context).enqueue(request)

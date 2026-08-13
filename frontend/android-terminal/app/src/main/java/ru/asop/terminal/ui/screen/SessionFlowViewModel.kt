@@ -568,6 +568,30 @@ class SessionFlowViewModel @Inject constructor(
             try {
                 val now = System.currentTimeMillis()
                 sessionDao.close(shift.id, closedAt = now, closedByUserId = tap.userId)
+
+                // Промпт 014: каскад — если есть открытый рейс под этой сменой, закрыть его тоже
+                val openTrip = _state.value.openTrip
+                if (openTrip != null && openTrip.parentSessionId == shift.id) {
+                    sessionDao.close(openTrip.id, closedAt = now, closedByUserId = tap.userId)
+                    val tripPayload = SessionCloseRequest(
+                        reason = null,
+                        regionId = openTrip.regionId,
+                        timezone = openTrip.timezone,
+                        cardId = tap.cardId,
+                        closedByUserId = tap.userId
+                    )
+                    pendingEventDao.insert(
+                        PendingEventEntity(
+                            id = "close-${openTrip.id}",
+                            topic = "asop.session.commands",
+                            payload = JsonUtil.encode(tripPayload),
+                            eventType = EventTypes.SESSION_CLOSE,
+                            pathParam = openTrip.id
+                       ,
+                            seq = syncPreferences.nextSeq())
+                    )
+                }
+
                 val payload = SessionCloseRequest(
                     reason = null,
                     regionId = shift.regionId,
@@ -585,10 +609,11 @@ class SessionFlowViewModel @Inject constructor(
                    ,
                         seq = syncPreferences.nextSeq())
                 )
+                workScheduler.enqueueOneShotSync()
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
-                        infoMessage = "Смена закрыта",
+                        infoMessage = "Смена и рейс закрыты",
                         cardStep = CardStep.IDLE,
                         cardTap = null
                     )
@@ -634,7 +659,7 @@ class SessionFlowViewModel @Inject constructor(
                     cardId = tap.cardId,
                     closedByUserId = tap.userId
                 )
-                pendingEventDao.insert(
+                 pendingEventDao.insert(
                     PendingEventEntity(
                         id = "close-${trip.id}",
                         topic = "asop.session.commands",
@@ -644,6 +669,7 @@ class SessionFlowViewModel @Inject constructor(
                    ,
                         seq = syncPreferences.nextSeq())
                 )
+                workScheduler.enqueueOneShotSync()
                 _state.update {
                     it.copy(
                         submitState = SubmitState.ACCEPTED,
@@ -687,6 +713,7 @@ class SessionFlowViewModel @Inject constructor(
                 )
                 tripPaymentDao.insert(payment)
 
+                val metadataJson = "\"MVP_NO_DEDUCT\""
                 val payload = TransactionCompleteRequest(
                     sessionId = trip.id,
                     transactionTypeId = paymentTypeId,
@@ -694,7 +721,7 @@ class SessionFlowViewModel @Inject constructor(
                     amount = 0.0,
                     currency = "RUB",
                     cardId = cardId,
-                    metadata = "MVP_NO_DEDUCT",
+                    metadata = metadataJson,
                     regionId = trip.regionId,
                     carrierId = trip.carrierId,
                     timezone = trip.timezone
