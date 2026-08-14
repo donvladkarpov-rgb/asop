@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
@@ -112,7 +113,17 @@ fun CardReadScreen(
                 )
 
                 state.result != null -> ResultCard(state.result!!, onReread = viewModel::reset)
-                else -> ListeningCard()
+                else -> Column {
+                    state.readError?.let { err ->
+                        Text(
+                            err,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+                    ListeningCard()
+                }
             }
         }
     }
@@ -474,6 +485,15 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                                             fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                                         )
                                     }
+                                }
+                                c.vcm1Identity?.let { vcm ->
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "Остаток поездок (байты 10-11): ${vcm.tripsLeft}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(

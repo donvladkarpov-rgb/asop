@@ -61,26 +61,51 @@ fun TopUpScreen(
         val needsNfc = state.step == TopUpViewModel.Step.AUTH ||
             state.step == TopUpViewModel.Step.TARGET_CARD ||
             state.step == TopUpViewModel.Step.AMOUNT
+        android.util.Log.i("TopUpScreen",
+            "arm: step=${state.step} nfc=${nfcAdapter?.isEnabled} act=${activity?.javaClass?.simpleName} needsNfc=$needsNfc")
         if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled && needsNfc) {
             nfcAdapter.enableReaderMode(
                 activity,
                 { tag ->
-                    when (state.step) {
-                        TopUpViewModel.Step.AUTH -> viewModel.onAuthTagDiscovered(tag)
-                        TopUpViewModel.Step.TARGET_CARD -> viewModel.onTargetTagDiscovered(tag)
-                        else -> Unit
-                    }
+                    android.util.Log.i("TopUpScreen", "reader callback TAG: ${tag.id.joinToString("") { "%02X".format(it) }}")
+                    // Ревью: единый вход VM — роутинг по живому step, не по замкнутому Compose-state.
+                    viewModel.onTagDiscovered(tag)
                 },
                 NfcAdapter.FLAG_READER_NFC_A or
                     NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK or
                     NfcAdapter.FLAG_READER_NO_PLATFORM_SOUNDS,
                 null
             )
+            // Промпт 014: Feitian F20 fallback — foreground dispatch → MainActivity.onNewIntent → NfcTagBus,
+            // откуда TopUpViewModel читает tag (на случай если ReaderMode binder не зарегистрирован).
+            try {
+                val intent = android.content.Intent(activity, activity.javaClass).apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                val pendingIntent = android.app.PendingIntent.getActivity(
+                    activity, 0, intent,
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_MUTABLE
+                )
+                val filters = arrayOf(
+                    android.content.IntentFilter(android.nfc.NfcAdapter.ACTION_TAG_DISCOVERED),
+                    android.content.IntentFilter(android.nfc.NfcAdapter.ACTION_TECH_DISCOVERED)
+                )
+                val techLists = arrayOf(
+                    arrayOf("android.nfc.tech.MifareClassic"),
+                    arrayOf("android.nfc.tech.IsoDep")
+                )
+                nfcAdapter.enableForegroundDispatch(activity, pendingIntent, filters, techLists)
+            } catch (e: Exception) {
+                android.util.Log.w("TopUpScreen", "enableForegroundDispatch failed: ${e.message}")
+            }
             NfcReaderRefCount.acquire()
         }
         onDispose {
             if (nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
                 nfcAdapter.disableReaderMode(activity)
+                try { nfcAdapter.disableForegroundDispatch(activity) } catch (_: Exception) {}
             }
         }
     }

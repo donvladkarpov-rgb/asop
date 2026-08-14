@@ -199,10 +199,13 @@ class SessionFlowViewModel @Inject constructor(
                 kotlinx.coroutines.delay(300L)
                 if (state.value.cardStep == CardStep.WAITING_TAP ||
                     state.value.cardStep == CardStep.IDLE) {
-                    val pending = NfcTagBus.consume()
-                    if (pending != null) {
-                        android.util.Log.i("SessionFlowVM", "NFC bus yielded tag, calling onTagDiscovered")
-                        onTagDiscovered(pending)
+                    // Ревью-фикс: если другой экран (TopUp) заявил права на NfcTagBus — не трогаем.
+                    if (!NfcTagBus.isClaimed()) {
+                        val pending = NfcTagBus.consume()
+                        if (pending != null) {
+                            android.util.Log.i("SessionFlowVM", "NFC bus yielded tag, calling onTagDiscovered")
+                            onTagDiscovered(pending)
+                        }
                     }
                 }
             }
@@ -707,10 +710,14 @@ class SessionFlowViewModel @Inject constructor(
                 val paymentTypeId = "00000000-0000-0000-0000-000000000803"   // VALIDATION
                 val resultId = "00000000-0000-0000-0000-000000000903"         // VALIDATION_ONLY
 
-                // 1. Определяем льготу (персональная карта): cardId → USER_ID → USER_BENEFITS → BENEFIT_ID
+                // 1. Определяем льготу. У персональной VCM1 entity.id = userId —
+                // используем его напрямую (ревью: lookup cardId→asop_cards ломается
+                // для новоактивированных карт, которых ещё нет в reference_rows).
+                // Fallback — старый путь cardId → asop_cards → userId.
                 var benefitId: String? = null
-                if (!isPassengerAnon && cardId != null) {
-                    benefitId = lookupBenefitForCard(cardId)
+                if (!isPassengerAnon) {
+                    benefitId = tapUserId?.takeIf { it.isNotBlank() }?.let { lookupBenefitForUser(it) }
+                        ?: cardId?.let { lookupBenefitForCard(it) }
                 }
 
                 // 2. Решение по поездкам
@@ -718,14 +725,21 @@ class SessionFlowViewModel @Inject constructor(
                 var declined = false
                 if (benefitId == null) {
                     if (cardTripsLeft > 0) {
-                        // списываем одну поездку и пишем на карту
+                        // списываем одну поездку и пишем на карту; debit подтверждаем
+                        // только успешной записью (ревью: при write-fail карта не списана,
+                        // репортить tripsDebited=1 нельзя)
                         val newTrips = cardTripsLeft - 1
-                        tripsDebited = 1
+                        var writeOk = false
                         if (tag != null) {
                             val keys = terminalKeyDao.getActive(30)
                                 .mapNotNull { e -> runCatching { terminalKeyCryptor.decrypt(e.keyMaterialEnc) }.getOrNull() }
                             val writer = ru.asop.terminal.nfc.MifareClassicCardWriter()
-                            writer.writeTripsLeft(tag, keys, newTrips)
+                            writeOk = writer.writeTripsLeft(tag, keys, newTrips) != null
+                        }
+                        if (writeOk) {
+                            tripsDebited = 1
+                        } else {
+                            declined = true  // запись не прошла — не валидируем, пусть переприложит
                         }
                     } else {
                         declined = true  // поездок не осталось — не валидируем
@@ -825,6 +839,31 @@ class SessionFlowViewModel @Inject constructor(
     }
 
     /**
+     * Промпт 014: активная льгота пользователя (первая).
+     * Связка ASOP_USER_BENEFITS → BENEFIT_ID; активность = validUntil будущее/пусто,
+     * validFrom прошлое/пусто, строка не удалена (DAO фильтрует deleted_at).
+     */
+    private suspend fun lookupBenefitForUser(userId: String): String? {
+        return try {
+            referenceRowDao.findUserBenefits(userId)
+                .firstOrNull { row -> isActiveBenefitRow(row) }
+                ?.let { org.json.JSONObject(it).optString("benefitId").takeIf { b -> b.isNotBlank() } }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun isActiveBenefitRow(row: String): Boolean = runCatching {
+        val o = org.json.JSONObject(row)
+        val nowMs = System.currentTimeMillis()
+        val vu = o.optString("validUntil")
+        val vf = o.optString("validFrom")
+        val untilOk = vu.isBlank() || runCatching { java.time.Instant.parse(vu).toEpochMilli() }.getOrDefault(Long.MAX_VALUE) > nowMs
+        val fromOk = vf.isBlank() || runCatching { java.time.Instant.parse(vf).toEpochMilli() }.getOrDefault(0L) <= nowMs
+        untilOk && fromOk
+    }.getOrDefault(false)
+
+    /**
      * Промпт 014: определяет льготу пассажира по связке
      * cardId → ASOP_CARDS.USER_ID → ASOP_USER_BENEFITS → BENEFIT_ID.
      * Берём первую активную льготу. null — льготы нет.
@@ -833,21 +872,7 @@ class SessionFlowViewModel @Inject constructor(
         return try {
             val cardRow = referenceRowDao.findUserIdByCardId(cardId) ?: return null
             val userId = org.json.JSONObject(cardRow).optString("userId")
-            if (userId.isBlank()) return null
-            referenceRowDao.findUserBenefits(userId)
-                .firstOrNull { row ->
-                    runCatching {
-                        val o = org.json.JSONObject(row)
-                        // активная: deleted нет (DAU фильтрует), validUntil будущее/пусто, validFrom прошлое/пусто
-                        val vu = o.optString("validUntil")
-                        val vf = o.optString("validFrom")
-                        val nowMs = System.currentTimeMillis()
-                        val untilOk = vu.isBlank() || runCatching { java.time.Instant.parse(vu).toEpochMilli() }.getOrDefault(Long.MAX_VALUE) > nowMs
-                        val fromOk = vf.isBlank() || runCatching { java.time.Instant.parse(vf).toEpochMilli() }.getOrDefault(0L) <= nowMs
-                        untilOk && fromOk
-                    }.getOrDefault(false)
-                }
-                ?.let { org.json.JSONObject(it).optString("benefitId").takeIf { b -> b.isNotBlank() } }
+            if (userId.isBlank()) null else lookupBenefitForUser(userId)
         } catch (e: Exception) {
             null
         }

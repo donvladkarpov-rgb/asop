@@ -65,6 +65,36 @@ class TopUpViewModel @Inject constructor(
 
     private var heldTag: Tag? = null
 
+    init {
+        // Ревью-фикс: single-owner NfcTagBus — пока TopUp жив, SessionFlow не потребляет таги.
+        ru.asop.terminal.NfcTagBus.claim("TopUp")
+        // Промпт 014: Feitian F20 fallback — опрос NfcTagBus (foreground dispatch,
+        // MainActivity.onNewIntent → NfcTagBus.publish). Единый вход onTagDiscovered
+        // маршрутизирует по ЖИВОМУ _state.value.step (ревью: замыкание state.step
+        // в ReaderMode-callback замирало на AUTH).
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(300L)
+                val pending = ru.asop.terminal.NfcTagBus.consume() ?: continue
+                onTagDiscovered(pending)
+            }
+        }
+    }
+
+    override fun onCleared() {
+        ru.asop.terminal.NfcTagBus.release("TopUp")
+        super.onCleared()
+    }
+
+    /** Единая точка входа тага (ReaderMode callback + NfcTagBus). Роутит по текущему шагу. */
+    fun onTagDiscovered(tag: Tag) {
+        when (_state.value.step) {
+            Step.AUTH -> onAuthTagDiscovered(tag)
+            Step.TARGET_CARD -> onTargetTagDiscovered(tag)
+            else -> Unit
+        }
+    }
+
     fun reset() {
         _state.value = State()
         heldTag = null
@@ -76,9 +106,11 @@ class TopUpViewModel @Inject constructor(
             val keys = terminalKeyDao.getActive(30)
                 .mapNotNull { e -> runCatching { terminalKeyCryptor.decrypt(e.keyMaterialEnc) }.getOrNull() }
             val outcome = Vcm1CardAuth.read(tag, keys)
+            android.util.Log.i("TopUpVM", "auth outcome: $outcome")
             when (outcome) {
                 is Vcm1CardAuth.Outcome.Ok -> {
                     val roles = AsopCardType.allRolesForBitmask(outcome.identity.bitmask).map { it.name }
+                    android.util.Log.i("TopUpVM", "auth OK: bitmask=0x${outcome.identity.bitmask.toString(16)} roles=$roles allowed=$allowedRoles")
                     val allowed = roles.any { it in allowedRoles }
                     if (allowed) {
                         _state.update {

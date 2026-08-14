@@ -35,7 +35,8 @@ class CardReadViewModel @Inject constructor(
         val enabled: Boolean,
         val listening: Boolean = false,
         val result: DesfireCardReader.ReadResult? = null,
-        val identityLoading: Boolean = false
+        val identityLoading: Boolean = false,
+        val readError: String? = null
     )
 
     private val _state = MutableStateFlow(
@@ -61,7 +62,7 @@ class CardReadViewModel @Inject constructor(
     private var currentReadJob: kotlinx.coroutines.Job? = null
 
     fun onReadingStarted() {
-        _state.update { it.copy(listening = true, result = null) }
+        _state.update { it.copy(listening = true, result = null, readError = null) }
     }
 
     /**
@@ -82,15 +83,27 @@ class CardReadViewModel @Inject constructor(
         // currentReadJob?.cancel() -- ранее приводил к потере sector-reads между tag-events.
         val scope = viewModelScope
         currentReadJob = scope.launch(Dispatchers.IO) {
-            val result = if (MifareClassicReader.isMifareClassic(tag)) {
-                val keys = terminalKeyDao.getActive(10)
-                    .mapNotNull { e ->
-                        try { keyCryptor.decrypt(e.keyMaterialEnc) }
-                        catch (x: Exception) { Log.w(CardReadViewModel.TAG, "key decrypt: ${x.message}"); null }
-                    }
-                MifareClassicReader.read(tag, keys)
-            } else {
-                DesfireCardReader.read(tag)
+            val result = try {
+                if (MifareClassicReader.isMifareClassic(tag)) {
+                    val keys = terminalKeyDao.getActive(10)
+                        .mapNotNull { e ->
+                            try { keyCryptor.decrypt(e.keyMaterialEnc) }
+                            catch (x: Exception) { Log.w(CardReadViewModel.TAG, "key decrypt: ${x.message}"); null }
+                        }
+                    MifareClassicReader.read(tag, keys)
+                } else {
+                    DesfireCardReader.read(tag)
+                }
+            } catch (e: Exception) {
+                Log.w(CardReadViewModel.TAG, "read exception: ${e.javaClass.simpleName}: ${e.message}")
+                _state.update {
+                    it.copy(
+                        listening = false,
+                        readError = "Ошибка чтения: ${e.message ?: e.javaClass.simpleName}. Поднесите карту ещё раз."
+                    )
+                }
+                TonePlayer.errorBeep()
+                return@launch
             }
 
             val rawIdentity = if (result.isDesfire && result.applications.any { it.replace(" ", "") == aidHex }) {
@@ -105,7 +118,7 @@ class CardReadViewModel @Inject constructor(
                 _state.update { it.copy(identityLoading = true) }
                 val vcm1 = result.classicInfo.vcm1Identity
                 Log.i(CardReadViewModel.TAG, "Classic VCM1 detected: bitmask=0x${vcm1.bitmask.toString(16)}, " +
-                    "cardId=${vcm1.cardId}")
+                    "cardId=${vcm1.cardId}, tripsLeft=${vcm1.tripsLeft}")
                 // Card-side cache для server whitelist (uid, cardId) проверок
                 // в последующих sync-командах (transaction, session close, etc.).
                 // Это промпт 008 disconnect-fix: без этого cache server не знает
@@ -243,7 +256,7 @@ class CardReadViewModel @Inject constructor(
     fun reset() {
         readSequence++
         lastTagId = null
-        _state.update { it.copy(listening = true, result = null) }
+        _state.update { it.copy(listening = true, result = null, readError = null) }
     }
 
     companion object {

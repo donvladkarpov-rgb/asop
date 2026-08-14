@@ -59,6 +59,24 @@ object NfcTagBus {
     private val mutex = java.util.concurrent.locks.ReentrantLock()
     @Volatile private var pendingTag: Tag? = null
 
+    // Ревью-фикс: single-owner — экран-владелец (TopUp) заявляет права на таги,
+    // долгоживущий SessionFlowViewModel не съедает их из-под него.
+    @Volatile private var claimedBy: String? = null
+
+    fun claim(owner: String): Boolean {
+        mutex.lock()
+        return try {
+            if (claimedBy == null) { claimedBy = owner; true } else false
+        } finally { mutex.unlock() }
+    }
+
+    fun release(owner: String) {
+        mutex.lock()
+        try { if (claimedBy == owner) claimedBy = null } finally { mutex.unlock() }
+    }
+
+    fun isClaimed(): Boolean = claimedBy != null
+
     fun publish(tag: Tag) {
         mutex.lock()
         try {

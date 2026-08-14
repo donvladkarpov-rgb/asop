@@ -632,6 +632,21 @@ class MifareClassicCardWriter {
         candidateKeys: List<ByteArray>,
         newTripsLeft: Int
     ): Pair<Int, Int>? {
+        // Ревью-фикс: Feitian-флаки (connect/write IOException с null-сообщением) — до 3 попыток.
+        repeat(3) { attempt ->
+            val r = writeTripsLeftOnce(tag, candidateKeys, newTripsLeft)
+            if (r != null) return r
+            Log.w(TAG, "writeTripsLeft attempt #$attempt failed, retrying...")
+            Thread.sleep(120)
+        }
+        return null
+    }
+
+    private fun writeTripsLeftOnce(
+        tag: Tag,
+        candidateKeys: List<ByteArray>,
+        newTripsLeft: Int
+    ): Pair<Int, Int>? {
         if (newTripsLeft !in 0..0xFFFF) {
             Log.w(TAG, "writeTripsLeft: out of UInt16 range: $newTripsLeft")
             return null
