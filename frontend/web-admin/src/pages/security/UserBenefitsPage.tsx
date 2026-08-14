@@ -2,16 +2,19 @@ import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getAdminUsers, getUserBenefits, createUserBenefit, deleteUserBenefit, getUserRegions } from '../../api/routes';
 import { getBenefits, getRegions } from '../../api/reference';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 
 export function UserBenefitsPage() {
   const qc = useQueryClient();
+  const { regionId: globalRegionId, setRegionId: setGlobalRegionId } = useGlobalFilter();
   const { data, isLoading, error } = useQuery({ queryKey: ['user-benefits'], queryFn: () => getUserBenefits() });
   const { data: users } = useQuery({ queryKey: ['admin-users'], queryFn: getAdminUsers });
   const { data: userRegions } = useQuery({ queryKey: ['user-regions'], queryFn: () => getUserRegions() });
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
   const { data: benefits } = useQuery({ queryKey: ['benefits'], queryFn: () => getBenefits() });
 
-  const [regionId, setRegionId] = useState('');
+  // Регион берём из глобального фильтра (панель справа). Если не задан — пусто = все регионы.
+  const regionId = globalRegionId;
   const [userQuery, setUserQuery] = useState('');
   const [userId, setUserId] = useState('');
   const [benefitId, setBenefitId] = useState('');
@@ -79,8 +82,8 @@ export function UserBenefitsPage() {
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             Фильтр по региону:
             <select
-              value={regionId}
-              onChange={(e) => { setRegionId(e.target.value); setUserId(''); setBenefitId(''); }}
+              value={globalRegionId}
+              onChange={(e) => { setGlobalRegionId(e.target.value); setUserId(''); setBenefitId(''); }}
               style={{ minWidth: 240 }}
             >
               <option value="">— все регионы —</option>
