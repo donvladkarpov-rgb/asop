@@ -38,6 +38,7 @@ import { UsersAdminPage } from './pages/security/UsersAdminPage';
 import { UserRolesPage } from './pages/security/UserRolesPage';
 import { UserCarriersPage } from './pages/security/UserCarriersPage';
 import { UserRegionsPage } from './pages/security/UserRegionsPage';
+import { UserBenefitsPage } from './pages/security/UserBenefitsPage';
 import { LoginPage } from './pages/Login';
 import { CallbackPage } from './pages/Callback';
 import { PasswordChangePage } from './pages/PasswordChange';
@@ -118,6 +119,7 @@ function AppRoutes() {
         <Route path="user-roles" element={<UserRolesPage />} />
         <Route path="user-carriers" element={<UserCarriersPage />} />
         <Route path="user-regions" element={<UserRegionsPage />} />
+        <Route path="user-benefits" element={<UserBenefitsPage />} />
         <Route path="asop-keys" element={<AsopKeysPage />} />
         <Route path="config-params" element={<ConfigParamsPage />} />
         <Route path="sessions" element={<SessionsPage />} />

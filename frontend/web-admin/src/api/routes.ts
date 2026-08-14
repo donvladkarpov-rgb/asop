@@ -398,5 +398,21 @@ export const createUserRegion = (data: { userId: string; regionId: string }) =>
 export const deleteUserRegion = (userId: string, regionId: string) =>
   apiClient.delete('/user-regions', { params: { userId, regionId } });
 
+// ===== UserBenefit =====
+export interface UserBenefit {
+  assignmentId: string;
+  userId: string;
+  benefitId: string;
+  validFrom: string;
+  validUntil?: string | null;
+}
+
+export const getUserBenefits = (params?: { userId?: string; benefitId?: string }): Promise<UserBenefit[]> =>
+  apiClient.get<UserBenefit[]>('/user-benefits', { params }).then((r) => r.data ?? []);
+export const createUserBenefit = (data: { userId: string; benefitId: string; validFrom?: string; validUntil?: string }) =>
+  apiClient.post<UserBenefit>('/user-benefits', data).then((r) => r.data);
+export const deleteUserBenefit = (assignmentId: string) =>
+  apiClient.delete(`/user-benefits/${assignmentId}`);
+
 // Suppress unused warning for helper
 export { stripId, normalize };
