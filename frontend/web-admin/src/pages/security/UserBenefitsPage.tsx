@@ -158,7 +158,16 @@ export function UserBenefitsPage() {
           </tr>
         </thead>
         <tbody>
-          {data?.map((r) => {
+          {data?.filter((r) => {
+            // Промпт-требование: глобальный фильтр по региону (панель справа) фильтрует данные.
+            // Оставляем назначение, если его льгота принадлежит выбранному региону
+            // (и, для страховки, пользователь тоже привязан к региону).
+            if (!regionId) return true;
+            const benefit = benefits?.find((b) => b.id === r.benefitId);
+            const benefitInRegion = benefit ? benefit.regionId === regionId : false;
+            const userInRegion = (userRegions ?? []).some((ur) => ur.userId === r.userId && ur.regionId === regionId);
+            return benefitInRegion || userInRegion;
+          }).map((r) => {
             const benefit = benefits?.find((b) => b.id === r.benefitId);
             return (
               <tr key={r.assignmentId}>
@@ -176,7 +185,13 @@ export function UserBenefitsPage() {
               </tr>
             );
           })}
-          {data?.length === 0 && (
+          {data?.filter((r) => {
+            if (!regionId) return true;
+            const benefit = benefits?.find((b) => b.id === r.benefitId);
+            const benefitInRegion = benefit ? benefit.regionId === regionId : false;
+            const userInRegion = (userRegions ?? []).some((ur) => ur.userId === r.userId && ur.regionId === regionId);
+            return benefitInRegion || userInRegion;
+          }).length === 0 && (
             <tr><td colSpan={6} style={{ textAlign: 'center' }}>Назначений нет</td></tr>
           )}
         </tbody>
