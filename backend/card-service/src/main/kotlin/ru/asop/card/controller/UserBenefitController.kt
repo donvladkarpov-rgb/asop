@@ -49,15 +49,35 @@ class UserBenefitController(
 
     @PostMapping("/api/v1/user-benefits")
     fun create(@RequestBody req: UserBenefitCreateRequest): Mono<UserBenefitEntity> {
-        val entity = UserBenefitEntity(
-            assignmentId = ru.asop.common.util.UuidUtils.newId(),
-            userId = req.userId,
-            benefitId = req.benefitId,
-            validFrom = req.validFrom ?: Instant.now(),
-            validUntil = req.validUntil
-        )
-        // R2dbcEntityTemplate.insert — save() с non-null UUID делает UPDATE (AGENTS.md "Save bug")
-        return template.insert(entity)
+        val validFrom = req.validFrom ?: Instant.now()
+        if (req.validUntil != null && req.validUntil!!.isBefore(validFrom)) {
+            return Mono.error(org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST,
+                "validUntil must be >= validFrom"
+            ))
+        }
+        // Дубликат активного назначения (user, benefit) не допускается.
+        return repository.findAll()
+            .filter { it.deletedAt == null && it.userId == req.userId && it.benefitId == req.benefitId }
+            .hasElements()
+            .flatMap { exists ->
+                if (exists) {
+                    Mono.error(org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.CONFLICT,
+                        "Данная льгота уже назначена этому пользователю"
+                    ))
+                } else {
+                    val entity = UserBenefitEntity(
+                        assignmentId = ru.asop.common.util.UuidUtils.newId(),
+                        userId = req.userId,
+                        benefitId = req.benefitId,
+                        validFrom = validFrom,
+                        validUntil = req.validUntil
+                    )
+                    // R2dbcEntityTemplate.insert — save() с non-null UUID делает UPDATE (AGENTS.md "Save bug")
+                    template.insert(entity)
+                }
+            }
     }
 
     @DeleteMapping("/api/v1/user-benefits/{id}")

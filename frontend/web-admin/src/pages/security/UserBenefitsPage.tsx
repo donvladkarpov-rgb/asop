@@ -132,7 +132,7 @@ export function UserBenefitsPage() {
             onClick={() => createMut.mutate({
               userId,
               benefitId,
-              validUntil: validUntil ? `${validUntil}T23:59:59Z` : undefined,
+              validUntil: validUntil ? new Date(`${validUntil}T23:59:59`).toISOString() : undefined,
             })}
             disabled={!userId || !benefitId || createMut.isPending}
           >
