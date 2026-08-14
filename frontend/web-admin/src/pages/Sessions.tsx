@@ -63,6 +63,7 @@ export function SessionsPage() {
             <th>Путь</th>
             <th>Открыта</th>
             <th>Закрыта</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -80,6 +81,7 @@ export function SessionsPage() {
                   <td>—</td>
                   <td>{fmt(s.startedAt)}</td>
                   <td>{fmt(s.closedAt)}</td>
+                  <td></td>
                 </tr>
                 {childTrips.map((t) => (
                   <Fragment key={t.id}>
