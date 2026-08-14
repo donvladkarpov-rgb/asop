@@ -91,26 +91,27 @@ export function UserBenefitsPage() {
           </label>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0 16px' }}>
-          <label>Поиск пользователя
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)', gap: '0 16px' }}>
+          <label style={{ minWidth: 0 }}>Поиск пользователя
             <input
               value={userQuery}
               onChange={(e) => setUserQuery(e.target.value)}
               placeholder="Фамилия, имя или телефон"
+              style={{ width: '100%', boxSizing: 'border-box' }}
             />
           </label>
-          <label>Пользователь ({filteredUsers.length})
-            <select value={userId} onChange={(e) => setUserId(e.target.value)}>
+          <label style={{ minWidth: 0 }}>Пользователь ({filteredUsers.length})
+            <select value={userId} onChange={(e) => setUserId(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }}>
               <option value="">— выберите —</option>
               {filteredUsers.map((u) => (
-                <option key={u.id} value={u.id}>
+                <option key={u.id} value={u.id} title={`${u.lastNameInitial}. ${u.firstName} ${u.phone ?? ''}`}>
                   {u.lastNameInitial}. {u.firstName}{u.phone ? ` (${u.phone})` : ''}
                 </option>
               ))}
             </select>
           </label>
-          <label>Льгота ({filteredBenefits.length})
-            <select value={benefitId} onChange={(e) => setBenefitId(e.target.value)}>
+          <label style={{ minWidth: 0 }}>Льгота ({filteredBenefits.length})
+            <select value={benefitId} onChange={(e) => setBenefitId(e.target.value)} style={{ width: '100%', boxSizing: 'border-box' }}>
               <option value="">— выберите —</option>
               {filteredBenefits.map((b) => (
                 <option key={b.id} value={b.id}>{b.benefitName}</option>
