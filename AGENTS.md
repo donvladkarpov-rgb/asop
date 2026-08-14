@@ -295,7 +295,7 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
-- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, TIDs, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, TIDs, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule, Sessions (иерархия смен/рейсов + валидации), UserBenefits (назначение льгот пользователям: фильтр по региону, поиск по имени)
 - Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
 ### Kafka topic naming
