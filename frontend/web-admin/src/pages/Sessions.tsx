@@ -120,20 +120,37 @@ export function SessionsPage() {
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>ID</th>
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Карта</th>
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Пользователь</th>
-                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Сумма</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Поездки</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Льгота</th>
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Время</th>
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {txs.map((tx) => (
-                                    <tr key={tx.transactionId} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                                      <td style={{ padding: '4px 8px' }}>{short(tx.transactionId)}</td>
-                                      <td style={{ padding: '4px 8px' }}>{short(tx.cardId)}</td>
-                                      <td style={{ padding: '4px 8px' }} title={tx.userId ?? undefined}>{short(tx.userId)}</td>
-                                      <td style={{ padding: '4px 8px' }}>{tx.amount}</td>
-                                      <td style={{ padding: '4px 8px' }}>{fmt(tx.startedAt)}</td>
-                                    </tr>
-                                  ))}
+                                  {txs.map((tx) => {
+                                    let tripsDebited: number | null = null;
+                                    let benefitId: string | null = null;
+                                    let declined = false;
+                                    try {
+                                      const m = JSON.parse(tx.metadata || '{}');
+                                      tripsDebited = typeof m.tripsDebited === 'number' ? m.tripsDebited : null;
+                                      benefitId = m.benefitId || null;
+                                      declined = !!m.declined;
+                                    } catch {}
+                                    return (
+                                      <tr key={tx.transactionId} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                        <td style={{ padding: '4px 8px' }}>{short(tx.transactionId)}</td>
+                                        <td style={{ padding: '4px 8px' }}>{short(tx.cardId)}</td>
+                                        <td style={{ padding: '4px 8px' }} title={tx.userId ?? undefined}>{short(tx.userId)}</td>
+                                        <td style={{ padding: '4px 8px' }}>
+                                          {declined ? '⚠ отказ (0)' : tripsDebited === null ? '—' : tripsDebited}
+                                        </td>
+                                        <td style={{ padding: '4px 8px' }} title={benefitId ?? undefined}>
+                                          {benefitId ? short(benefitId) : '—'}
+                                        </td>
+                                        <td style={{ padding: '4px 8px' }}>{fmt(tx.startedAt)}</td>
+                                      </tr>
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>

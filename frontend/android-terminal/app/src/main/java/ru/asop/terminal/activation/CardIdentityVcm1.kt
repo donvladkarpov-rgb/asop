@@ -8,10 +8,13 @@ import java.util.UUID
  * (промпт 008). На карте лежит ТОЛЬКО в sector 1 (3 data-блока):
  *
  * Layout (block 16 bytes каждый):
- *  block 0: "VCM1" magic [0..3] + bitmask UInt16 LE [4..5] + reserved/zeros [6..15]
+ *  block 0: "VCM1" magic [0..3] + bitmask UInt16 LE [4..5] + tripsLeft UInt16 LE [10..11] + reserved/zeros
  *  block 1: cardId UUID v7 binary (16 raw bytes, RFC 4122 MSB-first)
  *  block 2: entityUuid UUID v7 binary (16 raw bytes) — single-slot highest-bit-wins role;
  *            zeroed для PASSENGER_ANONYMOUS
+ *
+ * Промпт 014: байты [10..11] (ранее reserved) хранят количество поездок UInt16 LE.
+ * Старые VCM1-карты с нулями в [10..11] читаются как tripsLeft = 0 — обратно совместимо.
  *
  * Sector 2 и sectors 3-4: zeroed / no-op (резерв на будущее).
  */
@@ -24,6 +27,8 @@ data class CardIdentityVcm1(
      * (тогда entityUuid = 16 zero bytes на карте).
      */
     val entity: EntityRef?,
+    /** Промпт 014: количество поездок на карте (UInt16 LE в block 0 [10..11]). */
+    val tripsLeft: Int = 0,
     /** Magic identifier ('V' 'C' 'M' '1' = ASCII 0x56 0x43 0x4D 0x31). */
     val version: Int = 1
 ) {
@@ -31,6 +36,7 @@ data class CardIdentityVcm1(
         require(bitmask in 0..0x3FFF) {
             "bitmask out of range: 0x${bitmask.toString(16)} (must be 0..0x3FFF)"
         }
+        require(tripsLeft in 0..0xFFFF) { "tripsLeft out of UInt16 range: $tripsLeft" }
         val buf = ByteArray(TOTAL_BYTES)
 
         // Block 0 [0..3]: "VCM1" magic
@@ -41,7 +47,9 @@ data class CardIdentityVcm1(
         // Block 0 [4..5]: bitmask LE
         buf[BITMASK_OFFSET] = (bitmask and 0xFF).toByte()
         buf[BITMASK_OFFSET + 1] = ((bitmask shr 8) and 0xFF).toByte()
-        // Block 0 [6..15]: reserved (zero — already zero in ByteArray)
+        // Block 0 [10..11]: tripsLeft UInt16 LE (промпт 014)
+        buf[TRIPS_OFFSET] = (tripsLeft and 0xFF).toByte()
+        buf[TRIPS_OFFSET + 1] = ((tripsLeft shr 8) and 0xFF).toByte()
         // Block 1 [CARD_ID_OFFSET..+15]: cardId UUID v7 binary
         val cardIdBytes = uuidToBytes(cardId)
         System.arraycopy(cardIdBytes, 0, buf, CARD_ID_OFFSET, UUID_BYTE_LEN)
@@ -67,6 +75,8 @@ data class CardIdentityVcm1(
         const val MAGIC_SIZE = 4
         const val BITMASK_OFFSET = 4
         const val BITMASK_SIZE = 2
+        const val TRIPS_OFFSET = 10                  // block 0 [10..11] — tripsLeft UInt16 LE (промпт 014)
+        const val TRIPS_SIZE = 2
         const val CARD_ID_OFFSET = 16                // block 1
         const val CARD_ID_SIZE = 16
         const val ENTITY_OFFSET = 32                 // block 2
@@ -86,6 +96,8 @@ data class CardIdentityVcm1(
             val bitmask = ((buf[BITMASK_OFFSET].toInt() and 0xFF)) or
                 ((buf[BITMASK_OFFSET + 1].toInt() and 0xFF) shl 8)
             if (bitmask !in 0..0x3FFF) return null
+            val tripsLeft = ((buf[TRIPS_OFFSET].toInt() and 0xFF)) or
+                ((buf[TRIPS_OFFSET + 1].toInt() and 0xFF) shl 8)
             val cardId = uuidFromBytes(buf, CARD_ID_OFFSET)
             val entityBytes = buf.copyOfRange(ENTITY_OFFSET, ENTITY_OFFSET + ENTITY_SIZE)
             val entity = if (entityBytes.all { it == 0x00.toByte() }) null
@@ -97,7 +109,7 @@ data class CardIdentityVcm1(
                     id = uuidFromBytes(entityBytes, 0)
                 )
             }
-            return CardIdentityVcm1(cardId = cardId, bitmask = bitmask, entity = entity)
+            return CardIdentityVcm1(cardId = cardId, bitmask = bitmask, entity = entity, tripsLeft = tripsLeft)
         }
 
         /** UUID v7 generation helper (terminal-side placeholder). */

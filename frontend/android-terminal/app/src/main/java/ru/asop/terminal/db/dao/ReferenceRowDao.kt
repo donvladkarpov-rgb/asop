@@ -133,4 +133,27 @@ interface ReferenceRowDao {
           AND payload_json LIKE '%"routeId": "' || :routeId || '"%'
     """)
     fun observePathsByRoute(routeId: String): Flow<List<String>>
+
+    // ===== Промпт 014: поиск льготы пассажира (cardId → user → benefit) =====
+
+    /** userId из asop_cards по cardId. payload: {"cardId":..., "userId":...}. */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_cards'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"cardId": "' || :cardId || '"%'
+        LIMIT 1
+    """)
+    suspend fun findUserIdByCardId(cardId: String): String?
+
+    /** Активные назначения льгот пользователя (del нулевые) — список payload_json. */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_user_benefits'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"userId": "' || :userId || '"%'
+    """)
+    suspend fun findUserBenefits(userId: String): List<String>
 }

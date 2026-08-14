@@ -622,6 +622,79 @@ class MifareClassicCardWriter {
         }
     }
 
+    /**
+     * Промпт 014: записывает новое количество поездок (tripsLeft) в block 0 сектора 1
+     * (байты [10..11] UInt16 LE). НЕ трогает cardId (block 1), entityUuid (block 2),
+     * bitmask/magic (block 0 [0..5]) — только счётчик. Возвращает old→new или null при ошибке.
+     */
+    fun writeTripsLeft(
+        tag: Tag,
+        candidateKeys: List<ByteArray>,
+        newTripsLeft: Int
+    ): Pair<Int, Int>? {
+        if (newTripsLeft !in 0..0xFFFF) {
+            Log.w(TAG, "writeTripsLeft: out of UInt16 range: $newTripsLeft")
+            return null
+        }
+        val mfc = MifareClassic.get(tag) ?: return null
+        return try {
+            mfc.connect()
+            mfc.timeout = 3000
+            val sector = FIRST_IDENTITY_SECTOR
+            val base = mfc.sectorToBlock(sector)
+
+            val sixByteCandidates: List<ByteArray> = candidateKeys.flatMap { full ->
+                if (full.size == 6) listOf(full)
+                else if (full.size >= 12) listOf(full.copyOfRange(0, 6), full.copyOfRange(6, 12))
+                else emptyList()
+            }
+
+            // Auth sector 1 любым известным ключом
+            var authedKey: ByteArray? = null
+            for (key in sixByteCandidates) {
+                try { mfc.authenticateSectorWithKeyA(sector, key); authedKey = key; break } catch (_: Exception) {}
+            }
+            if (authedKey == null) {
+                for (key in sixByteCandidates) {
+                    try { mfc.authenticateSectorWithKeyB(sector, key); authedKey = key; break } catch (_: Exception) {}
+                }
+            }
+            if (authedKey == null) {
+                Log.w(TAG, "writeTripsLeft: no key authed")
+                return null
+            }
+
+            // Читаем текущий block 0, парсим tripsLeft из [10..11]
+            val block0 = try { mfc.readBlock(base) } catch (e: IOException) {
+                Log.w(TAG, "writeTripsLeft: readBlock0 IOException: ${e.message}"); return null
+            }
+            if (block0.size != BLOCK_SIZE) return null
+            val oldTrips = ((block0[CardIdentityVcm1.TRIPS_OFFSET].toInt() and 0xFF)) or
+                ((block0[CardIdentityVcm1.TRIPS_OFFSET + 1].toInt() and 0xFF) shl 8)
+
+            // Патчим только [10..11], остальное без изменений
+            block0[CardIdentityVcm1.TRIPS_OFFSET] = (newTripsLeft and 0xFF).toByte()
+            block0[CardIdentityVcm1.TRIPS_OFFSET + 1] = ((newTripsLeft shr 8) and 0xFF).toByte()
+
+            try { mfc.writeBlock(base, block0) } catch (e: IOException) {
+                Log.w(TAG, "writeTripsLeft: writeBlock IOException: ${e.message}"); return null
+            }
+            // Verify read-back
+            val readBack = try { mfc.readBlock(base) } catch (e: IOException) { null }
+            if (readBack == null || !readBack.contentEquals(block0)) {
+                Log.w(TAG, "writeTripsLeft: read-back mismatch (clone?)")
+                return null
+            }
+            Log.i(TAG, "writeTripsLeft: $oldTrips -> $newTripsLeft OK")
+            oldTrips to newTripsLeft
+        } catch (e: Exception) {
+            Log.w(TAG, "writeTripsLeft error: ${e.message}")
+            null
+        } finally {
+            runCatching { mfc.close() }
+        }
+    }
+
     /** Probe-read: читаем первый блок сектора для верификации что auth был реальный. */
     private fun tryReadFirstBlock(mfc: MifareClassic, sector: Int, base: Int): ByteArray? = try {
         mfc.readBlock(base)

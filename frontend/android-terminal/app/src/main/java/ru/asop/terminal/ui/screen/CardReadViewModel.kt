@@ -227,6 +227,7 @@ class CardReadViewModel @Inject constructor(
         buf.append('"').append("cardId").append('"').append(':')
             .append('"').append(vcm1.cardId.toString()).append('"').append(',')
         buf.append('"').append("bitmask").append('"').append(':').append(vcm1.bitmask).append(',')
+        buf.append('"').append("tripsLeft").append('"').append(':').append(vcm1.tripsLeft).append(',')
         val e = vcm1.entity
         if (e != null) {
             buf.append('"').append("entity").append('"').append(':').append('{')

@@ -686,8 +686,18 @@ class SessionFlowViewModel @Inject constructor(
 
     /**
      * Прикладывание пассажирской карты (внутри открытого TRIP → trip_payments Room + emit transaction).
+     *
+     * Промпт 014:
+     *  - персональная (PASSENGER) с льготой → поездки не снимаем (tripsDebited=0, benefitId=...)
+     *  - иначе → снимаем 1 поездку если tripsLeft>0, иначе отказ (declined=true)
      */
-    fun recordTripPayment(cardId: String?, tapUserId: String?) {
+    fun recordTripPayment(
+        cardId: String?,
+        tapUserId: String?,
+        isPassengerAnon: Boolean = false,
+        cardTripsLeft: Int = 0,
+        tag: android.nfc.Tag? = null
+    ) {
         val trip = _state.value.openTrip ?: return
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
         viewModelScope.launch {
@@ -696,6 +706,39 @@ class SessionFlowViewModel @Inject constructor(
                 val paymentId = UuidCreator.getTimeOrderedEpoch().toString()
                 val paymentTypeId = "00000000-0000-0000-0000-000000000803"   // VALIDATION
                 val resultId = "00000000-0000-0000-0000-000000000903"         // VALIDATION_ONLY
+
+                // 1. Определяем льготу (персональная карта): cardId → USER_ID → USER_BENEFITS → BENEFIT_ID
+                var benefitId: String? = null
+                if (!isPassengerAnon && cardId != null) {
+                    benefitId = lookupBenefitForCard(cardId)
+                }
+
+                // 2. Решение по поездкам
+                var tripsDebited = 0
+                var declined = false
+                if (benefitId == null) {
+                    if (cardTripsLeft > 0) {
+                        // списываем одну поездку и пишем на карту
+                        val newTrips = cardTripsLeft - 1
+                        tripsDebited = 1
+                        if (tag != null) {
+                            val keys = terminalKeyDao.getActive(30)
+                                .mapNotNull { e -> runCatching { terminalKeyCryptor.decrypt(e.keyMaterialEnc) }.getOrNull() }
+                            val writer = ru.asop.terminal.nfc.MifareClassicCardWriter()
+                            writer.writeTripsLeft(tag, keys, newTrips)
+                        }
+                    } else {
+                        declined = true  // поездок не осталось — не валидируем
+                    }
+                }
+
+                // 3. metadata JSON {tripsDebited, benefitId, declined}
+                val meta = org.json.JSONObject().apply {
+                    put("tripsDebited", tripsDebited)
+                    put("benefitId", benefitId ?: org.json.JSONObject.NULL)
+                    put("declined", declined)
+                }.toString()
+
                 val payment = TripPaymentEntity(
                     id = paymentId,
                     tripSessionId = trip.id,
@@ -709,11 +752,10 @@ class SessionFlowViewModel @Inject constructor(
                     carrierId = trip.carrierId,
                     timezone = trip.timezone,
                     lastSyncAt = null,
-                    metadata = "MVP_NO_DEDUCT"
+                    metadata = meta
                 )
                 tripPaymentDao.insert(payment)
 
-                val metadataJson = "\"MVP_NO_DEDUCT\""
                 val payload = TransactionCompleteRequest(
                     sessionId = trip.id,
                     transactionTypeId = paymentTypeId,
@@ -721,7 +763,7 @@ class SessionFlowViewModel @Inject constructor(
                     amount = 0.0,
                     currency = "RUB",
                     cardId = cardId,
-                    metadata = metadataJson,
+                    metadata = meta,
                     regionId = trip.regionId,
                     carrierId = trip.carrierId,
                     timezone = trip.timezone
@@ -741,9 +783,9 @@ class SessionFlowViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         submitState = SubmitState.IDLE,
-                        infoMessage = "Валидация зафиксирована",
+                        infoMessage = if (declined) "Нет поездок на карте" else "Валидация зафиксирована",
                         cardStep = CardStep.IDLE,
-                        validationResult = true,
+                        validationResult = !declined,
                         validationResultTime = resultTime
                     )
                 }
@@ -780,6 +822,35 @@ class SessionFlowViewModel @Inject constructor(
                 extractFirstCarrierId(rowJson)
             } else carrierFilter
         } catch (e: Exception) { carrierFilter }
+    }
+
+    /**
+     * Промпт 014: определяет льготу пассажира по связке
+     * cardId → ASOP_CARDS.USER_ID → ASOP_USER_BENEFITS → BENEFIT_ID.
+     * Берём первую активную льготу. null — льготы нет.
+     */
+    private suspend fun lookupBenefitForCard(cardId: String): String? {
+        return try {
+            val cardRow = referenceRowDao.findUserIdByCardId(cardId) ?: return null
+            val userId = org.json.JSONObject(cardRow).optString("userId")
+            if (userId.isBlank()) return null
+            referenceRowDao.findUserBenefits(userId)
+                .firstOrNull { row ->
+                    runCatching {
+                        val o = org.json.JSONObject(row)
+                        // активная: deleted нет (DAU фильтрует), validUntil будущее/пусто, validFrom прошлое/пусто
+                        val vu = o.optString("validUntil")
+                        val vf = o.optString("validFrom")
+                        val nowMs = System.currentTimeMillis()
+                        val untilOk = vu.isBlank() || runCatching { java.time.Instant.parse(vu).toEpochMilli() }.getOrDefault(Long.MAX_VALUE) > nowMs
+                        val fromOk = vf.isBlank() || runCatching { java.time.Instant.parse(vf).toEpochMilli() }.getOrDefault(0L) <= nowMs
+                        untilOk && fromOk
+                    }.getOrDefault(false)
+                }
+                ?.let { org.json.JSONObject(it).optString("benefitId").takeIf { b -> b.isNotBlank() } }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**
@@ -862,9 +933,15 @@ class SessionFlowViewModel @Inject constructor(
                                 ru.asop.terminal.nfc.TonePlayer.tapBeep()
                                 exitPassengerMode()
                             } else {
+                                val isPassengerAnon = roles.any {
+                                    it == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS
+                                }
                                 recordTripPayment(
                                     cardId = outcome.identity.cardId?.toString(),
-                                    tapUserId = outcome.identity.entity?.id?.toString()
+                                    tapUserId = outcome.identity.entity?.id?.toString(),
+                                    isPassengerAnon = isPassengerAnon,
+                                    cardTripsLeft = outcome.identity.tripsLeft,
+                                    tag = tag
                                 )
                             }
                         } else {

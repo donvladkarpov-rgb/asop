@@ -40,6 +40,7 @@ import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
 import ru.asop.terminal.ui.screen.AssignCarrierScreen
 import ru.asop.terminal.ui.screen.CardActivationScreen
+import ru.asop.terminal.ui.screen.TopUpScreen
 import ru.asop.terminal.ui.screen.CardReadScreen
 import ru.asop.terminal.ui.screen.OpenShiftScreen
 import ru.asop.terminal.ui.screen.CloseShiftScreen
@@ -196,6 +197,14 @@ fun TerminalNavHost() {
                         navController.navigate("card-activation")
                     }
                 )
+                NavigationDrawerItem(
+                    label = { Text("Пополнить карту") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate("top-up")
+                    }
+                )
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 NavigationDrawerItem(
                     label = { Text("Открыть смену") },
@@ -300,6 +309,11 @@ fun TerminalNavHost() {
                 }
                 composable("card-activation") {
                     CardActivationScreen(
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+                composable("top-up") {
+                    TopUpScreen(
                         onBack = { navController.popBackStack() }
                     )
                 }
