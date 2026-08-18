@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import android.nfc.Tag
 import com.github.f4b6a3.uuid.UuidCreator
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import ru.asop.terminal.NfcTagBus
 import ru.asop.terminal.activation.AsopCardType
@@ -97,6 +99,8 @@ class SessionFlowViewModel @Inject constructor(
         // Промпт 014: feedback для экрана ожидания пассажиров
         val validationResult: Boolean? = null,
         val validationResultTime: Long = 0L,
+        /** Деталь результата валидации: остаток поездок / название льготы / причина отказа. */
+        val validationDetail: String? = null,
         // Промпт 011: OpenTrip cascade picker (TID → Vehicle → Route → Path)
         val tripTidId: String? = null,
         val tripTidLabel: String? = null,
@@ -190,22 +194,37 @@ class SessionFlowViewModel @Inject constructor(
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
+    /** true, пока ЭКРАН этой VM в composition. Dormant-VM (в backstack) не ест таги из шины. */
+    @Volatile private var screenVisible = false
+
+    /** Вызывается из SessionFlowScreen.DisposableEffect — разрешает потребление NfcTagBus. */
+    fun onScreenEnter() {
+        screenVisible = true
+    }
+
+    fun onScreenExit() {
+        screenVisible = false
+    }
+
     init {
         // Feitian F20 fallback: опрос NfcTagBus на случай если ReaderMode binder не
         // зарегистрирован и единственный путь к карте — через ForegroundDispatch /
         // onNewIntent в MainActivity.
+        // Ревью-фикс: ONLY while screen visible — viewModelScope переживает уход экрана
+        // в backstack, и dormant-VM (напр. открытый рейс в TAP_PASSENGER с cardStep=IDLE)
+        // воровала таги у видимого экрана («Закрыть смену» не реагировал на карты).
         viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(300L)
+                if (!screenVisible) continue
                 if (state.value.cardStep == CardStep.WAITING_TAP ||
                     state.value.cardStep == CardStep.IDLE) {
                     // Ревью-фикс: если другой экран (TopUp) заявил права на NfcTagBus — не трогаем.
-                    if (!NfcTagBus.isClaimed()) {
-                        val pending = NfcTagBus.consume()
-                        if (pending != null) {
-                            android.util.Log.i("SessionFlowVM", "NFC bus yielded tag, calling onTagDiscovered")
-                            onTagDiscovered(pending)
-                        }
+                    // consumeIfNotClaimed — атомарная проверка+изъятие (isClaimed()+consume() имели TOCTOU-окно).
+                    val pending = NfcTagBus.consumeIfNotClaimed()
+                    if (pending != null) {
+                        android.util.Log.i("SessionFlowVM", "NFC bus yielded tag, calling onTagDiscovered")
+                        onTagDiscovered(pending)
                     }
                 }
             }
@@ -693,13 +712,19 @@ class SessionFlowViewModel @Inject constructor(
      * Промпт 014:
      *  - персональная (PASSENGER) с льготой → поездки не снимаем (tripsDebited=0, benefitId=...)
      *  - иначе → снимаем 1 поездку если tripsLeft>0, иначе отказ (declined=true)
+     *
+     * NFC-запись выполняется ВЫЗЫВАЮЩИМ в той же mfc-сессии (handlePassengerTap →
+     * Vcm1CardAuth.Session.updateTrips) — здесь только фиксация результата.
      */
     fun recordTripPayment(
         cardId: String?,
         tapUserId: String?,
         isPassengerAnon: Boolean = false,
-        cardTripsLeft: Int = 0,
-        tag: android.nfc.Tag? = null
+        tripsDebited: Int = 0,
+        declined: Boolean = false,
+        writeFailed: Boolean = false,
+        benefitId: String? = null,
+        validationDetail: String? = null
     ) {
         val trip = _state.value.openTrip ?: return
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
@@ -710,47 +735,12 @@ class SessionFlowViewModel @Inject constructor(
                 val paymentTypeId = "00000000-0000-0000-0000-000000000803"   // VALIDATION
                 val resultId = "00000000-0000-0000-0000-000000000903"         // VALIDATION_ONLY
 
-                // 1. Определяем льготу. У персональной VCM1 entity.id = userId —
-                // используем его напрямую (ревью: lookup cardId→asop_cards ломается
-                // для новоактивированных карт, которых ещё нет в reference_rows).
-                // Fallback — старый путь cardId → asop_cards → userId.
-                var benefitId: String? = null
-                if (!isPassengerAnon) {
-                    benefitId = tapUserId?.takeIf { it.isNotBlank() }?.let { lookupBenefitForUser(it) }
-                        ?: cardId?.let { lookupBenefitForCard(it) }
-                }
-
-                // 2. Решение по поездкам
-                var tripsDebited = 0
-                var declined = false
-                if (benefitId == null) {
-                    if (cardTripsLeft > 0) {
-                        // списываем одну поездку и пишем на карту; debit подтверждаем
-                        // только успешной записью (ревью: при write-fail карта не списана,
-                        // репортить tripsDebited=1 нельзя)
-                        val newTrips = cardTripsLeft - 1
-                        var writeOk = false
-                        if (tag != null) {
-                            val keys = terminalKeyDao.getActive(30)
-                                .mapNotNull { e -> runCatching { terminalKeyCryptor.decrypt(e.keyMaterialEnc) }.getOrNull() }
-                            val writer = ru.asop.terminal.nfc.MifareClassicCardWriter()
-                            writeOk = writer.writeTripsLeft(tag, keys, newTrips) != null
-                        }
-                        if (writeOk) {
-                            tripsDebited = 1
-                        } else {
-                            declined = true  // запись не прошла — не валидируем, пусть переприложит
-                        }
-                    } else {
-                        declined = true  // поездок не осталось — не валидируем
-                    }
-                }
-
-                // 3. metadata JSON {tripsDebited, benefitId, declined}
+                // metadata JSON {tripsDebited, benefitId, declined, writeFailed}
                 val meta = org.json.JSONObject().apply {
                     put("tripsDebited", tripsDebited)
                     put("benefitId", benefitId ?: org.json.JSONObject.NULL)
                     put("declined", declined)
+                    put("writeFailed", writeFailed)
                 }.toString()
 
                 val payment = TripPaymentEntity(
@@ -797,16 +787,21 @@ class SessionFlowViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         submitState = SubmitState.IDLE,
-                        infoMessage = if (declined) "Нет поездок на карте" else "Валидация зафиксирована",
+                        infoMessage = when {
+                            writeFailed -> "Ошибка записи на карту — приложите карту ещё раз"
+                            declined -> "Нет поездок на карте"
+                            else -> "Валидация зафиксирована"
+                        },
                         cardStep = CardStep.IDLE,
                         validationResult = !declined,
-                        validationResultTime = resultTime
+                        validationResultTime = resultTime,
+                        validationDetail = validationDetail
                     )
                 }
-                kotlinx.coroutines.delay(1200)
+                kotlinx.coroutines.delay(resultDisplayMs)
                 _state.update {
                     if (it.validationResultTime == resultTime) {
-                        it.copy(validationResult = null, validationResultTime = 0L)
+                        it.copy(validationResult = null, validationResultTime = 0L, validationDetail = null)
                     } else it
                 }
             } catch (e: Exception) {
@@ -816,13 +811,14 @@ class SessionFlowViewModel @Inject constructor(
                         submitState = SubmitState.IDLE,
                         validationResult = false,
                         validationResultTime = resultTime,
+                        validationDetail = "Ошибка валидации: ${e.message}",
                         errorMessage = "Ошибка валидации: ${e.message}"
                     )
                 }
-                kotlinx.coroutines.delay(1200)
+                kotlinx.coroutines.delay(resultDisplayMs)
                 _state.update {
                     if (it.validationResultTime == resultTime) {
-                        it.copy(validationResult = null, validationResultTime = 0L)
+                        it.copy(validationResult = null, validationResultTime = 0L, validationDetail = null)
                     } else it
                 }
             }
@@ -836,6 +832,14 @@ class SessionFlowViewModel @Inject constructor(
                 extractFirstCarrierId(rowJson)
             } else carrierFilter
         } catch (e: Exception) { carrierFilter }
+    }
+
+    /** Название льготы из справочника asop_benefits (для показа при валидации). */
+    private suspend fun lookupBenefitName(benefitId: String): String? {
+        return try {
+            referenceRowDao.findBenefitById(benefitId)
+                ?.let { org.json.JSONObject(it).optString("benefitName").takeIf { n -> n.isNotBlank() } }
+        } catch (e: Exception) { null }
     }
 
     /**
@@ -902,6 +906,9 @@ class SessionFlowViewModel @Inject constructor(
      */
     private val debounceMs = 1500L
 
+    /** Сколько показывать круг ✓/✗ + деталь (остаток поездок / льгота) на экране валидации. */
+    private val resultDisplayMs = 2500L
+
     fun onTagDiscovered(tag: Tag) {
         try {
             android.util.Log.i("SessionFlowVM", "onTagDiscovered: techList=${tag.techList.joinToString(",")}, uid=${tag.id.joinToString("") { "%02X".format(it) }}")
@@ -938,62 +945,32 @@ class SessionFlowViewModel @Inject constructor(
                         .getOrNull()
                 }
                 android.util.Log.i("SessionFlowVM", "ASOP-keys loaded: ${asopKeys.size}")
-                val outcome = ru.asop.terminal.nfc.Vcm1CardAuth.read(tag, asopKeys)
-                when (outcome) {
-                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Ok -> {
-                        android.util.Log.i("SessionFlowVM",
-                            "VCM1 auth OK: uid=${outcome.uidHex}, " +
-                                "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
-                                "cardId=${outcome.identity.cardId}")
-                        android.util.Log.d("SessionFlowVM", "VCM1 OK handler: kind=${_state.value.kind}")
-                        if (_state.value.kind == FlowKind.TAP_PASSENGER) {
-                            val roles = ru.asop.terminal.activation.AsopCardType
-                                .allRolesForBitmask(outcome.identity.bitmask)
-                            val isDriver = roles.any {
-                                it == ru.asop.terminal.activation.AsopCardType.DRIVER ||
-                                it == ru.asop.terminal.activation.AsopCardType.CARRIER_DISPATCHER ||
-                                it == ru.asop.terminal.activation.AsopCardType.KRS_DISPATCHER
-                            }
-                            if (isDriver) {
-                                ru.asop.terminal.nfc.TonePlayer.tapBeep()
-                                exitPassengerMode()
-                            } else {
-                                val isPassengerAnon = roles.any {
-                                    it == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS
-                                }
-                                recordTripPayment(
-                                    cardId = outcome.identity.cardId?.toString(),
-                                    tapUserId = outcome.identity.entity?.id?.toString(),
-                                    isPassengerAnon = isPassengerAnon,
-                                    cardTripsLeft = outcome.identity.tripsLeft,
-                                    tag = tag
-                                )
-                            }
-                        } else {
+                if (_state.value.kind == FlowKind.TAP_PASSENGER) {
+                    // Read + debit в ОДНОЙ mfc-сессии: Feitian F20 не даёт второй connect()
+                    // по тому же Tag после close() (IOException null) — writeTripsLeft
+                    // с отдельным подключением здесь не работает.
+                    handlePassengerTap(tag, asopKeys)
+                } else {
+                    val outcome = ru.asop.terminal.nfc.Vcm1CardAuth.read(tag, asopKeys)
+                    when (outcome) {
+                        is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Ok -> {
+                            android.util.Log.i("SessionFlowVM",
+                                "VCM1 auth OK: uid=${outcome.uidHex}, " +
+                                    "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
+                                    "cardId=${outcome.identity.cardId}")
+                            android.util.Log.d("SessionFlowVM", "VCM1 OK handler: kind=${_state.value.kind}")
                             onCardTappedForAuth(outcome.uidHex, outcome.rawVcm1Bytes)
                         }
-                    }
-                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
-                        android.util.Log.w("SessionFlowVM",
-                            "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
-                                "details=${outcome.details}")
-                        ru.asop.terminal.nfc.TonePlayer.errorBeep()
-                        val failTime = System.currentTimeMillis()
-                        _state.update {
-                            val s = it.copy(
-                                cardStep = CardStep.NFC_ERROR,
-                                errorMessage = outcome.details
-                            )
-                            if (s.kind == FlowKind.TAP_PASSENGER) {
-                                s.copy(validationResult = false, validationResultTime = failTime)
-                            } else s
-                        }
-                        if (_state.value.kind == FlowKind.TAP_PASSENGER) {
-                            kotlinx.coroutines.delay(1200)
+                        is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
+                            android.util.Log.w("SessionFlowVM",
+                                "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
+                                    "details=${outcome.details}")
+                            ru.asop.terminal.nfc.TonePlayer.errorBeep()
                             _state.update {
-                                if (it.validationResultTime == failTime) {
-                                    it.copy(validationResult = null, validationResultTime = 0L)
-                                } else it
+                                it.copy(
+                                    cardStep = CardStep.NFC_ERROR,
+                                    errorMessage = outcome.details
+                                )
                             }
                         }
                     }
@@ -1007,6 +984,121 @@ class SessionFlowViewModel @Inject constructor(
                         errorMessage = "Ошибка чтения NFC: ${e.javaClass.simpleName} ${e.message ?: "(без сообщения)"}"
                     )
                 }
+            }
+        }
+    }
+
+    /**
+     * Валидация пассажирской карты в открытом рейсе: чтение VCM1 + списание поездки
+     * в той же mfc-сессии ([Vcm1CardAuth.readWithSession] + [Vcm1CardAuth.Session.updateTrips]).
+     *
+     * Промпт 014:
+     *  - карта водиля/диспетчера → выход из режима валидации
+     *  - персональная со льготой → tripsDebited=0, benefitId
+     *  - иначе → списываем 1 поездку (запись в той же сессии), tripsLeft=0 → отказ
+     */
+    private suspend fun handlePassengerTap(tag: Tag, asopKeys: List<ByteArray>) {
+        withContext(Dispatchers.IO) {
+            val result = ru.asop.terminal.nfc.Vcm1CardAuth.readWithSession(tag, asopKeys)
+            try {
+                when (val outcome = result.outcome) {
+                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Ok -> {
+                        android.util.Log.i("SessionFlowVM",
+                            "VCM1 auth OK: uid=${outcome.uidHex}, " +
+                                "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
+                                "cardId=${outcome.identity.cardId}, tripsLeft=${outcome.identity.tripsLeft}")
+                        val roles = ru.asop.terminal.activation.AsopCardType
+                            .allRolesForBitmask(outcome.identity.bitmask)
+                        val isDriver = roles.any {
+                            it == ru.asop.terminal.activation.AsopCardType.DRIVER ||
+                            it == ru.asop.terminal.activation.AsopCardType.CARRIER_DISPATCHER ||
+                            it == ru.asop.terminal.activation.AsopCardType.KRS_DISPATCHER
+                        }
+                        if (isDriver) {
+                            ru.asop.terminal.nfc.TonePlayer.tapBeep()
+                            exitPassengerMode()
+                        } else {
+                            val isPassengerAnon = roles.any {
+                                it == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS
+                            }
+                            val identity = outcome.identity
+
+                            // 1. Льгота: у персональной VCM1 entity.id = userId — напрямую,
+                            // fallback cardId → asop_cards → userId.
+                            var benefitId: String? = null
+                            if (!isPassengerAnon) {
+                                benefitId = identity.entity?.id?.toString()
+                                    ?.takeIf { it.isNotBlank() }?.let { lookupBenefitForUser(it) }
+                                    ?: identity.cardId.toString().let { lookupBenefitForCard(it) }
+                            }
+
+                            // 2. Списание — ТОЛЬКО через открытую сессию (без reconnect).
+                            var tripsDebited = 0
+                            var declined = false
+                            var writeFailed = false
+                            if (benefitId == null) {
+                                if (identity.tripsLeft > 0) {
+                                    val updated = result.session?.updateTrips(identity.tripsLeft - 1) == true
+                                    if (updated) {
+                                        tripsDebited = 1
+                                    } else {
+                                        declined = true
+                                        writeFailed = true
+                                    }
+                                } else {
+                                    declined = true
+                                }
+                            }
+                            android.util.Log.i("SessionFlowVM",
+                                "passenger tap: benefitId=$benefitId tripsLeft=${identity.tripsLeft} " +
+                                    "tripsDebited=$tripsDebited declined=$declined writeFailed=$writeFailed")
+
+                            // Деталь результата для водителя/пассажира: льгота или остаток поездок.
+                            val benefitName = benefitId?.let { lookupBenefitName(it) }
+                            val detail = when {
+                                benefitName != null -> "Льгота: $benefitName"
+                                tripsDebited > 0 -> "Осталось поездок: ${identity.tripsLeft - tripsDebited}"
+                                writeFailed -> "Ошибка записи на карту"
+                                else -> "Нет поездок на карте"
+                            }
+
+                            recordTripPayment(
+                                cardId = identity.cardId.toString(),
+                                tapUserId = identity.entity?.id?.toString(),
+                                isPassengerAnon = isPassengerAnon,
+                                tripsDebited = tripsDebited,
+                                declined = declined,
+                                writeFailed = writeFailed,
+                                benefitId = benefitId,
+                                validationDetail = detail
+                            )
+                        }
+                    }
+                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
+                        android.util.Log.w("SessionFlowVM",
+                            "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
+                                "details=${outcome.details}")
+                        ru.asop.terminal.nfc.TonePlayer.errorBeep()
+                        val failTime = System.currentTimeMillis()
+                        _state.update {
+                            it.copy(
+                                cardStep = CardStep.NFC_ERROR,
+                                errorMessage = outcome.details,
+                                validationResult = false,
+                                validationResultTime = failTime,
+                                validationDetail = outcome.details
+                            )
+                        }
+                        kotlinx.coroutines.delay(resultDisplayMs)
+                        _state.update {
+                            if (it.validationResultTime == failTime) {
+                                it.copy(validationResult = null, validationResultTime = 0L, validationDetail = null)
+                            } else it
+                        }
+                    }
+                }
+            } finally {
+                result.session?.close()
             }
         }
     }

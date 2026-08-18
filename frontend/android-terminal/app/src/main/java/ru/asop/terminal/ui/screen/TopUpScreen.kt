@@ -58,11 +58,16 @@ fun TopUpScreen(
     val nfcAdapter = remember { viewModel.nfcAdapter }
 
     DisposableEffect(nfcAdapter, activity) {
+        // Ревью-фикс: claim NfcTagBus на время ВИДИМОСТИ экрана, не жизни ViewModel.
+        // Drawer-навигация оставляет entry (и VM) в backstack — claim из init висел бы
+        // и dormant-loop съедал таги SessionFlow.
+        viewModel.onScreenEnter()
         val needsNfc = state.step == TopUpViewModel.Step.AUTH ||
             state.step == TopUpViewModel.Step.TARGET_CARD ||
             state.step == TopUpViewModel.Step.AMOUNT
         android.util.Log.i("TopUpScreen",
             "arm: step=${state.step} nfc=${nfcAdapter?.isEnabled} act=${activity?.javaClass?.simpleName} needsNfc=$needsNfc")
+        var acquired = false
         if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled && needsNfc) {
             nfcAdapter.enableReaderMode(
                 activity,
@@ -101,9 +106,12 @@ fun TopUpScreen(
                 android.util.Log.w("TopUpScreen", "enableForegroundDispatch failed: ${e.message}")
             }
             NfcReaderRefCount.acquire()
+            acquired = true
         }
         onDispose {
-            if (nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
+            viewModel.onScreenExit()
+            // Ревью-фикс: release только если этот инстанс эффекта acquire'ил (симметрия).
+            if (acquired && nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
                 nfcAdapter.disableReaderMode(activity)
                 try { nfcAdapter.disableForegroundDispatch(activity) } catch (_: Exception) {}
             }

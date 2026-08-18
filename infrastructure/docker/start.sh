@@ -1,16 +1,27 @@
 #!/bin/bash
+# start.sh — wave-based запуск ASOP Platform в Docker (аналог start.ps1)
+# Usage: ./start.sh
+#        ./start.sh --skip-build   (без --build, если образы уже свежие)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 COMPOSE="docker compose -f docker-compose.yml"
 
+SKIP_BUILD=0
+for arg in "$@"; do
+  case "$arg" in
+    --skip-build) SKIP_BUILD=1 ;;
+    *) echo "Unknown arg: $arg (supported: --skip-build)"; exit 1 ;;
+  esac
+done
+
 info() { echo "[$(date +%H:%M:%S)] $*"; }
 warn() { echo "[$(date +%H:%M:%S)] WARN: $*"; }
 
 # Проверка Docker
 if ! docker info >/dev/null 2>&1; then
-  echo "ERROR: Docker недоступен. Запусти Docker Desktop на Windows и подожди 30 секунд."
+  echo "ERROR: Docker недоступен. Запусти Docker Desktop и подожди 30 секунд."
   echo "       После этого выполни скрипт снова."
   exit 1
 fi
@@ -30,58 +41,56 @@ check_jars() {
     echo "Собери JAR'ы и запусти снова:"
     echo "  ./gradlew bootJar --no-daemon"
     echo ""
+    exit 1
   fi
 }
 
 check_jars
 
-info "=== Wave 1: База данных + координатор ==="
-$COMPOSE up -d postgres zookeeper
-info "Ожидание 30 сек..."
-sleep 30
+# Helper для запуска wave
+invoke_wave() {
+  local name="$1" wait_sec="$2" build="$3" no_deps="$4"; shift 4
+  info "=== $name ==="
+  local args="up -d"
+  [ "$no_deps" = "1" ] && args="$args --no-deps"
+  [ "$build" = "1" ] && [ $SKIP_BUILD -eq 0 ] && args="$args --build"
+  # shellcheck disable=SC2086
+  $COMPOSE $args "$@"
+  if [ "$wait_sec" -gt 0 ]; then
+    info "Ожидание $wait_sec сек..."
+    sleep "$wait_sec"
+  fi
+}
 
-info "=== Wave 2: Криптосервис + миграции ==="
-$COMPOSE up -d crypto-service liquibase
-info "Ожидание 45 сек для crypto-service..."
-sleep 45
+# Wave 1: БД + координатор
+invoke_wave "Wave 1: База данных + координатор" 30 0 0 postgres zookeeper
 
-info "=== Wave 3: Сертификаты ==="
-$COMPOSE up -d certs-init
-info "Ожидание 30 сек для certs-init..."
-sleep 30
+# Wave 2: Криптосервис + миграции (--build: JAR мог пересобраться)
+invoke_wave "Wave 2: Криптосервис + миграции" 45 1 0 crypto-service liquibase
 
-info "=== Wave 4: Брокер сообщений ==="
-$COMPOSE up -d kafka
-info "Ожидание 60 сек для Kafka..."
-sleep 60
+# Wave 3: Сертификаты
+invoke_wave "Wave 3: Сертификаты" 30 0 0 certs-init
 
-info "=== Wave 5: Хранилища (Redis, MinIO S3) ==="
-$COMPOSE up -d redis minio minio-init
-info "Ожидание 30 сек для Redis/MinIO..."
-sleep 30
+# Wave 4: Брокер сообщений
+invoke_wave "Wave 4: Брокер сообщений (Kafka)" 60 0 0 kafka
 
-info "=== Wave 6: Keycloak ==="
-$COMPOSE up -d keycloak
-info "Ожидание 60 сек для Keycloak..."
-sleep 60
+# Wave 5: Хранилища (Redis, MinIO S3)
+invoke_wave "Wave 5: Хранилища (Redis, MinIO S3)" 30 0 0 redis minio minio-init
 
-info "=== Wave 7: Приложения (группа A) ==="
-$COMPOSE up -d --no-deps gateway-service user-service admin-service
-info "Ожидание 30 сек..."
-sleep 30
+# Wave 6: Keycloak
+invoke_wave "Wave 6: Keycloak" 60 0 0 keycloak
 
-info "=== Wave 8: Приложения (группа B) ==="
-$COMPOSE up -d --no-deps carrier-service terminal-service card-service route-service
-info "Ожидание 30 сек..."
-sleep 30
+# Wave 7: Приложения (группа A) — --build обязателен после пересборки JARs
+invoke_wave "Wave 7: Приложения (группа A)" 30 1 1 gateway-service user-service admin-service
 
-info "=== Wave 9: Приложения (группа C) + оркестратор ==="
-$COMPOSE up -d --no-deps session-service debt-service audit-service fiscal-service orchestrator-service
-info "Ожидание 30 сек..."
-sleep 30
+# Wave 8: Приложения (группа B)
+invoke_wave "Wave 8: Приложения (группа B)" 30 1 1 carrier-service terminal-service card-service route-service
 
-info "=== Wave 10: Фронтенд ==="
-$COMPOSE up -d --no-deps web-admin
+# Wave 9: Приложения (группа C) + оркестратор
+invoke_wave "Wave 9: Приложения (группа C) + оркестратор" 30 1 1 session-service debt-service audit-service fiscal-service orchestrator-service
+
+# Wave 10: Фронтенд
+invoke_wave "Wave 10: Фронтенд" 0 1 1 web-admin
 
 info ""
 info "=== Статус всех контейнеров ==="
@@ -90,18 +99,18 @@ $COMPOSE ps
 info ""
 info "=== Логи одноразовых контейнеров (ожидаемо) ==="
 for svc in certs-init liquibase; do
-  $COMPOSE ps --all | grep -q "$svc" && $COMPOSE logs --tail=10 "$svc" || true
+  $COMPOSE ps --all 2>/dev/null | grep -q "$svc" && $COMPOSE logs --tail=10 "$svc" || true
 done
 
 info ""
-info "Готово! Проверка healthcheck'ов через 15 сек..."
+info "Проверка healthcheck'ов через 15 сек..."
 sleep 15
 
 UNHEALTHY=$($COMPOSE ps 2>/dev/null | grep -c "unhealthy" || true)
 if [ "$UNHEALTHY" -gt 0 ]; then
   warn "Найдено $UNHEALTHY unhealthy контейнеров:"
   $COMPOSE ps | grep "unhealthy"
-  warn "Проверь логи: docker compose -f $COMPOSE_FILE logs <service>"
+  warn "Проверь логи: docker compose -f docker-compose.yml logs <service>"
 else
   info "Все контейнеры здоровы!"
 fi

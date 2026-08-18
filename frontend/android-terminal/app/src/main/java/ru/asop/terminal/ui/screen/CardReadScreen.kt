@@ -60,6 +60,9 @@ fun CardReadScreen(
     // карта не перехватывалась приложением.
     val activity = remember { context.findActivity() }
     DisposableEffect(nfcAdapter, activity) {
+        // Ревью-фикс: acquire/release симметрично в рамках этого инстанса эффекта
+        // (инстанс без acquire не должен декрементить — иначе андерфлоу рефкаунта).
+        var acquired = false
         if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled) {
             nfcAdapter.enableReaderMode(
                 activity,
@@ -74,9 +77,10 @@ fun CardReadScreen(
             // (SessionFlow/CardActivation) не должен убивать наш reader. Physical
             // disable только когда никто больше не держит reader.
             NfcReaderRefCount.acquire()
+            acquired = true
         }
         onDispose {
-            if (nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
+            if (acquired && nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
                 nfcAdapter.disableReaderMode(activity)
             }
         }

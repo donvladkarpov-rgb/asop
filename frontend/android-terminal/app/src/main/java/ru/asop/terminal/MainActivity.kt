@@ -77,6 +77,30 @@ object NfcTagBus {
 
     fun isClaimed(): Boolean = claimedBy != null
 
+    /** Атомарный consume для владельца claim'а: чужие таги не забираем (и свои — если claim уже ушёл). */
+    fun consumeIfOwner(owner: String): Tag? {
+        mutex.lock()
+        return try {
+            if (claimedBy == owner) {
+                val t = pendingTag
+                pendingTag = null
+                t
+            } else null
+        } finally { mutex.unlock() }
+    }
+
+    /** Атомарная замена isClaimed()+consume(): закрывает TOCTOU-окно между проверкой и изъятием. */
+    fun consumeIfNotClaimed(): Tag? {
+        mutex.lock()
+        return try {
+            if (claimedBy == null) {
+                val t = pendingTag
+                pendingTag = null
+                t
+            } else null
+        } finally { mutex.unlock() }
+    }
+
     fun publish(tag: Tag) {
         mutex.lock()
         try {

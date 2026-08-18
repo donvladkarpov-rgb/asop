@@ -107,6 +107,14 @@ fun SessionFlowScreen(
         // Решение: общий NfcReaderRefCount (SessionFlow + CardActivation + CardRead) —
         // disable только когда НИКТО больше не держит reader.
         val needsActiveReader = nfcEnabled
+        // Ревью-фикс: шину NfcTagBus потребляет только ВИДИМЫЙ экран — dormant-VM
+        // в backstack больше не перехватывает таги (см. SessionFlowViewModel.onScreenEnter).
+        viewModel.onScreenEnter()
+        // Ревью-фикс: acquire/release СИММЕТРИЧНО в рамках ЭТОГО инстанса эффекта.
+        // Эффект перезапускается при флипе nfcEnabled false→true: первый инстанс
+        // не приобретал, но его onDispose делал release → рефкаунт андерфлоу →
+        // late-dispose прошлого экрана гасил reader активного («смена не закрывается»).
+        var acquired = false
         if (nfcAdapter != null && activity != null && nfcAdapter.isEnabled && needsActiveReader) {
             Log.i("SessionNFC", "try enableReaderMode on activity=${activity.javaClass.simpleName}")
             try {
@@ -150,11 +158,13 @@ fun SessionFlowScreen(
                 Log.w("SessionNFC", "enableForegroundDispatch failed: ${e.message}")
             }
             NfcReaderRefCount.acquire()
+            acquired = true
         }
         onDispose {
+            viewModel.onScreenExit()
             // Промпт 013b/014: не вызываем disable без рефкаунта — иначе late onDispose
             // старого экрана убивает reader активного. Дизейблим только если refcount==0.
-            if (nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
+            if (acquired && nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {
                 Log.i("SessionNFC", "onDispose: refcount==0, disabling reader")
                 try { nfcAdapter.disableReaderMode(activity) } catch (_: Exception) {}
                 try { nfcAdapter.disableForegroundDispatch(activity) } catch (_: Exception) {}

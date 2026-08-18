@@ -109,14 +109,26 @@ class CardActivationService(
             throw ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "entityId must be null for PASSENGER_ANONYMOUS")
         }
-// Промпт 009 defense-in-depth: проверить, что userId существует в ASOP_USERS.
-// Без этого можно записать в БД "осиротевший" userId, который рушит JOIN.
-        if (entityType == "userId" && vcm1.entityId != null) {
-            val nonNullEntityId = vcm1.entityId!!  // smart cast workaround
-            if (!userIdExists(nonNullEntityId)) {
-                throw ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "userId $nonNullEntityId not found in ASOP_USERS")
-            }
+        // Промпт 009 defense-in-depth: проверить, что userId существует в ASOP_USERS.
+        // Без этого можно записать в БД "осиротевший" userId, который рушит JOIN.
+        // Реактивно (block() на reactor-потоке запрещён — IllegalStateException).
+        val userIdCheck: Mono<Void> = if (entityType == "userid" && vcm1.entityId != null) {
+            val nonNullEntityId = vcm1.entityId!!
+            databaseClient.sql("SELECT 1 FROM ASOP_USERS WHERE user_id = :userId LIMIT 1")
+                .bind("userId", nonNullEntityId)
+                .fetch()
+                .rowsUpdated()
+                .map { it > 0 }
+                .defaultIfEmpty(false)
+                .flatMap { exists ->
+                    if (exists) Mono.empty()
+                    else Mono.error(ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "userId $nonNullEntityId not found in ASOP_USERS"
+                    ))
+                }
+        } else {
+            Mono.empty()
         }
 
         // authorize() flow для VCM1: проверяем рядом матрицы авторизации.
@@ -126,7 +138,7 @@ class CardActivationService(
         val uidBytes = hexToBytes(vcm1.uid)
         val now = Instant.now()
 
-        return cardMifareRepository.findByUid(uidBytes)
+        return userIdCheck.then(cardMifareRepository.findByUid(uidBytes))
             .flatMap<CardActivateResponse> { existing ->
                 val serverCardId = existing.cardId
                 val overridden = serverCardId != clientCardId
@@ -304,7 +316,7 @@ class CardActivationService(
         // Routing по ASOP_USER_REGIONS / ASOP_USER_CARRIERS / ASOP_USER_ORGANIZERS / etc.
         // выполняется через JOIN на USER_ID (см. AC5, AC7).
         // Колонки оставлены в схеме для backward-compat с DESFire (legacy) картами.
-        val userId: UUID? = if (entityType == "userId") entityId else null
+        val userId: UUID? = if (entityType == "userid") entityId else null
         val sql = "UPDATE ASOP_CARDS SET " +
             "USER_ID = :userId, " +
             "REGION_ID = NULL, " +
@@ -338,7 +350,7 @@ class CardActivationService(
         return CardEntity(
             cardId = cardId,
             cardTypeId = MIFARE_DESFIRE_TYPE,
-            userId = if (entityType == "userId") entityId else null,
+            userId = if (entityType == "userid") entityId else null,
             regionId = null,
             organizerId = null,
             carrierId = null,
@@ -355,15 +367,6 @@ class CardActivationService(
      * Промпт 009 defense-in-depth: проверить, что userId существует в ASOP_USERS.
      * PROTECT от записи orphan userId в БД (который рушит JOIN ASOP_USERS_*).
      */
-    private fun userIdExists(userId: java.util.UUID): Boolean =
-        databaseClient.sql("SELECT 1 FROM ASOP_USERS WHERE user_id = :userId LIMIT 1")
-            .bind("userId", userId)
-            .fetch()
-            .rowsUpdated()
-            .map { it > 0 }
-            .defaultIfEmpty(false)
-            .block() ?: false
-
     /**
      * Строит VCM1 IDENTITY_JSON-объект для хранения в БД.
      */

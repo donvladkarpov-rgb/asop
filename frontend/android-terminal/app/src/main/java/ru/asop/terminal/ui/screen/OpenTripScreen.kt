@@ -93,7 +93,7 @@ fun TripCascadePicker(
                 // Промпт 014: режим ожидания пассажиров — большой круг + галочка/крест
                 val now = System.currentTimeMillis()
                 val showResult = state.validationResultTime > 0 &&
-                    (now - state.validationResultTime) < 1200
+                    (now - state.validationResultTime) < 2500
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
                     contentAlignment = Alignment.Center
@@ -115,6 +115,13 @@ fun TripCascadePicker(
                                 if (isOk) "Принято" else "Отказ",
                                 color = color, fontWeight = FontWeight.Bold
                             )
+                            state.validationDetail?.let { detail ->
+                                Text(
+                                    detail,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
                         } else {
                             Box(
                                 modifier = Modifier

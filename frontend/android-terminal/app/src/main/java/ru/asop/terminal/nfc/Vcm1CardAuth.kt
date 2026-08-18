@@ -16,6 +16,10 @@ import ru.asop.terminal.activation.CardIdentityVcm1
  *   4. Полный скан (MifareClassicReader.read()) используется только в «Прочитать карту».
  *
  * Возвращает Vcm1AuthOutcome — общий тип для всех UM-флоу.
+ *
+ * ReadResult/Session: запись tripsLeft возможна ТОЛЬКО в той же mfc-сессии, что и чтение
+ * (Feitian F20: reconnect по тому же Tag после close() падает IOException(null) —
+ * фича writeTripsLeft с отдельным connect() на этой модели не работает).
  */
 object Vcm1CardAuth {
 
@@ -40,29 +44,76 @@ object Vcm1CardAuth {
         }
     }
 
+    /** Исход чтения + открытая сессия (не null только при Outcome.Ok). */
+    data class ReadResult(val outcome: Outcome, val session: Session?)
+
+    /**
+     * Живая mfc-сессия после успешного чтения sector 1 (auth уже пройден тем же ключом).
+     * Позволяет дописать tripsLeft БЕЗ reconnect — [updateTrips].
+     */
+    class Session internal constructor(
+        private val mfc: MifareClassic,
+        private val base: Int
+    ) {
+        /**
+         * Патчит только байты [10..11] block 0 (tripsLeft UInt16 LE), cardId/bitmask/magic
+         * не трогает. Read-back верификация. true = записано и подтверждено.
+         */
+        fun updateTrips(newTripsLeft: Int): Boolean {
+            if (newTripsLeft !in 0..0xFFFF) return false
+            return try {
+                val block0 = mfc.readBlock(base)
+                if (block0.size != CardIdentityVcm1.BLOCK_SIZE) return false
+                block0[CardIdentityVcm1.TRIPS_OFFSET] = (newTripsLeft and 0xFF).toByte()
+                block0[CardIdentityVcm1.TRIPS_OFFSET + 1] = ((newTripsLeft shr 8) and 0xFF).toByte()
+                mfc.writeBlock(base, block0)
+                val readBack = mfc.readBlock(base)
+                readBack.contentEquals(block0)
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        fun close() {
+            runCatching { mfc.close() }
+        }
+    }
+
     /**
      * Промпт 014: быстрое чтение ТОЛЬКО sector 1 (auth + 4 блока VCM1).
      * Для открытия смены / auth-карты / любых flow кроме «Прочитать карту».
      * @return [Outcome.Ok] если VCM1-magic найден; [Outcome.Failed] иначе.
      */
     fun read(tag: Tag, asopKeyMaterial: List<ByteArray>): Outcome {
+        val result = readWithSession(tag, asopKeyMaterial)
+        result.session?.close()
+        return result.outcome
+    }
+
+    /**
+     * Чтение с сохранением открытой сессии — для flow «read + debit trips» в одном
+     * mfc-подключении (Feitian: второй connect() по тому же Tag не работает).
+     * Caller ОБЯЗАН вызвать [Session.close].
+     */
+    fun readWithSession(tag: Tag, asopKeyMaterial: List<ByteArray>): ReadResult {
         val uidHex = tag.id.joinToString("") { "%02X".format(0xFF and it.toInt()) }
         if (!MifareClassicReader.isMifareClassic(tag)) {
-            return Outcome.Failed(
+            return ReadResult(Outcome.Failed(
                 uidHex = uidHex,
                 status = Outcome.Status.NOT_MIFARE_CLASSIC,
                 details = "Карта не MifareClassic (теги: ${tag.techList.joinToString(",")})."
-            )
+            ), null)
         }
 
         val mfc = try { MifareClassic.get(tag) } catch (_: Exception) { null }
         if (mfc == null) {
-            return Outcome.Failed(uidHex = uidHex, status = Outcome.Status.READ_FAILED,
-                details = "Не удалось получить MifareClassic из Tag")
+            return ReadResult(Outcome.Failed(uidHex = uidHex, status = Outcome.Status.READ_FAILED,
+                details = "Не удалось получить MifareClassic из Tag"), null)
         }
         try { mfc.connect() } catch (e: Exception) {
-            return Outcome.Failed(uidHex = uidHex, status = Outcome.Status.READ_FAILED,
-                details = "Не удалось подключиться: ${e.message}")
+            runCatching { mfc.close() }
+            return ReadResult(Outcome.Failed(uidHex = uidHex, status = Outcome.Status.READ_FAILED,
+                details = "Не удалось подключиться: ${e.message}"), null)
         }
         try {
             val sector = 1
@@ -82,15 +133,20 @@ object Vcm1CardAuth {
                 try {
                     val identity = CardIdentityVcm1.decodeFromBytes(raw)
                     if (identity != null) {
-                        return Outcome.Ok(uidHex = uidHex, rawVcm1Bytes = raw, identity = identity)
+                        // mfc остаётся открытым — сессию закрывает caller через Session.close()
+                        return ReadResult(Outcome.Ok(uidHex = uidHex, rawVcm1Bytes = raw, identity = identity),
+                            Session(mfc, base))
                     }
                 } catch (_: Exception) { /* не VCM1 */ }
             }
             // Ни один ключ не подошёл или не VCM1
-            return Outcome.Failed(uidHex = uidHex, status = Outcome.Status.AUTH_FAILED,
-                details = "Нет подходящего ASOP-ключа. Карта не активирована?")
-        } finally {
-            try { mfc.close() } catch (_: Exception) {}
+            runCatching { mfc.close() }
+            return ReadResult(Outcome.Failed(uidHex = uidHex, status = Outcome.Status.AUTH_FAILED,
+                details = "Нет подходящего ASOP-ключа. Карта не активирована?"), null)
+        } catch (e: Exception) {
+            runCatching { mfc.close() }
+            return ReadResult(Outcome.Failed(uidHex = uidHex, status = Outcome.Status.READ_FAILED,
+                details = "Ошибка чтения: ${e.message}"), null)
         }
     }
 

@@ -37,6 +37,11 @@ class TopUpViewModel @Inject constructor(
 
     enum class Step { AUTH, TARGET_CARD, AMOUNT, DONE, ERROR }
 
+    companion object {
+        private const val BUS_OWNER = "TopUp"
+        private const val DEBOUNCE_MS = 1500L
+    }
+
     data class State(
         val step: Step = Step.AUTH,
         val message: String = "Приложите карту дистрибьютора или админа",
@@ -65,30 +70,63 @@ class TopUpViewModel @Inject constructor(
 
     private var heldTag: Tag? = null
 
+    // Ревью-фикс: debounce — Feitian PICC шлёт onTagDiscovered повторно пока карта
+    // в поле (~250мс). Без dedup: параллельные Vcm1CardAuth.read (IOException race)
+    // и повторный callback после завершения auth маршрутится в TARGET_CARD —
+    // карта дистрибьютора становится целью пополнения.
+    private var lastTapUidHex: String? = null
+    private var lastTapAtMillis = 0L
+
     init {
-        // Ревью-фикс: single-owner NfcTagBus — пока TopUp жив, SessionFlow не потребляет таги.
-        ru.asop.terminal.NfcTagBus.claim("TopUp")
         // Промпт 014: Feitian F20 fallback — опрос NfcTagBus (foreground dispatch,
         // MainActivity.onNewIntent → NfcTagBus.publish). Единый вход onTagDiscovered
         // маршрутизирует по ЖИВОМУ _state.value.step (ревью: замыкание state.step
         // в ReaderMode-callback замирало на AUTH).
+        // Ревью-фикс: claim НЕ здесь — TopUpViewModel живёт пока entry в backstack.
+        // Права на таги берём на время ВИДИМОСТИ экрана (TopUpScreen.DisposableEffect
+        // → onScreenEnter/onScreenExit), иначе drawer-навигация оставляет claim висеть
+        // и dormant-loop съедает таги SessionFlow.
         viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(300L)
-                val pending = ru.asop.terminal.NfcTagBus.consume() ?: continue
+                // Потребляем только в шагах, которым нужен таг; в AMOUNT/DONE/ERROR
+                // не дренируем bus. consumeIfOwner — только пока владеем claim'ом.
+                val step = _state.value.step
+                if (step != Step.AUTH && step != Step.TARGET_CARD) continue
+                val pending = ru.asop.terminal.NfcTagBus.consumeIfOwner(BUS_OWNER) ?: continue
                 onTagDiscovered(pending)
             }
         }
     }
 
+    /** Вызывается из TopUpScreen.DisposableEffect — claim на время видимости экрана. */
+    fun onScreenEnter() {
+        ru.asop.terminal.NfcTagBus.claim(BUS_OWNER)
+    }
+
+    fun onScreenExit() {
+        ru.asop.terminal.NfcTagBus.release(BUS_OWNER)
+    }
+
     override fun onCleared() {
-        ru.asop.terminal.NfcTagBus.release("TopUp")
+        // Safety net: если экран не успел вызвать onScreenExit (процесс убил composition).
+        ru.asop.terminal.NfcTagBus.release(BUS_OWNER)
         super.onCleared()
     }
 
     /** Единая точка входа тага (ReaderMode callback + NfcTagBus). Роутит по текущему шагу. */
     fun onTagDiscovered(tag: Tag) {
-        when (_state.value.step) {
+        val s = _state.value
+        if (s.busy) return
+        val now = System.currentTimeMillis()
+        val uidHex = tag.id.joinToString("") { "%02X".format(it) }
+        if (uidHex == lastTapUidHex && (now - lastTapAtMillis) < DEBOUNCE_MS) {
+            Log.d("TopUpVM", "debounce: ignored repeat tag within ${DEBOUNCE_MS}ms (uid=$uidHex)")
+            return
+        }
+        lastTapUidHex = uidHex
+        lastTapAtMillis = now
+        when (s.step) {
             Step.AUTH -> onAuthTagDiscovered(tag)
             Step.TARGET_CARD -> onTargetTagDiscovered(tag)
             else -> Unit
@@ -102,6 +140,7 @@ class TopUpViewModel @Inject constructor(
 
     /** Первый tap: карта-ключ авторизации оператора. */
     fun onAuthTagDiscovered(tag: Tag) {
+        _state.update { it.copy(busy = true) }
         viewModelScope.launch(Dispatchers.IO) {
             val keys = terminalKeyDao.getActive(30)
                 .mapNotNull { e -> runCatching { terminalKeyCryptor.decrypt(e.keyMaterialEnc) }.getOrNull() }
@@ -113,8 +152,12 @@ class TopUpViewModel @Inject constructor(
                     android.util.Log.i("TopUpVM", "auth OK: bitmask=0x${outcome.identity.bitmask.toString(16)} roles=$roles allowed=$allowedRoles")
                     val allowed = roles.any { it in allowedRoles }
                     if (allowed) {
+                        // Ревью-фикс: карта ещё в поле → повторный callback (~250мс) уже
+                        // маршрутится по step=TARGET_CARD. Продлеваем debounce-окно для этого UID.
+                        lastTapAtMillis = System.currentTimeMillis()
                         _state.update {
                             it.copy(
+                                busy = false,
                                 step = Step.TARGET_CARD,
                                 message = "Авторизация OK (${roles.joinToString()}). Приложите карту для пополнения",
                                 authorizedRoles = roles
@@ -122,13 +165,13 @@ class TopUpViewModel @Inject constructor(
                         }
                     } else {
                         _state.update {
-                            it.copy(step = Step.ERROR, error = "Роль ${roles.joinToString()} не может пополнять карты")
+                            it.copy(busy = false, step = Step.ERROR, error = "Роль ${roles.joinToString()} не может пополнять карты")
                         }
                     }
                 }
                 is Vcm1CardAuth.Outcome.Failed -> {
                     _state.update {
-                        it.copy(step = Step.ERROR, error = outcome.details)
+                        it.copy(busy = false, step = Step.ERROR, error = outcome.details)
                     }
                 }
             }

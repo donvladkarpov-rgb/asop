@@ -156,4 +156,15 @@ interface ReferenceRowDao {
           AND payload_json LIKE '%"userId": "' || :userId || '"%'
     """)
     suspend fun findUserBenefits(userId: String): List<String>
+
+    /** payload льготы по benefitId (asop_benefits: {benefitId, benefitName, ...}). */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_benefits'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"benefitId": "' || :benefitId || '"%'
+        LIMIT 1
+    """)
+    suspend fun findBenefitById(benefitId: String): String?
 }

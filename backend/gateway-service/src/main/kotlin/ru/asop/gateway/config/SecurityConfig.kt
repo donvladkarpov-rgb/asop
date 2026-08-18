@@ -21,12 +21,30 @@ class SecurityConfig {
 
     @Bean
     @Order(1)
-    fun terminalSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+    fun syncSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+        // Командные sync-endpoint'ы терминала — ТОЛЬКО mTLS (x509), JWT не принимается.
         return http
-            .securityMatcher(ServerWebExchangeMatchers.pathMatchers(
-                "/api/v1/terminals/**",
-                "/api/v1/sync/**"
-            ))
+            .securityMatcher(ServerWebExchangeMatchers.pathMatchers("/api/v1/sync/**"))
+            .csrf { it.disable() }
+            .authorizeExchange { exchanges ->
+                exchanges.anyExchange().authenticated()
+            }
+            .x509 { x509 ->
+                x509.principalExtractor(TerminalPrincipalExtractor())
+            }
+            .build()
+    }
+
+    @Bean
+    @Order(2)
+    fun terminalSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+        // /api/v1/terminals/**: web-admin проходит по JWT, терминал — по mTLS-сертификату
+        // (client-auth want: без клиентского сертификата x509-фильтр пропускает запрос
+        // к oauth2ResourceServer). cert-sign — permitAll: первичная регистрация до выпуска
+        // сертификата (chicken-and-egg). x509 ограничен ЭТОЙ цепочкой и не даёт
+        // терминальному сертификату доступ к остальному API.
+        return http
+            .securityMatcher(ServerWebExchangeMatchers.pathMatchers("/api/v1/terminals/**"))
             .csrf { it.disable() }
             .authorizeExchange { exchanges ->
                 exchanges
@@ -35,6 +53,9 @@ class SecurityConfig {
             }
             .x509 { x509 ->
                 x509.principalExtractor(TerminalPrincipalExtractor())
+            }
+            .oauth2ResourceServer { oauth2 ->
+                oauth2.jwt { }
             }
             .build()
     }
@@ -51,7 +72,7 @@ class SecurityConfig {
     }
 
     @Bean
-    @Order(2)
+    @Order(3)
     fun webSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
         return http
             .csrf { it.disable() }
@@ -67,6 +88,8 @@ class SecurityConfig {
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .anyExchange().authenticated()
             }
+            // Только JWT: x509 здесь НЕ включать — иначе любой терминальный сертификат
+            // (cert-sign открыт по HTTPS) даёт доступ ко всей поверхности API.
             .oauth2ResourceServer { oauth2 ->
                 oauth2.jwt { }
             }
