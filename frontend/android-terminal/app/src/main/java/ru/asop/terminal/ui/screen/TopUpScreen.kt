@@ -167,6 +167,10 @@ fun TopUpScreen(
                             ) {
                                 Text(if (state.busy) "Запись..." else "Пополнить")
                             }
+                            state.error?.let { err ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(err, color = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }
