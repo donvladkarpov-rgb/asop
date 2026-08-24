@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getBenefits, createBenefit, updateBenefit, deleteBenefit, getRegions } from '../api/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 import type { Benefit } from '../types/reference';
 
 export function BenefitsPage() {
   const qc = useQueryClient();
+  const { regionId: globalRegionId } = useGlobalFilter();
   const [filterRegion, setFilterRegion] = useState('');
+  // Локальный фильтр региона не может выйти за пределы глобального.
+  const effectiveRegion = filterRegion || globalRegionId;
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data, isLoading, error } = useQuery({ queryKey: ['benefits', filterRegion], queryFn: () => getBenefits(filterRegion || undefined) });
+  const regionOptions = globalRegionId
+    ? (regions || []).filter((r) => r.id === globalRegionId)
+    : (regions || []);
+  const { data, isLoading, error } = useQuery({ queryKey: ['benefits', effectiveRegion], queryFn: () => getBenefits(effectiveRegion || undefined) });
   const [edit, setEdit] = useState<Partial<Benefit> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -30,7 +37,7 @@ export function BenefitsPage() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <select value={filterRegion} onChange={(e) => setFilterRegion(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db' }}>
             <option value="">Все регионы</option>
-            {regions?.map((r) => <option key={r.id} value={r.id}>{r.municipalDivision}</option>)}
+            {regionOptions.map((r) => <option key={r.id} value={r.id}>{r.municipalDivision}</option>)}
           </select>
           <button className="btn-primary" onClick={() => { setEdit({}); setShowForm(true); }}>+ Добавить</button>
         </div>

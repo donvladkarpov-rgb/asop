@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import reactor.core.publisher.Mono
 import ru.asop.api.reference.dto.request.OrganizerCreateRequest
 import ru.asop.api.reference.dto.request.OrganizerTerritoryAssignRequest
@@ -21,7 +22,9 @@ import java.util.UUID
 interface OrganizerApi {
 
     @GetMapping
-    fun listOrganizers(): Mono<ResponseEntity<List<OrganizerResponse>>>
+    fun listOrganizers(
+        @RequestParam(required = false) regionId: UUID? = null
+    ): Mono<ResponseEntity<List<OrganizerResponse>>>
 
     @GetMapping("/{id}")
     fun getOrganizer(@PathVariable id: UUID): Mono<ResponseEntity<OrganizerResponse>>

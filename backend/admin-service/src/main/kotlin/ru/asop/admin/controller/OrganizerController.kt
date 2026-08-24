@@ -38,8 +38,9 @@ class OrganizerController(
     private val template: R2dbcEntityTemplate
 ) : OrganizerApi {
 
-    override fun listOrganizers(): Mono<ResponseEntity<List<OrganizerResponse>>> {
-        return organizerRepository.findAll()
+    override fun listOrganizers(regionId: UUID?): Mono<ResponseEntity<List<OrganizerResponse>>> {
+        // Глобальный фильтр web-admin: организаторы, привязанные к территориям региона.
+        return organizerDeltaQuery.listByRegion(regionId)
             .map { it.toResponse() }
             .collectList()
             .map { ResponseEntity.ok(it) }

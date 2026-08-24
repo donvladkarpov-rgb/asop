@@ -1,8 +1,8 @@
 import apiClient from './client';
 import type { Contract } from '../types/reference';
 
-export const getContracts = () =>
-  apiClient.get<Contract[]>('/contracts').then((r) => r.data);
+export const getContracts = (params?: { carrierId?: string; cardsDistributorId?: string }) =>
+  apiClient.get<Contract[]>('/contracts', { params }).then((r) => r.data);
 
 export const getContract = (id: string) =>
   apiClient.get<Contract>(`/contracts/${id}`).then((r) => r.data);

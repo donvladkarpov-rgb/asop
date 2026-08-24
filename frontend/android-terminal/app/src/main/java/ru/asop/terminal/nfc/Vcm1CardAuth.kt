@@ -49,19 +49,42 @@ object Vcm1CardAuth {
 
     /**
      * Живая mfc-сессия после успешного чтения sector 1 (auth уже пройден тем же ключом).
-     * Позволяет дописать tripsLeft БЕЗ reconnect — [updateTrips].
+     * Позволяет дописать tripsLeft в той же сессии — [updateTrips].
+     *
+     * Если между чтением и записью NFC-стек ронял соединение (Samsung роняет предыдущий
+     * Tag при повторном ReaderMode-dispatch, пока карта лежит в поле) — [updateTrips]
+     * переподключается и пере-авторизуется тем же ключом. На Feitian F20 reconnect по
+     * тому же Tag падает IOException(null) — caller fallback'ится на свежий тап.
      */
     class Session internal constructor(
         private val mfc: MifareClassic,
-        private val base: Int
+        private val base: Int,
+        private val sector: Int,
+        private val keyA: ByteArray
     ) {
         /**
          * Патчит только байты [10..11] block 0 (tripsLeft UInt16 LE), cardId/bitmask/magic
          * не трогает. Read-back верификация. true = записано и подтверждено.
+         *
+         * Reconnect: если NFC-стек ронял соединение (Samsung: повторный ReaderMode-dispatch
+         * деактивирует RF — см. reSelect в логах), переподключаемся и пере-авторизуемся.
+         * Auth выполняется ВСЕГДА (даже при живом isConnected): Crypto1-сессия не переживает
+         * RF-деактивацию. authenticateSectorWithKeyA бросает IOException — ловим, не тихо false.
          */
         fun updateTrips(newTripsLeft: Int): Boolean {
             if (newTripsLeft !in 0..0xFFFF) return false
             return try {
+                if (!mfc.isConnected) {
+                    android.util.Log.d("Vcm1CardAuth", "updateTrips: reconnect (was disconnected)")
+                    mfc.connect()
+                    mfc.timeout = 3000
+                }
+                try {
+                    mfc.authenticateSectorWithKeyA(sector, keyA)
+                } catch (e: Exception) {
+                    android.util.Log.w("Vcm1CardAuth", "updateTrips: re-auth failed: ${e.message}")
+                    return false
+                }
                 val block0 = mfc.readBlock(base)
                 if (block0.size != CardIdentityVcm1.BLOCK_SIZE) return false
                 block0[CardIdentityVcm1.TRIPS_OFFSET] = (newTripsLeft and 0xFF).toByte()
@@ -69,7 +92,8 @@ object Vcm1CardAuth {
                 mfc.writeBlock(base, block0)
                 val readBack = mfc.readBlock(base)
                 readBack.contentEquals(block0)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                android.util.Log.w("Vcm1CardAuth", "updateTrips: io error: ${e.message}")
                 false
             }
         }
@@ -135,7 +159,7 @@ object Vcm1CardAuth {
                     if (identity != null) {
                         // mfc остаётся открытым — сессию закрывает caller через Session.close()
                         return ReadResult(Outcome.Ok(uidHex = uidHex, rawVcm1Bytes = raw, identity = identity),
-                            Session(mfc, base))
+                            Session(mfc, base, sector, keyA))
                     }
                 } catch (_: Exception) { /* не VCM1 */ }
             }

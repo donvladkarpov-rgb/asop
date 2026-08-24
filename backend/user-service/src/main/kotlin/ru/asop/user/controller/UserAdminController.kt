@@ -20,8 +20,8 @@ class UserAdminController(
     private val db: DatabaseClient
 ) : UserAdminApi {
 
-    override fun list(): Flux<UserResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { rowToResponse(it) }
+    override fun list(regionId: UUID?, carrierId: UUID?, cardsDistributorId: UUID?): Flux<UserResponse> =
+        service.list(regionId, carrierId, cardsDistributorId).flatMapMany { Flux.fromIterable(it) }.map { rowToResponse(it) }
 
     override fun get(id: String): Mono<ResponseEntity<UserResponse>> =
         service.getById(id).flatMap { row ->
@@ -57,19 +57,36 @@ class UserAdminController(
         @RequestParam(required = false) includeDeleted: Boolean?,
         @RequestParam(required = false) regionId: UUID?,
         @RequestParam(required = false) carrierId: UUID?,
+        @RequestParam(required = false) auditServiceId: UUID?,
+        @RequestParam(required = false) cardsDistributorId: UUID?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
         val conditions = mutableListOf<String>()
         if (versionSince != null) conditions += "u.version > :since"
         if (includeDeleted != true) conditions += "u.deleted_at IS NULL"
         // Фильтр-конструктор: пользователь попадает в дельту, если
-        //  • привязан к выбранному carrier/region (если указан), ИЛИ
+        //  • привязан к КРС/дистрибьютору (налэбл — user_krs / user_cards_distributors), ИЛИ
+        //  • привязан к выбранному carrier (если указан), ИЛИ
+        //  • привязан к выбранному region напрямую (user_regions) ИЛИ через ЛЮБОГО перевозчика
+        //    региона (user_carriers → carriers.region_id) — терминал региона должен видеть
+        //    пользователей всех перевозчиков своего региона (карты водителей новых перевозчиков),
         //  • имеет глобальную роль SUPER_ADMIN/ADMIN/ORG_ADMIN (всегда доступен для root-активаций).
         // Гарантирует, что root-администратор (admin@asop.local, BootstrapService) виден терминалу
         // даже если он не привязан ни к одному региону/перевозчику.
         val filterParts = mutableListOf<String>()
         if (carrierId != null) filterParts += "u.user_id IN (SELECT user_id FROM ASOP_USER_CARRIERS WHERE carrier_id = :carrierId)"
-        if (regionId != null) filterParts += "u.user_id IN (SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId)"
+        if (regionId != null) filterParts += """
+            (
+                u.user_id IN (SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId)
+                OR u.user_id IN (
+                    SELECT uc.user_id FROM ASOP_USER_CARRIERS uc
+                    JOIN ASOP_CARRIERS c ON c.carrier_id = uc.carrier_id
+                    WHERE c.region_id = :regionId AND c.deleted_at IS NULL AND uc.deleted_at IS NULL
+                )
+            )
+        """.trimIndent()
+        if (auditServiceId != null) filterParts += "u.user_id IN (SELECT user_id FROM ASOP_USER_KRS WHERE audit_service_id = :auditServiceId AND deleted_at IS NULL)"
+        if (cardsDistributorId != null) filterParts += "u.user_id IN (SELECT user_id FROM ASOP_USER_CARDS_DISTRIBUTORS WHERE cards_distributor_id = :cardsDistributorId AND deleted_at IS NULL)"
         filterParts += """
             u.user_id IN (
                 SELECT ur.user_id FROM ASOP_USER_ROLES ur
@@ -93,6 +110,8 @@ class UserAdminController(
         if (versionSince != null) spec = spec.bind("since", versionSince)
         if (carrierId != null) spec = spec.bind("carrierId", carrierId)
         if (regionId != null) spec = spec.bind("regionId", regionId)
+        if (auditServiceId != null) spec = spec.bind("auditServiceId", auditServiceId)
+        if (cardsDistributorId != null) spec = spec.bind("cardsDistributorId", cardsDistributorId)
         return spec.bind("limit", limit).fetch().all()
     }
 

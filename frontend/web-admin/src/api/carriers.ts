@@ -2,8 +2,8 @@ import apiClient from './client';
 import type { Carrier } from '../types/reference';
 import type { AcceptedResponse } from '../hooks/useCommand';
 
-export const getCarriers = () =>
-  apiClient.get<Carrier[]>('/carriers').then((r) => r.data);
+export const getCarriers = (regionId?: string) =>
+  apiClient.get<Carrier[]>('/carriers', regionId ? { params: { regionId } } : undefined).then((r) => r.data);
 
 export const getCarrier = (id: string) =>
   apiClient.get<Carrier>(`/carriers/${id}`).then((r) => r.data);

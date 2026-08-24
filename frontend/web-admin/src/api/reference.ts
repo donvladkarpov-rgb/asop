@@ -25,8 +25,8 @@ export const updateTerritory = (id: string, data: Partial<Territory>) =>
 export const deleteTerritory = (id: string) =>
   apiClient.delete(`/territories/${id}`);
 
-export const getOrganizers = () =>
-  apiClient.get<Organizer[]>('/organizers').then((r) => r.data);
+export const getOrganizers = (regionId?: string) =>
+  apiClient.get<Organizer[]>('/organizers', regionId ? { params: { regionId } } : undefined).then((r) => r.data);
 
 export const createOrganizer = (data: Partial<Organizer>) =>
   apiClient.post<Organizer>('/organizers', data).then((r) => r.data);
@@ -139,8 +139,8 @@ export const deleteBenefit = (id: string) =>
   apiClient.delete(`/benefits/${id}`);
 
 // Carriers
-export const getCarriers = () =>
-  apiClient.get<Carrier[]>('/carriers').then((r) => r.data);
+export const getCarriers = (regionId?: string) =>
+  apiClient.get<Carrier[]>('/carriers', regionId ? { params: { regionId } } : undefined).then((r) => r.data);
 
 export const getCarrier = (id: string) =>
   apiClient.get<Carrier>(`/carriers/${id}`).then((r) => r.data);

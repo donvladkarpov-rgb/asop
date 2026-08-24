@@ -292,8 +292,7 @@ private fun NfcListeningCard(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReferenceForm(
-    state: CardActivationViewModel.UiState,
+private fun ReferenceForm(    state: CardActivationViewModel.UiState,
     viewModel: CardActivationViewModel
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -302,35 +301,40 @@ private fun ReferenceForm(
                 (if (state.targetCardMode == "existing") " (обновление)" else " (новая)"),
             style = MaterialTheme.typography.titleMedium
         )
-        Dropdown(
-            label = "Регион",
-            options = state.regions,
-            selectedId = state.selectedRegionId,
-            onSelect = viewModel::selectRegion
-        )
-        if (state.cardType?.needsOrganizer == true) {
+        val needsCarrierRole = state.cardType?.needsCarrier == true
+        if (needsCarrierRole) {
+            // Carrier-роли (водитель, админ/диспетчер перевозчика): терминал зарегистрирован
+            // на перевозчика — регион/организатор/перевозчик показываются КАК ИНФОРМАЦИЯ,
+            // не выбираются. Выбор — только пользователь из привязанных к перевозчику.
+            val regionLabel = state.regions.firstOrNull { it.id == state.selectedRegionId }?.label
+            val carrierLabel = state.carriers.firstOrNull { it.id == state.selectedCarrierId }?.label
+            InfoField("Регион (терминал)", regionLabel ?: "не определён")
+            InfoField("Перевозчик (терминал)", carrierLabel ?: "терминал не привязан — зарегистрируйте")
+        } else {
             Dropdown(
-                "Организатор", viewModel.filteredOrganizers(), state.selectedOrganizerId,
-                viewModel::selectOrganizer
+                label = "Регион",
+                options = state.regions,
+                selectedId = state.selectedRegionId,
+                onSelect = viewModel::selectRegion
             )
-        }
-        if (state.cardType?.needsCarrier == true) {
-            Dropdown(
-                "Перевозчик", viewModel.filteredCarriers(), state.selectedCarrierId,
-                viewModel::selectCarrier
-            )
-        }
-        if (state.cardType?.needsDistributor == true) {
-            Dropdown(
-                "Дистрибьютор", viewModel.filteredDistributors(), state.selectedDistributorId,
-                viewModel::selectDistributor
-            )
-        }
-        if (state.cardType?.needsAuditService == true) {
-            Dropdown(
-                "КРС", viewModel.filteredAuditServices(), state.selectedAuditServiceId,
-                viewModel::selectAuditService
-            )
+            if (state.cardType?.needsOrganizer == true) {
+                Dropdown(
+                    "Организатор", viewModel.filteredOrganizers(), state.selectedOrganizerId,
+                    viewModel::selectOrganizer
+                )
+            }
+            if (state.cardType?.needsDistributor == true) {
+                Dropdown(
+                    "Дистрибьютор", viewModel.filteredDistributors(), state.selectedDistributorId,
+                    viewModel::selectDistributor
+                )
+            }
+            if (state.cardType?.needsAuditService == true) {
+                Dropdown(
+                    "КРС", viewModel.filteredAuditServices(), state.selectedAuditServiceId,
+                    viewModel::selectAuditService
+                )
+            }
         }
         if (state.cardType?.needsUser == true || state.cardType == AsopCardType.SUPER_ADMIN) {
             UserSearchField(state, viewModel)
@@ -433,7 +437,9 @@ private fun UserSearchField(
             val needsCarrier = state.cardType?.needsCarrier == true
             val carrierMissing = needsCarrier && state.selectedCarrierId.isNullOrBlank()
             val msg = if (carrierMissing) {
-                "Сначала выберите перевозчика в поле выше"
+                "Терминал не привязан к перевозчику — зарегистрируйте терминал"
+            } else if (needsCarrier) {
+                "Нет пользователей, привязанных к перевозчику в админке (раздел «Перевозчики пользователей»)"
             } else if (state.selectedCarrierId != null && state.selectedCarrierId.isNotBlank()) {
                 "Нет пользователей, привязанных к этому перевозчику"
             } else {
@@ -447,6 +453,20 @@ private fun UserSearchField(
             )
         }
     }
+}
+
+/** Поле «только информация» (без выбора) — контекст терминала для carrier-ролей. */
+@Composable
+private fun InfoField(label: String, value: String) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = {},
+        readOnly = true,
+        enabled = false,
+        label = { Text(label) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

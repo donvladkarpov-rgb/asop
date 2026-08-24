@@ -22,6 +22,8 @@ const securityItems = [
   { to: '/admin-users', label: 'Пользователи', icon: '👤' },
   { to: '/user-roles', label: 'Роли пользователей', icon: '🔑' },
   { to: '/user-carriers', label: 'Перевозчики пользователей', icon: '🚌' },
+  { to: '/user-distributors', label: 'Дистрибьюторы пользователей', icon: '📦' },
+  { to: '/user-krs', label: 'КРС пользователей', icon: '🔍' },
   { to: '/user-regions', label: 'Регионы пользователей', icon: '🗺️' },
   { to: '/user-benefits', label: 'Льготы пользователей', icon: '🎫' },
 ];

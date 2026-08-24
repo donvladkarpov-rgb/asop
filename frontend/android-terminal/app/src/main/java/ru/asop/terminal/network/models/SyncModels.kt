@@ -46,7 +46,7 @@ data class SessionCloseRequest(
 
 @JsonClass(generateAdapter = true)
 data class TransactionCompleteRequest(
-    @Json(name = "sessionId") val sessionId: String,
+    @Json(name = "sessionId") val sessionId: String? = null, // null = вне рейса (пополнение карты)
     @Json(name = "transactionTypeId") val transactionTypeId: String,
     @Json(name = "transactionResultId") val transactionResultId: String,
     @Json(name = "amount") val amount: Double,

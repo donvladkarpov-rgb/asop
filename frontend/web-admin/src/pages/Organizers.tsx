@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getOrganizers, createOrganizer, updateOrganizer, deleteOrganizer, getOrganizerTerritories, assignTerritory, unassignTerritory, getTerritories } from '../api/reference';
 import type { Organizer } from '../types/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 
 export function OrganizersPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['organizers'], queryFn: getOrganizers });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['organizers', globalRegionId], queryFn: () => getOrganizers(globalRegionId || undefined) });
   const [edit, setEdit] = useState<Partial<Organizer> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [manageId, setManageId] = useState<string | null>(null);

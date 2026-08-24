@@ -19,10 +19,10 @@ class UserRoleController(
     private val db: DatabaseClient
 ) : UserRoleApi {
 
-    override fun list(userId: String?, roleId: String?): Flux<UserRoleResponse> =
-        service.list(userId, roleId).map { row -> UserRoleResponse(
+    override fun list(userId: String?, roleId: String?, regionId: java.util.UUID?): Flux<UserRoleResponse> =
+        service.list(userId, roleId, regionId).map { row -> UserRoleResponse(
             userId = row["user_id"]?.toString() ?: "",
-            roleId = row["role_id"]?.toString() ?: "",
+            roleId = row["role_id"]?.toString(), // null — пользователь без ролей
             roleName = row["role_name"]?.toString(),
             firstName = row["first_name"]?.toString(),
             lastNameInitial = row["last_name_initial"]?.toString()
@@ -53,6 +53,9 @@ class UserRoleController(
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<Map<String, Any?>> {
         // Промпт 010: region filter через JOIN ASOP_USERS + EXISTS ASOP_USER_REGIONS.
+        // Расширено (как в admin-users /delta): пользователь «в регионе» и когда он привязан
+        // к любому перевозчику региона (user_carriers → carriers.region_id) — не только
+        // напрямую через user_regions.
         val sql = """
             SELECT ur.user_id AS "userId", ur.role_id AS "roleId",
                    ur.created_at AS "createdAt", ur.updated_at AS "updatedAt",
@@ -67,6 +70,13 @@ class UserRoleController(
                   SELECT 1 FROM ASOP_USER_REGIONS ur2
                   WHERE ur2.user_id = u.user_id
                     AND ur2.region_id = :regionId::uuid
+                )
+                OR EXISTS (
+                  SELECT 1 FROM ASOP_USER_CARRIERS uc2
+                  JOIN ASOP_CARRIERS c2 ON c2.carrier_id = uc2.carrier_id
+                  WHERE uc2.user_id = u.user_id
+                    AND c2.region_id = :regionId::uuid
+                    AND c2.deleted_at IS NULL
                 )
               )
             ORDER BY ur.version ASC

@@ -27,5 +27,7 @@ data class UserCreateRequest(
     val password: String? = null,
     val roleIds: List<String> = emptyList(),
     val carrierIds: List<String> = emptyList(),
-    val regionIds: List<String> = emptyList()
+    val regionIds: List<String> = emptyList(),
+    /** Привязки к дистрибьюторам карт (ASOP_USER_CARDS_DISTRIBUTORS). */
+    val cardsDistributorIds: List<String> = emptyList()
 )

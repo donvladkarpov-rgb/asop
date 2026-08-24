@@ -13,7 +13,8 @@ interface CardTariffRepository : ReactiveCrudRepository<CardTariffEntity, UUID> 
     @Query("""
         SELECT t.* FROM ASOP_CARD_TARIFFS t
         JOIN ASOP_CARDS c ON c.CARD_ID = t.CARD_ID
-        WHERE (:userIdsInStr IS NULL OR c.USER_ID = ANY(string_to_array(:userIdsInStr, ',')::uuid[]))
+        WHERE c.USER_ID IS NOT NULL
+          AND (:userIdsInStr IS NULL OR c.USER_ID = ANY(string_to_array(:userIdsInStr, ',')::uuid[]))
           AND (:versionSince IS NULL OR t.VERSION > :versionSince)
           AND (:includeDeleted = TRUE OR t.DELETED_AT IS NULL)
         ORDER BY t.VERSION ASC

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import reactor.core.publisher.Mono
 import ru.asop.api.reference.dto.request.ServiceCreateRequest
 import ru.asop.api.reference.dto.request.ServiceUpdateRequest
@@ -19,7 +20,9 @@ import java.util.UUID
 interface ServiceApi {
 
     @GetMapping
-    fun listServices(): Mono<ResponseEntity<List<ServiceResponse>>>
+    fun listServices(
+        @RequestParam(required = false) regionId: UUID? = null
+    ): Mono<ResponseEntity<List<ServiceResponse>>>
 
     @GetMapping("/{id}")
     fun getService(@PathVariable id: UUID): Mono<ResponseEntity<ServiceResponse>>

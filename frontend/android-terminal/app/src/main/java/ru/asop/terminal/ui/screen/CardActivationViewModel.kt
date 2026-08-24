@@ -830,19 +830,23 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
     fun filteredAuditServices(): List<RefOption> = _state.value.auditServices
 
     fun filteredUsers(): List<RefOption> {
-        // Root-логин (или авторизация «картой-ключом» SUPER_ADMIN) — не фильтруем по региону:
-        // администратор должен видеть ВСЕХ пользователей системы для назначения владельца карты.
-        if (_state.value.authorizedByRoot) return _state.value.users
-        // Если операторская карта имеет SUPER_ADMIN в operatorRoles — тоже без фильтра.
-        if (_state.value.operatorRoles.contains("SUPER_ADMIN")) return _state.value.users
+        val st = _state.value
+        val needsCarrier = st.cardType?.needsCarrier == true
+
+        // Root-логин / SUPER_ADMIN операторская карта — без carrier-фильтра, но ТОЛЬКО
+        // для ролей без привязки к перевозчику. needsCarrier-роли (водитель, админ/
+        // диспетчер перевозчика) ВСЕГДА ограничены пользователями, привязанными к
+        // перевозчику терминала в админке (asop_user_carriers): владелец carrier-карты
+        // обязан быть привязан к этому перевозчику, иначе карта не откроет смену.
+        if (!needsCarrier) {
+            if (st.authorizedByRoot) return st.users
+            if (st.operatorRoles.contains("SUPER_ADMIN")) return st.users
+        }
 
         // Промпт 014: если роль требует перевозчика (needsCarrier=true), а перевозчик не выбран —
         // не показываем ВСЕХ пользователей (как было раньше), а пустой список с подсказкой.
         // Иначе оператор может выбрать «левого» пользователя, не привязанного к выбранному carrier,
         // и карта не сможет открыть смену на терминале этого перевозчика.
-        val st = _state.value
-        val role = st.cardType
-        val needsCarrier = role?.needsCarrier == true
         val regionId = st.selectedRegionId
         val carrierId = st.selectedCarrierId
         if (needsCarrier && carrierId.isNullOrBlank()) return emptyList()

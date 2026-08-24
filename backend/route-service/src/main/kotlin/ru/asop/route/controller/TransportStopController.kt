@@ -33,8 +33,8 @@ class TransportStopController(
     }
 
 
-    override fun list(): Flux<TransportStopResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->
+    override fun list(regionId: UUID?, carrierId: UUID?): Flux<TransportStopResponse> =
+        service.list(regionId, carrierId).flatMapMany { Flux.fromIterable(it) }.map { row ->
             TransportStopResponse(
                 id = row["stop_id"]?.toString() ?: "",
                 stopCode = row["stop_code"]?.toString() ?: "",

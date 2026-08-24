@@ -108,7 +108,7 @@ function CardsDistributorForm({ initial, onSave, onCancel, error }: { initial?: 
 
 function ContractBindPanel({ distributorId, onClose }: { distributorId: string; onClose: () => void }) {
   const qc = useQueryClient();
-  const { data: contracts } = useQuery({ queryKey: ['contracts'], queryFn: getContracts });
+  const { data: contracts } = useQuery({ queryKey: ['contracts'], queryFn: () => getContracts() });
   const { data: distributors } = useQuery({ queryKey: ['cards-distributors'], queryFn: getCardsDistributors });
   const distributor = distributors?.find((d) => d.id === distributorId);
   const boundIds = new Set(distributor?.contracts?.map((c) => c.id) || []);

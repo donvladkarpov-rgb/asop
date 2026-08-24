@@ -200,8 +200,8 @@ const normalize = (data: Record<string, unknown>): Record<string, unknown> => {
 };
 
 // FareZone
-export const getFareZones = (): Promise<FareZone[]> =>
-  apiClient.get<FareZone[]>('/fare-zones').then((r) => r.data ?? []);
+export const getFareZones = (params?: { regionId?: string; carrierId?: string }): Promise<FareZone[]> =>
+  apiClient.get<FareZone[]>('/fare-zones', { params }).then((r) => r.data ?? []);
 export const createFareZone = (data: FareZoneCreate) =>
   apiClient.post<FareZone>('/fare-zones', data).then((r) => r.data);
 export const updateFareZone = (id: string, data: FareZoneUpdate) =>
@@ -209,8 +209,8 @@ export const updateFareZone = (id: string, data: FareZoneUpdate) =>
 export const deleteFareZone = (id: string) => apiClient.delete(`/fare-zones/${id}`);
 
 // TransportStop
-export const getTransportStops = (): Promise<TransportStop[]> =>
-  apiClient.get<TransportStop[]>('/transport-stops').then((r) => r.data ?? []);
+export const getTransportStops = (params?: { regionId?: string; carrierId?: string }): Promise<TransportStop[]> =>
+  apiClient.get<TransportStop[]>('/transport-stops', { params }).then((r) => r.data ?? []);
 export const createTransportStop = (data: TransportStopCreate) =>
   apiClient.post<TransportStop>('/transport-stops', data).then((r) => r.data);
 export const updateTransportStop = (id: string, data: TransportStopUpdate) =>
@@ -218,8 +218,8 @@ export const updateTransportStop = (id: string, data: TransportStopUpdate) =>
 export const deleteTransportStop = (id: string) => apiClient.delete(`/transport-stops/${id}`);
 
 // Route
-export const getRoutes = (): Promise<Route[]> =>
-  apiClient.get<Route[]>('/routes').then((r) => r.data ?? []);
+export const getRoutes = (params?: { regionId?: string; carrierId?: string }): Promise<Route[]> =>
+  apiClient.get<Route[]>('/routes', { params }).then((r) => r.data ?? []);
 export const createRoute = (data: RouteCreate) =>
   apiClient.post<Route>('/routes', data).then((r) => r.data);
 export const updateRoute = (id: string, data: RouteUpdate) =>
@@ -227,8 +227,8 @@ export const updateRoute = (id: string, data: RouteUpdate) =>
 export const deleteRoute = (id: string) => apiClient.delete(`/routes/${id}`);
 
 // Path
-export const getPaths = (): Promise<Path[]> =>
-  apiClient.get<Path[]>('/paths').then((r) => r.data ?? []);
+export const getPaths = (params?: { regionId?: string; carrierId?: string }): Promise<Path[]> =>
+  apiClient.get<Path[]>('/paths', { params }).then((r) => r.data ?? []);
 export const createPath = (data: PathCreate) =>
   apiClient.post<Path>('/paths', {
     ...data,
@@ -244,8 +244,8 @@ export const updatePath = (id: string, data: PathUpdate) =>
 export const deletePath = (id: string) => apiClient.delete(`/paths/${id}`);
 
 // PathTransportStop
-export const getPathTransportStops = (): Promise<PathTransportStop[]> =>
-  apiClient.get<PathTransportStop[]>('/path-transport-stops').then((r) => r.data ?? []);
+export const getPathTransportStops = (params?: { regionId?: string; carrierId?: string }): Promise<PathTransportStop[]> =>
+  apiClient.get<PathTransportStop[]>('/path-transport-stops', { params }).then((r) => r.data ?? []);
 export const createPathTransportStop = (data: PathTransportStopCreate) =>
   apiClient.post<PathTransportStop>('/path-transport-stops', data).then((r) => r.data);
 export const updatePathTransportStop = (id: string, data: PathTransportStopUpdate) =>
@@ -253,8 +253,8 @@ export const updatePathTransportStop = (id: string, data: PathTransportStopUpdat
 export const deletePathTransportStop = (id: string) => apiClient.delete(`/path-transport-stops/${id}`);
 
 // Schedule
-export const getSchedules = (): Promise<Schedule[]> =>
-  apiClient.get<Schedule[]>('/schedule').then((r) => r.data ?? []);
+export const getSchedules = (params?: { regionId?: string; carrierId?: string }): Promise<Schedule[]> =>
+  apiClient.get<Schedule[]>('/schedule', { params }).then((r) => r.data ?? []);
 export const createSchedule = (data: ScheduleCreate) =>
   apiClient.post<Schedule>('/schedule', data).then((r) => r.data);
 export const updateSchedule = (id: string, data: ScheduleUpdate) =>
@@ -262,8 +262,8 @@ export const updateSchedule = (id: string, data: ScheduleUpdate) =>
 export const deleteSchedule = (id: string) => apiClient.delete(`/schedule/${id}`);
 
 // PathService
-export const getPathServices = (): Promise<PathService[]> =>
-  apiClient.get<PathService[]>('/path-services').then((r) => r.data ?? []);
+export const getPathServices = (params?: { regionId?: string; carrierId?: string }): Promise<PathService[]> =>
+  apiClient.get<PathService[]>('/path-services', { params }).then((r) => r.data ?? []);
 export const createPathService = (data: PathServiceCreate) =>
   apiClient.post<PathService>('/path-services', data).then((r) => r.data);
 export const updatePathService = (id: string, data: PathServiceUpdate) =>
@@ -271,8 +271,8 @@ export const updatePathService = (id: string, data: PathServiceUpdate) =>
 export const deletePathService = (id: string) => apiClient.delete(`/path-services/${id}`);
 
 // PathDiscount
-export const getPathDiscounts = (): Promise<PathDiscount[]> =>
-  apiClient.get<PathDiscount[]>('/path-discounts').then((r) => r.data ?? []);
+export const getPathDiscounts = (params?: { regionId?: string; carrierId?: string }): Promise<PathDiscount[]> =>
+  apiClient.get<PathDiscount[]>('/path-discounts', { params }).then((r) => r.data ?? []);
 export const createPathDiscount = (data: PathDiscountCreate) =>
   apiClient.post<PathDiscount>('/path-discounts', {
     ...data,
@@ -288,8 +288,8 @@ export const updatePathDiscount = (id: string, data: PathDiscountUpdate) =>
 export const deletePathDiscount = (id: string) => apiClient.delete(`/path-discounts/${id}`);
 
 // PathBenefit
-export const getPathBenefits = (): Promise<PathBenefit[]> =>
-  apiClient.get<PathBenefit[]>('/path-benefits').then((r) => r.data ?? []);
+export const getPathBenefits = (params?: { regionId?: string; carrierId?: string }): Promise<PathBenefit[]> =>
+  apiClient.get<PathBenefit[]>('/path-benefits', { params }).then((r) => r.data ?? []);
 export const createPathBenefit = (data: PathBenefitCreate) =>
   apiClient.post<PathBenefit>('/path-benefits', data).then((r) => r.data);
 export const updatePathBenefit = (id: string, data: PathBenefitUpdate) =>
@@ -297,8 +297,8 @@ export const updatePathBenefit = (id: string, data: PathBenefitUpdate) =>
 export const deletePathBenefit = (id: string) => apiClient.delete(`/path-benefits/${id}`);
 
 // Vehicle
-export const getVehicles = (): Promise<Vehicle[]> =>
-  apiClient.get<Vehicle[]>('/vehicles').then((r) => r.data ?? []);
+export const getVehicles = (params?: { regionId?: string; carrierId?: string }): Promise<Vehicle[]> =>
+  apiClient.get<Vehicle[]>('/vehicles', { params }).then((r) => r.data ?? []);
 export const createVehicle = (data: VehicleCreate) =>
   apiClient.post<Vehicle>('/vehicles', data).then((r) => r.data);
 export const updateVehicle = (id: string, data: VehicleUpdate) =>
@@ -324,7 +324,7 @@ export const updateVehicleModel = (id: string, data: { modelName: string }) =>
 export const deleteVehicleModel = (id: string) => apiClient.delete(`/vehicle-models/${id}`);
 
 // ContractRoute
-export const getContractRoutes = (params?: { contractId?: string; routeId?: string }): Promise<ContractRoute[]> =>
+export const getContractRoutes = (params?: { contractId?: string; routeId?: string; regionId?: string }): Promise<ContractRoute[]> =>
   apiClient.get<ContractRoute[]>('/contract-routes', { params }).then((r) => r.data ?? []);
 export const createContractRoute = (data: { contractId: string; routeId: string }) =>
   apiClient.post<ContractRoute>('/contract-routes', data).then((r) => r.data);
@@ -340,10 +340,16 @@ export interface AdminUser {
   phone?: string | null;
   keycloakId?: string | null;
 }
-export type AdminUserCreate = Omit<AdminUser, 'id' | 'keycloakId'>;
+export type AdminUserCreate = Omit<AdminUser, 'id' | 'keycloakId'> & {
+  /** Привязки, создаваемые вместе с пользователем (авто из глобального фильтра web-admin). */
+  roleIds?: string[];
+  carrierIds?: string[];
+  regionIds?: string[];
+  cardsDistributorIds?: string[];
+};
 
-export const getAdminUsers = (): Promise<AdminUser[]> =>
-  apiClient.get<AdminUser[]>('/admin-users').then((r) => r.data ?? []);
+export const getAdminUsers = (params?: { regionId?: string; carrierId?: string; cardsDistributorId?: string }): Promise<AdminUser[]> =>
+  apiClient.get<AdminUser[]>('/admin-users', { params }).then((r) => r.data ?? []);
 export const createAdminUser = (data: AdminUserCreate) =>
   apiClient.post<AdminUser>('/admin-users', data).then((r) => r.data);
 export const updateAdminUser = (id: string, data: AdminUserCreate) =>
@@ -353,13 +359,13 @@ export const deleteAdminUser = (id: string) => apiClient.delete(`/admin-users/${
 // ===== UserRole =====
 export interface UserRole {
   userId: string;
-  roleId: string;
+  roleId?: string | null;
   roleName?: string | null;
   firstName?: string | null;
   lastNameInitial?: string | null;
 }
 
-export const getUserRoles = (params?: { userId?: string; roleId?: string }): Promise<UserRole[]> =>
+export const getUserRoles = (params?: { userId?: string; roleId?: string; regionId?: string }): Promise<UserRole[]> =>
   apiClient.get<UserRole[]>('/user-roles', { params }).then((r) => r.data ?? []);
 export const createUserRole = (data: { userId: string; roleId: string }) =>
   apiClient.post<UserRole>('/user-roles', data).then((r) => r.data);
@@ -413,6 +419,51 @@ export const createUserBenefit = (data: { userId: string; benefitId: string; val
   apiClient.post<UserBenefit>('/user-benefits', data).then((r) => r.data);
 export const deleteUserBenefit = (assignmentId: string) =>
   apiClient.delete(`/user-benefits/${assignmentId}`);
+
+
+// ===== UserDistributor =====
+export interface UserDistributor {
+  userId: string;
+  cardsDistributorId: string;
+  distributorName?: string | null;
+  firstName?: string | null;
+  lastNameInitial?: string | null;
+}
+
+export const getUserDistributors = (params?: { userId?: string; cardsDistributorId?: string }): Promise<UserDistributor[]> =>
+  apiClient.get<UserDistributor[]>('/user-distributors', { params }).then((r) => r.data ?? []);
+export const createUserDistributor = (data: { userId: string; cardsDistributorId: string }) =>
+  apiClient.post<UserDistributor>('/user-distributors', data).then((r) => r.data);
+export const deleteUserDistributor = (userId: string, cardsDistributorId: string) =>
+  apiClient.delete('/user-distributors', { params: { userId, cardsDistributorId } });
+
+// ===== UserKrs =====
+export interface UserKrs {
+  userId: string;
+  auditServiceId: string;
+  serviceName?: string | null;
+  firstName?: string | null;
+  lastNameInitial?: string | null;
+}
+
+export const getUserKrs = (params?: { userId?: string; auditServiceId?: string }): Promise<UserKrs[]> =>
+  apiClient.get<UserKrs[]>('/user-krs', { params }).then((r) => r.data ?? []);
+export const createUserKrs = (data: { userId: string; auditServiceId: string }) =>
+  apiClient.post<UserKrs>('/user-krs', data).then((r) => r.data);
+export const deleteUserKrs = (userId: string, auditServiceId: string) =>
+  apiClient.delete('/user-krs', { params: { userId, auditServiceId } });
+
+// ===== AuditServices (КРС) =====
+export interface AuditService {
+  auditServiceId: string;
+  serviceCode: string;
+  serviceName: string;
+  issuerType: string;
+  isActive?: boolean;
+}
+
+export const getAuditServices = (): Promise<AuditService[]> =>
+  apiClient.get<AuditService[]>('/audit-services').then((r) => r.data ?? []);
 
 // Suppress unused warning for helper
 export { stripId, normalize };

@@ -1,13 +1,20 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getRegions, getTerritories, createTerritory, updateTerritory, deleteTerritory } from '../api/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 import type { Territory } from '../types/reference';
 
 export function TerritoriesPage() {
   const qc = useQueryClient();
+  const { regionId: globalRegionId } = useGlobalFilter();
   const [filterRegion, setFilterRegion] = useState('');
+  // Локальный фильтр региона не может выйти за пределы глобального.
+  const effectiveRegion = filterRegion || globalRegionId;
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data, isLoading, error } = useQuery({ queryKey: ['territories', filterRegion], queryFn: () => getTerritories(filterRegion || undefined) });
+  const regionOptions = globalRegionId
+    ? (regions || []).filter((r) => r.id === globalRegionId)
+    : (regions || []);
+  const { data, isLoading, error } = useQuery({ queryKey: ['territories', effectiveRegion], queryFn: () => getTerritories(effectiveRegion || undefined) });
   const [edit, setEdit] = useState<Partial<Territory> | null>(null);
   const [showForm, setShowForm] = useState(false);
 
@@ -25,9 +32,9 @@ export function TerritoriesPage() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <select value={filterRegion} onChange={(e) => setFilterRegion(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #d1d5db' }}>
             <option value="">Все регионы</option>
-            {regions?.map((r) => <option key={r.id} value={r.id}>{r.municipalDivision}</option>)}
+            {regionOptions.map((r) => <option key={r.id} value={r.id}>{r.municipalDivision}</option>)}
           </select>
-          <button className="btn-primary" onClick={() => { setEdit({ regionId: filterRegion || undefined } as any); setShowForm(true); }}>+ Добавить</button>
+          <button className="btn-primary" onClick={() => { setEdit({ regionId: effectiveRegion || undefined } as any); setShowForm(true); }}>+ Добавить</button>
         </div>
       </div>
 

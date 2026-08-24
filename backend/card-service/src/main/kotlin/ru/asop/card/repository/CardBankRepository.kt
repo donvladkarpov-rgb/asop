@@ -13,7 +13,8 @@ interface CardBankRepository : ReactiveCrudRepository<CardBankEntity, UUID> {
     @Query("""
         SELECT b.* FROM ASOP_CARD_BANKS b
         JOIN ASOP_CARDS c ON c.CARD_ID = b.CARD_ID
-        WHERE (:userIdsInStr IS NULL OR c.USER_ID = ANY(string_to_array(:userIdsInStr, ',')::uuid[]))
+        WHERE c.USER_ID IS NOT NULL
+          AND (:userIdsInStr IS NULL OR c.USER_ID = ANY(string_to_array(:userIdsInStr, ',')::uuid[]))
           AND (:versionSince IS NULL OR b.VERSION > :versionSince)
           AND (:includeDeleted = TRUE OR b.DELETED_AT IS NULL)
         ORDER BY b.VERSION ASC

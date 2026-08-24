@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getPathTransportStops, createPathTransportStop, updatePathTransportStop, deletePathTransportStop, getPaths, getTransportStops } from '../../api/routes';
 import { getRegions } from '../../api/reference';
 import type { PathTransportStop } from '../../types/route';
@@ -7,14 +8,15 @@ import type { PathTransportStop } from '../../types/route';
 
 export function PathTransportStopsPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['path-transport-stops'], queryFn: getPathTransportStops });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['path-transport-stops', globalRegionId], queryFn: () => getPathTransportStops({ regionId: globalRegionId || undefined }) });
   const [edit, setEdit] = useState<Partial<PathTransportStop> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
-  const { data: stops } = useQuery({ queryKey: ['transport-stops'], queryFn: getTransportStops });
+  const { data: paths } = useQuery({ queryKey: ['paths', globalRegionId], queryFn: () => getPaths({ regionId: globalRegionId || undefined }) });
+  const { data: stops } = useQuery({ queryKey: ['transport-stops', globalRegionId], queryFn: () => getTransportStops({ regionId: globalRegionId || undefined }) });
 
   const createMut = useMutation({
     mutationFn: createPathTransportStop,

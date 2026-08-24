@@ -13,8 +13,8 @@ class PathTransportStopService(private val repo: GenericRouteRepository) {
     private val tableInfo = RouteTableRegistry.resolve("path-transport-stops")
         ?: error("path-transport-stops not found in registry")
 
-    fun list(): Mono<List<Map<String, Any?>>> =
-        repo.list(tableInfo).collectList()
+    fun list(regionId: UUID? = null, carrierId: UUID? = null): Mono<List<Map<String, Any?>>> =
+        repo.listFiltered(tableInfo, regionId, carrierId).collectList()
 
     fun getById(id: String): Mono<Map<String, Any?>> =
         repo.getById(tableInfo, parseId(id))

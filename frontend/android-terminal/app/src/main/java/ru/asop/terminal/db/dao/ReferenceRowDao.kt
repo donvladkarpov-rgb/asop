@@ -14,6 +14,11 @@ interface ReferenceRowDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(rows: List<ReferenceRowEntity>)
 
+    /** Полная выкачка: очистка справочников перед атомарной заменой (мёртвые строки
+     *  прошлых выкачок/другой БД не должны оставаться). */
+    @Query("DELETE FROM reference_rows")
+    suspend fun clearAll()
+
     @Transaction
     suspend fun applyBatch(rows: List<ReferenceRowEntity>) {
         if (rows.isEmpty()) return
@@ -83,7 +88,7 @@ interface ReferenceRowDao {
 
     /**
      * Промпт 011: TID-пулы для перевозчика. payload JSON содержит
-     * `{"tidId":"...","carrierId":"...","tidValue":"...","status":"UNUSED"}`.
+     * `{"tidId":"...","carrierId":"...","tidValue":"...","status":"UNUSED","isValid":true}`.
      * Сортировка на клиенте по payloadJson.tidValue (Room не знает schema payload_json).
      */
     @Query("""
@@ -94,6 +99,21 @@ interface ReferenceRowDao {
           AND payload_json LIKE '%"carrierId": "' || :carrierId || '"%'
     """)
     fun observeTidsByCarrier(carrierId: String): Flow<List<String>>
+
+    /**
+     * Актуальные TID перевозчика (isValid=true — банковский договор ACTIVE и в
+     * пределах дат действия). Для TID-picker'а при старте рейса: протухший договор
+     * деактивирует его TID-ы, терминал их не показывает.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_tids'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"carrierId": "' || :carrierId || '"%'
+          AND payload_json LIKE '%"isValid": true%'
+    """)
+    fun observeValidTidsByCarrier(carrierId: String): Flow<List<String>>
 
     /**
      * Промпт 011: транспортные средства перевозчика. payload содержит

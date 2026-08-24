@@ -1,20 +1,22 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getPathServices, createPathService, updatePathService, deletePathService, getPaths, getVehicles } from '../../api/routes';
 import { getCarriers, getServices, getTariffTypes } from '../../api/reference';
 import type { PathService } from '../../types/route';
 
 export function PathServicesPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['path-services'], queryFn: getPathServices });
+  const { regionId: globalRegionId, carrierId: globalCarrierId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['path-services', globalRegionId, globalCarrierId], queryFn: () => getPathServices({ regionId: globalRegionId || undefined, carrierId: globalCarrierId || undefined }) });
   const [edit, setEdit] = useState<Partial<PathService> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
-  const { data: services } = useQuery({ queryKey: ['services'], queryFn: () => getServices() });
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
-  const { data: vehicles } = useQuery({ queryKey: ['vehicles'], queryFn: getVehicles });
+  const { data: paths } = useQuery({ queryKey: ['paths', globalRegionId], queryFn: () => getPaths({ regionId: globalRegionId || undefined }) });
+  const { data: services } = useQuery({ queryKey: ['services', globalRegionId], queryFn: () => getServices(globalRegionId || undefined) });
+  const { data: carriers } = useQuery({ queryKey: ['carriers', globalRegionId], queryFn: () => getCarriers(globalRegionId || undefined) });
+  const { data: vehicles } = useQuery({ queryKey: ['vehicles', globalRegionId, globalCarrierId], queryFn: () => getVehicles({ regionId: globalRegionId || undefined, carrierId: globalCarrierId || undefined }) });
   const { data: tariffTypes } = useQuery({ queryKey: ['tariff-types'], queryFn: getTariffTypes });
 
   const createMut = useMutation({

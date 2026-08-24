@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUserCarriers, createUserCarrier, deleteUserCarrier } from '../../api/routes';
 import { getAdminUsers } from '../../api/routes';
 import { getCarriers } from '../../api/reference';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 
 export function UserCarriersPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['user-carriers'], queryFn: () => getUserCarriers() });
-  const { data: users } = useQuery({ queryKey: ['admin-users'], queryFn: getAdminUsers });
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { carrierId: globalCarrierId, regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['user-carriers', globalCarrierId], queryFn: () => getUserCarriers({ carrierId: globalCarrierId || undefined }) });
+  const { data: users } = useQuery({ queryKey: ['admin-users', globalRegionId, globalCarrierId], queryFn: () => getAdminUsers({ regionId: globalRegionId || undefined, carrierId: globalCarrierId || undefined }) });
+  const { data: carriers } = useQuery({ queryKey: ['carriers', globalRegionId], queryFn: () => getCarriers(globalRegionId || undefined) });
   const [formError, setFormError] = useState<string | null>(null);
   const [userId, setUserId] = useState('');
   const [carrierId, setCarrierId] = useState('');

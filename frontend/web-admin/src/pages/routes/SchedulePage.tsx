@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getSchedules, createSchedule, updateSchedule, deleteSchedule, getPaths, getTransportStops } from '../../api/routes';
 import { getRegions } from '../../api/reference';
 import type { Schedule } from '../../types/route';
@@ -20,15 +21,16 @@ function maskToDayNames(mask: number): string {
 
 export function SchedulePage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['schedule'], queryFn: getSchedules });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['schedule', globalRegionId], queryFn: () => getSchedules({ regionId: globalRegionId || undefined }) });
   const [edit, setEdit] = useState<Partial<Schedule> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [dayMaskChecked, setDayMaskChecked] = useState<boolean[]>(maskToDays(127));
 
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
-  const { data: stops } = useQuery({ queryKey: ['transport-stops'], queryFn: getTransportStops });
+  const { data: paths } = useQuery({ queryKey: ['paths', globalRegionId], queryFn: () => getPaths({ regionId: globalRegionId || undefined }) });
+  const { data: stops } = useQuery({ queryKey: ['transport-stops', globalRegionId], queryFn: () => getTransportStops({ regionId: globalRegionId || undefined }) });
 
   const createMut = useMutation({
     mutationFn: createSchedule,

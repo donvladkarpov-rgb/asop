@@ -27,8 +27,12 @@ class ServiceController(
     private val template: R2dbcEntityTemplate
 ) : ServiceApi {
 
-    override fun listServices(): Mono<ResponseEntity<List<ServiceResponse>>> {
-        return repository.findAll()
+    override fun listServices(regionId: UUID?): Mono<ResponseEntity<List<ServiceResponse>>> {
+        // Глобальный фильтр web-admin: услуги региона (region_id на самой записи).
+        val query = if (regionId != null) Query.query(Criteria.where("region_id").`is`(regionId)) else Query.empty()
+        return template.select(ServiceEntity::class.java)
+            .matching(query)
+            .all()
             .map { it.toResponse() }
             .collectList()
             .map { ResponseEntity.ok(it) }

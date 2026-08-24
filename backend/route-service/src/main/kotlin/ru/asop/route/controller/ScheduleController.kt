@@ -33,8 +33,8 @@ class ScheduleController(
     }
 
 
-    override fun list(): Flux<ScheduleResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->
+    override fun list(regionId: UUID?, carrierId: UUID?): Flux<ScheduleResponse> =
+        service.list(regionId, carrierId).flatMapMany { Flux.fromIterable(it) }.map { row ->
             ScheduleResponse(
                 id = row["schedule_id"]?.toString() ?: "",
                 pathId = row["path_id"]?.toString() ?: "",

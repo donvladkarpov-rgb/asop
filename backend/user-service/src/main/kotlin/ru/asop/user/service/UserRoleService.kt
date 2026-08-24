@@ -9,18 +9,44 @@ import java.util.UUID
 @Service
 class UserRoleService(private val db: DatabaseClient) {
 
-    fun list(userId: String?, roleId: String?): Flux<Map<String, Any?>> {
+    /**
+     * Список ведётся ОТ ASOP_USERS (LEFT JOIN user_roles/roles): пользователь без
+     * ролей всё равно виден в web-admin («Роли пользователей») — с пустой ролью,
+     * чтобы её можно было назначить. Роль «водитель» с карты активации живёт в
+     * bitmask карты (ASOP_CARD_MIFARES), НЕ в user_roles.
+     *  • userId — конкретный пользователь;
+     *  • roleId — только пользователи, ИМЕЮЩИЕ эту роль;
+     *  • regionId — region-каскад (user_regions ∪ user_carriers→carriers.region_id).
+     */
+    fun list(userId: String?, roleId: String?, regionId: UUID? = null): Flux<Map<String, Any?>> {
         val conditions = mutableListOf<String>()
         val params = mutableMapOf<String, Any>()
-        if (userId != null) { conditions.add("ur.user_id = :userId"); params["userId"] = UUID.fromString(userId) }
+        conditions += "u.deleted_at IS NULL"
+        conditions += "(ur.user_id IS NULL OR ur.deleted_at IS NULL)"
+        if (userId != null) { conditions.add("u.user_id = :userId"); params["userId"] = UUID.fromString(userId) }
         if (roleId != null) { conditions.add("ur.role_id = :roleId"); params["roleId"] = UUID.fromString(roleId) }
-        val where = if (conditions.isNotEmpty()) "WHERE ${conditions.joinToString(" AND ")}" else ""
+        if (regionId != null) {
+            conditions.add(
+                """
+                (
+                    u.user_id IN (SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId AND deleted_at IS NULL)
+                    OR u.user_id IN (
+                        SELECT uc.user_id FROM ASOP_USER_CARRIERS uc
+                        JOIN ASOP_CARRIERS c ON c.carrier_id = uc.carrier_id
+                        WHERE c.region_id = :regionId AND c.deleted_at IS NULL AND uc.deleted_at IS NULL
+                    )
+                )
+                """.trimIndent()
+            )
+            params["regionId"] = regionId
+        }
+        val where = "WHERE ${conditions.joinToString(" AND ")}"
         val sql = """
-            SELECT ur.user_id, ur.role_id, r.role_name, u.first_name, u.last_name_initial
-            FROM ASOP_USER_ROLES ur
+            SELECT u.user_id, ur.role_id, r.role_name, u.first_name, u.last_name_initial
+            FROM ASOP_USERS u
+            LEFT JOIN ASOP_USER_ROLES ur ON ur.user_id = u.user_id
             LEFT JOIN ASOP_ROLES r ON r.role_id = ur.role_id
-            LEFT JOIN ASOP_USERS u ON u.user_id = ur.user_id
-            $where ORDER BY ur.user_id, ur.role_id
+            $where ORDER BY u.first_name, u.last_name_initial, r.role_name
         """.trimIndent()
         var spec = db.sql(sql)
         for ((k, v) in params) spec = spec.bind(k, v)

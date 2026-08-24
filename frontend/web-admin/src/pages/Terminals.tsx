@@ -5,7 +5,7 @@ import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 
 export function TerminalsPage() {
   const { regionId, carrierId } = useGlobalFilter();
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: () => getCarriers() });
   const { data, isLoading, error } = useQuery({
     queryKey: ['terminals', carrierId, regionId],
     queryFn: () => getTerminals(carrierId || undefined, regionId || undefined),

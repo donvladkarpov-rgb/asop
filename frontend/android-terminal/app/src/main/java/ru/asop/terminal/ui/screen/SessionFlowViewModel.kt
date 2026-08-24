@@ -111,7 +111,11 @@ class SessionFlowViewModel @Inject constructor(
         val tripPathId: String? = null,
         val tripPathLabel: String? = null,
         // Промпт 011: подпись для ShiftTripInformer (вернее — имена, а не ID).
-        val informerText: String? = null
+        val informerText: String? = null,
+        // Промпт 014+: контекст открытого рейса для экрана ожидания пассажиров
+        // (наименование маршрута и имя водителя, открывшего рейс).
+        val passengerRouteLabel: String? = null,
+        val passengerDriverLabel: String? = null
     ) {
         val canConfirmOpenShift: Boolean
             get() = cardStep == CardStep.AUTH_OK && submitState == SubmitState.IDLE
@@ -143,7 +147,7 @@ class SessionFlowViewModel @Inject constructor(
     fun observeTids(): Flow<List<String>> {
         val carrier = _state.value.cardTap?.carrierId ?: _state.value.openShift?.carrierId
         return if (carrier.isNullOrEmpty()) kotlinx.coroutines.flow.flowOf(emptyList())
-        else terminalDao.observeTidsByCarrier(carrier)
+        else terminalDao.observeValidTidsByCarrier(carrier)
     }
 
     fun observeVehicles(): Flow<List<String>> {
@@ -267,9 +271,60 @@ class SessionFlowViewModel @Inject constructor(
                     tripPaymentsJob = viewModelScope.launch {
                         observeTripPayments(trip.id)
                     }
+                    resolveTripContext(trip)
                 } else {
-                    _state.update { it.copy(tripPayments = emptyList()) }
+                    _state.update { it.copy(tripPayments = emptyList(), passengerRouteLabel = null, passengerDriverLabel = null) }
                 }
+            }
+        }
+    }
+
+    /**
+     * Промпт 014+: контекст открытого рейса для экрана ожидания пассажиров —
+     * наименование маршрута (path → route: routeNumber routeName) и имя водителя
+     * (openedByUserId → asop_users). Резолвится офлайн из reference_rows.
+     */
+    private fun resolveTripContext(trip: SessionEntity) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val pathId = trip.pathId
+            var routeLabel: String? = null
+            if (!pathId.isNullOrBlank()) {
+                // path payload → routeId
+                val routeId = referenceRowDao.getActiveByTable("asop_paths")
+                    .firstOrNull { row ->
+                        runCatching {
+                            org.json.JSONObject(row.payloadJson).optString("pathId") == pathId
+                        }.getOrDefault(false)
+                    }?.let { row ->
+                        runCatching { org.json.JSONObject(row.payloadJson).optString("routeId") }.getOrNull()
+                    }?.takeIf { it.isNotBlank() }
+                // route payload → "routeNumber routeName"
+                if (routeId != null) {
+                    routeLabel = referenceRowDao.getActiveByTable("asop_routes")
+                        .firstOrNull { row ->
+                            runCatching {
+                                org.json.JSONObject(row.payloadJson).optString("routeId") == routeId
+                            }.getOrDefault(false)
+                        }?.let { row ->
+                            runCatching {
+                                val obj = org.json.JSONObject(row.payloadJson)
+                                val num = obj.optString("routeNumber", "")
+                                val name = obj.optString("routeName", "")
+                                listOf(num, name).filter { it.isNotBlank() }.joinToString(" ").ifBlank { null }
+                            }.getOrNull()
+                        }
+                }
+                // fallback: имя пути, если маршрут не найден
+                if (routeLabel == null) {
+                    routeLabel = lookupPathLabel(pathId)
+                }
+            }
+            val driverLabel = trip.openedByUserId?.let { lookupUserFullName(it) }
+            _state.update {
+                it.copy(
+                    passengerRouteLabel = routeLabel,
+                    passengerDriverLabel = driverLabel ?: it.passengerDriverLabel
+                )
             }
         }
     }
@@ -724,7 +779,9 @@ class SessionFlowViewModel @Inject constructor(
         declined: Boolean = false,
         writeFailed: Boolean = false,
         benefitId: String? = null,
-        validationDetail: String? = null
+        validationDetail: String? = null,
+        tripsBefore: Int? = null,
+        tripsAfter: Int? = null
     ) {
         val trip = _state.value.openTrip ?: return
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
@@ -735,12 +792,19 @@ class SessionFlowViewModel @Inject constructor(
                 val paymentTypeId = "00000000-0000-0000-0000-000000000803"   // VALIDATION
                 val resultId = "00000000-0000-0000-0000-000000000903"         // VALIDATION_ONLY
 
-                // metadata JSON {tripsDebited, benefitId, declined, writeFailed}
+                // metadata JSON: {tripsDebited, benefitId, declined, writeFailed,
+                // tripsBefore/tripsAfter/tripsAt — для серверного баланса поездок карты
+                // (ASOP_CARD_MIFARES.TRIPS_LEFT, last-wins по tripsAt — транзакции
+                // с терминалов могут запаздывать), anonymous — признак анонимной карты}.
                 val meta = org.json.JSONObject().apply {
                     put("tripsDebited", tripsDebited)
                     put("benefitId", benefitId ?: org.json.JSONObject.NULL)
                     put("declined", declined)
                     put("writeFailed", writeFailed)
+                    put("anonymous", isPassengerAnon)
+                    tripsBefore?.let { put("tripsBefore", it) }
+                    tripsAfter?.let { put("tripsAfter", it) }
+                    put("tripsAt", now)
                 }.toString()
 
                 val payment = TripPaymentEntity(
@@ -1053,10 +1117,13 @@ class SessionFlowViewModel @Inject constructor(
                                 "passenger tap: benefitId=$benefitId tripsLeft=${identity.tripsLeft} " +
                                     "tripsDebited=$tripsDebited declined=$declined writeFailed=$writeFailed")
 
-                            // Деталь результата для водителя/пассажира: льгота или остаток поездок.
+                            // Деталь результата для водителя/пассажира: льгота (с остатком
+                            // поездок на карте — даже если списания не было) или остаток поездок.
                             val benefitName = benefitId?.let { lookupBenefitName(it) }
                             val detail = when {
-                                benefitName != null -> "Льгота: $benefitName"
+                                benefitName != null ->
+                                    if (identity.tripsLeft > 0) "Льгота: $benefitName. Поездок на карте: ${identity.tripsLeft}"
+                                    else "Льгота: $benefitName"
                                 tripsDebited > 0 -> "Осталось поездок: ${identity.tripsLeft - tripsDebited}"
                                 writeFailed -> "Ошибка записи на карту"
                                 else -> "Нет поездок на карте"
@@ -1070,7 +1137,9 @@ class SessionFlowViewModel @Inject constructor(
                                 declined = declined,
                                 writeFailed = writeFailed,
                                 benefitId = benefitId,
-                                validationDetail = detail
+                                validationDetail = detail,
+                                tripsBefore = identity.tripsLeft,
+                                tripsAfter = if (tripsDebited > 0) identity.tripsLeft - tripsDebited else null
                             )
                         }
                     }

@@ -9,7 +9,7 @@ import java.util.UUID
 @Service
 class ContractRouteService(private val db: DatabaseClient) {
 
-    fun list(contractId: String?, routeId: String?): Flux<Map<String, Any?>> {
+    fun list(contractId: String?, routeId: String?, regionId: UUID? = null, carrierId: UUID? = null): Flux<Map<String, Any?>> {
         val conditions = mutableListOf<String>()
         val params = mutableMapOf<String, Any>()
 
@@ -20,6 +20,14 @@ class ContractRouteService(private val db: DatabaseClient) {
         if (routeId != null) {
             conditions.add("cr.route_id = :routeId")
             params["routeId"] = UUID.fromString(routeId)
+        }
+        if (regionId != null) {
+            conditions.add("r.region_id = :regionId")
+            params["regionId"] = regionId
+        }
+        if (carrierId != null) {
+            conditions.add("c.carrier_id = :carrierId")
+            params["carrierId"] = carrierId
         }
 
         val whereClause = if (conditions.isNotEmpty()) "WHERE ${conditions.joinToString(" AND ")}" else ""

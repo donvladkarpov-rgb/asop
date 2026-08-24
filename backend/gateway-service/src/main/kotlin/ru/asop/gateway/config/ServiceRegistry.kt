@@ -67,6 +67,8 @@ class ServiceRegistry {
         "user-roles" to svc("user-service", 8082),
         "user-carriers" to svc("user-service", 8082),
         "user-regions" to svc("user-service", 8082),
+        "user-distributors" to svc("user-service", 8082),
+        "user-krs" to svc("user-service", 8082),
     )
 
     private fun svc(host: String, port: Int): String {

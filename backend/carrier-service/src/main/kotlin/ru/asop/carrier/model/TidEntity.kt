@@ -9,7 +9,8 @@ import java.util.UUID
 data class TidEntity(
     @Id
     val tidId: UUID,
-    val carrierId: UUID,
+    /** Банковский договор перевозчика (ASOP_CONTRACTS, CONTRACTOR_TYPE='BANK'). */
+    val contractId: UUID,
     val terminalId: UUID? = null,
     val tidValue: String,
     val status: String = "UNUSED",

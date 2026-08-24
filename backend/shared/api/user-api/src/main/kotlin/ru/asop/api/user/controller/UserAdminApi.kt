@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.user.dto.request.UserCreateRequest
@@ -18,7 +19,11 @@ import ru.asop.api.user.dto.response.UserResponse
 interface UserAdminApi {
 
     @GetMapping
-    fun list(): Flux<UserResponse>
+    fun list(
+        @RequestParam(required = false) regionId: java.util.UUID? = null,
+        @RequestParam(required = false) carrierId: java.util.UUID? = null,
+        @RequestParam(required = false) cardsDistributorId: java.util.UUID? = null
+    ): Flux<UserResponse>
 
     @GetMapping("/{id}")
     fun get(@PathVariable id: String): Mono<ResponseEntity<UserResponse>>

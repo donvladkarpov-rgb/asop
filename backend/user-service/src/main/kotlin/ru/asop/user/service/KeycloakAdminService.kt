@@ -181,15 +181,19 @@ class KeycloakAdminService(
         }
     }
 
-    fun updateUser(keycloakId: String, firstName: String, lastName: String, email: String) {
+    fun updateUser(keycloakId: String, firstName: String, lastName: String, email: String?) {
         val keycloak = adminClient()
         try {
             val userResource = keycloak.realm(properties.realm).users().get(keycloakId)
             val rep = userResource.toRepresentation()
             rep.firstName = firstName
             rep.lastName = lastName
-            rep.email = email
-            rep.username = email
+            // email/username меняем ТОЛЬКО если передан явный email (форма профиля его
+            // не содержит — смена username при каждом update давала 400 от Keycloak).
+            if (email != null) {
+                rep.email = email
+                rep.username = email
+            }
             userResource.update(rep)
             log.info("Updated Keycloak user '{}'", keycloakId)
         } catch (e: Exception) {

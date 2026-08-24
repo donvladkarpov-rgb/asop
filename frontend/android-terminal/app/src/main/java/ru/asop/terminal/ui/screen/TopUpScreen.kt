@@ -64,7 +64,8 @@ fun TopUpScreen(
         viewModel.onScreenEnter()
         val needsNfc = state.step == TopUpViewModel.Step.AUTH ||
             state.step == TopUpViewModel.Step.TARGET_CARD ||
-            state.step == TopUpViewModel.Step.AMOUNT
+            state.step == TopUpViewModel.Step.AMOUNT ||
+            state.step == TopUpViewModel.Step.WRITE_CARD
         android.util.Log.i("TopUpScreen",
             "arm: step=${state.step} nfc=${nfcAdapter?.isEnabled} act=${activity?.javaClass?.simpleName} needsNfc=$needsNfc")
         var acquired = false
@@ -142,7 +143,16 @@ fun TopUpScreen(
 
             when (state.step) {
                 TopUpViewModel.Step.AUTH -> Card { Text("Поднесите карту дистрибьютора или админа", modifier = Modifier.padding(16.dp)) }
-                TopUpViewModel.Step.TARGET_CARD -> Card { Text("Авторизация OK. Поднесите карту для пополнения", modifier = Modifier.padding(16.dp)) }
+
+                TopUpViewModel.Step.TARGET_CARD -> Card {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Авторизация OK. Поднесите карту для пополнения")
+                        state.error?.let { err ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(err, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
 
                 TopUpViewModel.Step.AMOUNT -> {
                     Card(
@@ -162,15 +172,37 @@ fun TopUpScreen(
                             Spacer(Modifier.height(12.dp))
                             Button(
                                 onClick = viewModel::onTopUp,
-                                enabled = !state.busy && state.entered.isNotEmpty(),
+                                enabled = state.entered.isNotEmpty(),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(if (state.busy) "Запись..." else "Пополнить")
+                                Text("Продолжить")
                             }
                             state.error?.let { err ->
                                 Spacer(Modifier.height(8.dp))
                                 Text(err, color = MaterialTheme.colorScheme.error)
                             }
+                        }
+                    }
+                }
+
+                TopUpViewModel.Step.WRITE_CARD -> Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Приложите ту же карту для записи",
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("Будет добавлено: ${state.topUpAmount} поездок (остаток ${state.targetTripsLeft} → ${state.targetTripsLeft + state.topUpAmount})")
+                        if (state.busy) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("Запись...")
+                        }
+                        state.error?.let { err ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(err, color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }

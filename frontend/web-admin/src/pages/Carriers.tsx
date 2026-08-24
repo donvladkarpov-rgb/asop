@@ -4,10 +4,12 @@ import { getCarriers, createCarrier, updateCarrier, deleteCarrier } from '../api
 import { getRegions } from '../api/reference';
 import type { Carrier } from '../types/reference';
 import { useCommand } from '../hooks/useCommand';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 
 export function CarriersPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['carriers', globalRegionId], queryFn: () => getCarriers(globalRegionId || undefined) });
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
   const [edit, setEdit] = useState<Partial<Carrier> | null>(null);
   const [showForm, setShowForm] = useState(false);

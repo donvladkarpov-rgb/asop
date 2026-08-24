@@ -6,8 +6,8 @@ import java.math.BigDecimal
 import java.util.UUID
 
 data class TransactionCompleteRequest(
-    @field:NotNull
-    val sessionId: UUID,
+    // null — транзакция вне рейса (пополнение карты через «Пополнить карту»).
+    val sessionId: UUID? = null,
 
     @field:NotNull
     val transactionTypeId: UUID,

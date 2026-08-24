@@ -24,7 +24,8 @@ class ContractController(
     private val template: R2dbcEntityTemplate
 ) : ContractApi {
 
-    override fun listContracts(): Flux<ContractResponse> = service.findAll()
+    override fun listContracts(carrierId: java.util.UUID?, cardsDistributorId: java.util.UUID?): Flux<ContractResponse> =
+        service.findAll(carrierId, cardsDistributorId)
 
     override fun getContract(id: UUID): Mono<ResponseEntity<ContractResponse>> =
         service.getById(id).map { ResponseEntity.ok(it) }

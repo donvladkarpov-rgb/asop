@@ -1,6 +1,8 @@
 package ru.asop.carrier.service
 
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
+import org.springframework.data.relational.core.query.Criteria
+import org.springframework.data.relational.core.query.Query
 import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
@@ -20,8 +22,27 @@ class ContractService(
 ) {
 
     fun create(request: ContractCreateRequest): Mono<ContractResponse> {
-        if (request.carrierId != null && request.cardsDistributorId != null) {
-            return Mono.error(IllegalArgumentException("Only one of carrierId or cardsDistributorId can be set, not both"))
+        // CONTRACTOR_TYPE — с кем заключён договор перевозчика:
+        //  ORGANIZER (перевозочный) / BANK (эквайринг, на него вешаются TID) → carrierId обязателен;
+        //  CARDS_DISTRIBUTOR → cardsDistributorId обязателен, carrierId запрещён.
+        val type = request.contractorType
+            ?: return Mono.error(IllegalArgumentException("contractorType is required (ORGANIZER | BANK | CARDS_DISTRIBUTOR)"))
+        if (type == "ORGANIZER" || type == "BANK") {
+            if (request.carrierId == null) {
+                return Mono.error(IllegalArgumentException("carrierId is required for contractorType=$type"))
+            }
+            if (request.cardsDistributorId != null) {
+                return Mono.error(IllegalArgumentException("cardsDistributorId must be null for contractorType=$type"))
+            }
+        } else if (type == "CARDS_DISTRIBUTOR") {
+            if (request.cardsDistributorId == null) {
+                return Mono.error(IllegalArgumentException("cardsDistributorId is required for contractorType=CARDS_DISTRIBUTOR"))
+            }
+            if (request.carrierId != null) {
+                return Mono.error(IllegalArgumentException("carrierId must be null for contractorType=CARDS_DISTRIBUTOR"))
+            }
+        } else {
+            return Mono.error(IllegalArgumentException("Unknown contractorType='$type' (expected ORGANIZER | BANK | CARDS_DISTRIBUTOR)"))
         }
         val now = Instant.now()
         val entity = ContractEntity(
@@ -66,8 +87,19 @@ class ContractService(
             .switchIfEmpty(Mono.error(IllegalArgumentException("Contract not found: $id")))
     }
 
-    fun findAll(): Flux<ContractResponse> =
-        repository.findAll().map { it.toResponse() }
+    fun findAll(carrierId: UUID? = null, cardsDistributorId: UUID? = null): Flux<ContractResponse> {
+        // Глобальный фильтр web-admin: договор перевозчика / дистрибьютора карт.
+        if (carrierId == null && cardsDistributorId == null) {
+            return repository.findAll().map { it.toResponse() }
+        }
+        var criteria = Criteria.empty()
+        if (carrierId != null) criteria = criteria.and(Criteria.where("carrier_id").`is`(carrierId))
+        if (cardsDistributorId != null) criteria = criteria.and(Criteria.where("cards_distributor_id").`is`(cardsDistributorId))
+        return template.select(ContractEntity::class.java)
+            .matching(Query.query(criteria))
+            .all()
+            .map { it.toResponse() }
+    }
 
     fun getById(id: UUID): Mono<ContractResponse> =
         repository.findById(id)

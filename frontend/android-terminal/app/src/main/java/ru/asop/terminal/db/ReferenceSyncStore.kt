@@ -36,9 +36,11 @@ class ReferenceSyncStore @Inject constructor(
         // Таблицы с составным PK (rowId = "field1|field2")
         private val COMPOSITE_KEY_TABLES = setOf(
             "asop_organizer_territories", "asop_contract_routes",
-            "asop_user_roles", "asop_user_carriers", "asop_user_regions"
+            "asop_user_roles", "asop_user_carriers", "asop_user_regions",
+            "asop_user_cards_distributors", "asop_user_krs"
         )
         const val KEYS_TABLE = "asop_keys"
+        private const val UPSERT_CHUNK = 2000
     }
 
     /** Применяет один DeltaChunk (все таблицы в нём). */
@@ -62,9 +64,53 @@ class ReferenceSyncStore @Inject constructor(
         applyRows(refRows, keyRows)
     }
 
+    /**
+     * Полная выкачка: АТОМАРНАЯ ЗАМЕНА всего справочного набора. Все .pb-файлы
+     * парсятся, затем в ОДНОЙ транзакции: очистка reference_rows → накат свежих
+     * строк (чанками) → watermark = MAX(version) свежих строк.
+     * Зачем очистка: терминал мог синкаться с другой/пересозданной БД — его watermark
+     * и строки опережают сервер (дельта вечно возвращает 0 чанков), а мёртвые строки
+     * (несуществующие UUID) иначе остаются навсегда. Полная выкачка = чистый слейт.
+     * terminal_keys НЕ очищаем — их жизненный цикл независим (ротация ключей).
+     */
+    suspend fun applyFullDump(files: Map<String, ByteArray>) {
+        val refRows = mutableListOf<ReferenceRowEntity>()
+        val keyRows = mutableListOf<TerminalKeyEntity>()
+        for ((table, bytes) in files) {
+            if (table == KEYS_TABLE) {
+                val msg = AsopKeysFile.newBuilder().mergeFrom(bytes).build()
+                keyRows += msg.rowsList.map { toTerminalKeyRow(it) }
+                continue
+            }
+            val clsName = "ru.asop.proto.v1.${camel(table)}File"
+            val builder = runCatching {
+                Class.forName(clsName).getMethod("newBuilder").invoke(null) as Message.Builder
+            }.getOrNull() ?: continue
+            val msg = builder.mergeFrom(bytes).build()
+            val rowsField = msg.descriptorForType.findFieldByName("rows") ?: continue
+            for (i in 0 until msg.getRepeatedFieldCount(rowsField)) {
+                refRows += toReferenceRow(table, msg.getRepeatedField(rowsField, i) as Message)
+            }
+        }
+        db.withTransaction {
+            referenceRowDao.clearAll()
+            refRows.chunked(UPSERT_CHUNK).forEach { referenceRowDao.upsertAll(it) }
+            if (keyRows.isNotEmpty()) terminalKeyDao.applyBatch(keyRows)
+            val maxVersion = referenceRowDao.maxVersion()
+            if (maxVersion != null) {
+                syncMetaDao.upsert(
+                    SyncMetaEntity(
+                        id = 0,
+                        lastVersion = maxVersion,
+                        lastSyncAt = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+    }
+
     /** Применяет файл `{table}.pb` из ZIP полной выгрузки (XxxFile message). */
-    suspend fun applyFile(table: String, bytes: ByteArray) {
-        if (table == KEYS_TABLE) {
+    suspend fun applyFile(table: String, bytes: ByteArray) {        if (table == KEYS_TABLE) {
             val builder = AsopKeysFile.newBuilder()
             val msg = builder.mergeFrom(bytes).build()
             val keyRows = msg.rowsList.map { toTerminalKeyRow(it) }

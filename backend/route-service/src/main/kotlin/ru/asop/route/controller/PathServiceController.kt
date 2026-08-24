@@ -33,8 +33,8 @@ class PathServiceController(
     }
 
 
-    override fun list(): Flux<PathServiceResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->
+    override fun list(regionId: UUID?, carrierId: UUID?): Flux<PathServiceResponse> =
+        service.list(regionId, carrierId).flatMapMany { Flux.fromIterable(it) }.map { row ->
             PathServiceResponse(
                 id = row["path_service_id"]?.toString() ?: "",
                 pathId = row["path_id"]?.toString() ?: "",

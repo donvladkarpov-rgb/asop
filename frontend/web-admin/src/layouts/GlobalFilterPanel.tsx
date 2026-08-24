@@ -8,7 +8,7 @@ import { useMemo } from 'react';
 export function GlobalFilterPanel() {
   const { regionId, carrierId, cardsDistributorId, setRegionId, setCarrierId, setCardsDistributorId } = useGlobalFilter();
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: () => getCarriers() });
   const { data: distributors } = useQuery({ queryKey: ['cardsDistributors'], queryFn: getCardsDistributors });
 
   const filteredCarriers = useMemo(() =>
@@ -23,7 +23,7 @@ export function GlobalFilterPanel() {
       </div>
       <div className="filter-sidebar-body">
         <label className="filter-label">Регион
-          <select value={regionId} onChange={(e) => { setRegionId(e.target.value); setCarrierId(''); }}>
+          <select value={regionId} onChange={(e) => setRegionId(e.target.value)}>
             <option value="">Все регионы</option>
             {regions?.map((r) => (
               <option key={r.id} value={r.id}>{r.municipalDivision}</option>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getConfigParams, createConfigParam, updateConfigParam, deleteConfigParam } from '../api/configParams';
 import type { ConfigParam } from '../types/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 
 function scopesOf(p: ConfigParam): string {
   const parts: string[] = [];
@@ -15,7 +16,13 @@ function scopesOf(p: ConfigParam): string {
 
 export function ConfigParamsPage() {
   const qc = useQueryClient();
+  const { regionId: globalRegionId, carrierId: globalCarrierId, cardsDistributorId: globalDistributorId } = useGlobalFilter();
   const { data, isLoading, error } = useQuery({ queryKey: ['config-params'], queryFn: getConfigParams });
+  // Глобальный фильтр: при заданном scope показываем base-строки (+ строки этого scope).
+  const visibleParams = (data || []).filter((p) =>
+    (!globalRegionId || p.regionId == null || p.regionId === globalRegionId) &&
+    (!globalCarrierId || p.carrierId == null || p.carrierId === globalCarrierId) &&
+    (!globalDistributorId || p.cardsDistributorId == null || p.cardsDistributorId === globalDistributorId));
   const [edit, setEdit] = useState<Partial<ConfigParam> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -64,7 +71,7 @@ export function ConfigParamsPage() {
           </tr>
         </thead>
         <tbody>
-          {(data || []).map((p) => (
+          {visibleParams.map((p) => (
             <tr key={p.paramId}>
               <td>{scopesOf(p)}</td>
               <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{JSON.stringify(p.params)}</td>

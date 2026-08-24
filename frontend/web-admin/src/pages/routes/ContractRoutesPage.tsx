@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getContractRoutes, createContractRoute, deleteContractRoute } from '../../api/routes';
 import { getContracts } from '../../api/contracts';
 import { getRoutes } from '../../api/routes';
@@ -7,9 +8,10 @@ import { getRoutes } from '../../api/routes';
 
 export function ContractRoutesPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['contract-routes'], queryFn: () => getContractRoutes() });
-  const { data: contracts } = useQuery({ queryKey: ['contracts'], queryFn: getContracts });
-  const { data: routes } = useQuery({ queryKey: ['routes'], queryFn: getRoutes });
+  const { regionId: globalRegionId, carrierId: globalCarrierId, cardsDistributorId: globalDistributorId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['contract-routes', globalRegionId], queryFn: () => getContractRoutes({ regionId: globalRegionId || undefined }) });
+  const { data: contracts } = useQuery({ queryKey: ['contracts', globalCarrierId, globalDistributorId], queryFn: () => getContracts({ carrierId: globalCarrierId || undefined, cardsDistributorId: globalDistributorId || undefined }) });
+  const { data: routes } = useQuery({ queryKey: ['routes', globalRegionId], queryFn: () => getRoutes({ regionId: globalRegionId || undefined }) });
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 

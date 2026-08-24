@@ -14,9 +14,47 @@ class UserAdminService(
     private val keycloakAdminService: KeycloakAdminService
 ) {
 
-    fun list(): Mono<List<Map<String, Any?>>> =
-        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS ORDER BY first_name")
-            .fetch().all().collectList()
+    fun list(regionId: UUID? = null, carrierId: UUID? = null, cardsDistributorId: UUID? = null): Mono<List<Map<String, Any?>>> {
+        val baseSql = "SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS"
+        // Без scope-фильтров — все живые пользователи (как раньше, + soft-delete).
+        if (regionId == null && carrierId == null && cardsDistributorId == null) {
+            return db.sql("$baseSql WHERE deleted_at IS NULL ORDER BY first_name")
+                .fetch().all().collectList()
+        }
+        // Глобальный фильтр web-admin — СТРОГАЯ AND-семантика (фильтр-панель сужает список,
+        // а не расширяет). Это отличается от /delta (там OR + админ-роли — терминал региона
+        // должен видеть пользователей всех его перевозчиков и root-админа).
+        //  • carrierId: user в ASOP_USER_CARRIERS с этим carrier;
+        //  • cardsDistributorId: user в ASOP_USER_CARDS_DISTRIBUTORS с этим дистрибьютором
+        //    (админ дистрибьютора «админ везде где торчит» — фильтр по любому из его дистрибьюторов);
+        //  • regionId: user в user_regions региона ИЛИ привязан к любому перевозчику
+        //    региона (user_carriers → carriers.region_id) — region-каскад.
+        val conditions = mutableListOf<String>()
+        if (regionId != null) {
+            conditions += """
+                (
+                    user_id IN (SELECT user_id FROM ASOP_USER_REGIONS WHERE region_id = :regionId AND deleted_at IS NULL)
+                    OR user_id IN (
+                        SELECT uc.user_id FROM ASOP_USER_CARRIERS uc
+                        JOIN ASOP_CARRIERS c ON c.carrier_id = uc.carrier_id
+                        WHERE c.region_id = :regionId AND c.deleted_at IS NULL AND uc.deleted_at IS NULL
+                    )
+                )
+            """.trimIndent()
+        }
+        if (carrierId != null) {
+            conditions += "user_id IN (SELECT user_id FROM ASOP_USER_CARRIERS WHERE carrier_id = :carrierId AND deleted_at IS NULL)"
+        }
+        if (cardsDistributorId != null) {
+            conditions += "user_id IN (SELECT user_id FROM ASOP_USER_CARDS_DISTRIBUTORS WHERE cards_distributor_id = :cardsDistributorId AND deleted_at IS NULL)"
+        }
+        val where = "WHERE (deleted_at IS NULL) AND (${conditions.joinToString(" AND ")})"
+        var spec = db.sql("$baseSql $where ORDER BY first_name")
+        if (regionId != null) spec = spec.bind("regionId", regionId)
+        if (carrierId != null) spec = spec.bind("carrierId", carrierId)
+        if (cardsDistributorId != null) spec = spec.bind("cardsDistributorId", cardsDistributorId)
+        return spec.fetch().all().collectList()
+    }
 
     fun getById(id: String): Mono<Map<String, Any?>> =
         db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE user_id = :id LIMIT 1")
@@ -38,9 +76,9 @@ class UserAdminService(
         val effectiveLastName = request.lastName?.takeIf { it.isNotBlank() }
             ?: request.lastNameInitial.uppercase()
 
-        val dbOps = writeUserToDb(userId, request, email, effectiveLastName)
-            .then(writeAssociations(userId, request.roleIds, request.carrierIds, request.regionIds))
-
+        // Сначала создаём Keycloak-пользователя (реальный keycloakId), затем пишем
+        // в БД — раньше в keycloak_id попадал email ("{userId}@asop.local"), а не
+        // UUID из Keycloak → update/delete по keycloak_id падали 404.
         return Mono.fromCallable {
                 keycloakAdminService.createUser(
                     email = email,
@@ -51,7 +89,8 @@ class UserAdminService(
                 )
             }
             .flatMap { keycloakId ->
-                dbOps
+                writeUserToDb(userId, request, keycloakId, effectiveLastName)
+                    .then(writeAssociations(userId, request.roleIds, request.carrierIds, request.regionIds, request.cardsDistributorIds))
                     .then(assignKeycloakRoles(keycloakId, request.roleIds))
                     .thenReturn(
                         UserResponse(
@@ -81,6 +120,11 @@ class UserAdminService(
             val effectiveLastName = request.lastName?.takeIf { it.isNotBlank() }
                 ?: request.lastNameInitial.uppercase()
 
+            // Update трогает ТОЛЬКО профиль (имя/инициалы/телефон). Привязки
+            // (роли/перевозчики/регионы/дистрибьюторы) и Keycloak-роли НЕ перезаписываются:
+            // ими управляют отдельные страницы («Роли пользователей», «Перевозчики
+            // пользователей» и т.д.), а форма профиля этих полей не содержит — раньше
+            // update молча сносил все привязки (clearAssociations + removeAllRoles).
             val dbOps = db.sql("""
                 UPDATE ASOP_USERS SET first_name = :firstName, last_name = :lastName,
                 last_name_initial = :lastNameInitial,
@@ -93,18 +137,11 @@ class UserAdminService(
                 .bind("phone", request.phone ?: "")
                 .bind("id", uuid)
                 .fetch().rowsUpdated()
-                .then(clearAssociations(uuid))
-                .then(writeAssociations(uuid, request.roleIds, request.carrierIds, request.regionIds))
 
             val keycloakOps = if (keycloakId != null) {
                 Mono.fromCallable {
-                    val email = request.email ?: "${keycloakId}@asop.local"
-                    keycloakAdminService.updateUser(keycloakId, request.firstName, effectiveLastName, email)
-                    keycloakAdminService.removeAllRoles(keycloakId)
-                    request.roleIds.forEach { roleId ->
-                        val roleName = keycloakAdminService.getRoleName(roleId)
-                        if (roleName != null) keycloakAdminService.assignRole(keycloakId, roleName)
-                    }
+                    // email не передан формой профиля — Keycloak username/email не трогаем.
+                    keycloakAdminService.updateUser(keycloakId, request.firstName, effectiveLastName, request.email)
                     keycloakId
                 }
             } else Mono.empty()
@@ -150,11 +187,18 @@ class UserAdminService(
             .bind("keycloakId", keycloakId)
             .fetch().rowsUpdated()
 
-    private fun writeAssociations(userId: UUID, roleIds: List<String>, carrierIds: List<String>, regionIds: List<String>): Mono<Void> {
+    private fun writeAssociations(
+        userId: UUID,
+        roleIds: List<String>,
+        carrierIds: List<String>,
+        regionIds: List<String>,
+        cardsDistributorIds: List<String> = emptyList()
+    ): Mono<Void> {
         val roles = insertBatch("ASOP_USER_ROLES", "user_id", "role_id", userId, roleIds)
         val carriers = insertBatch("ASOP_USER_CARRIERS", "user_id", "carrier_id", userId, carrierIds)
         val regions = insertBatch("ASOP_USER_REGIONS", "user_id", "region_id", userId, regionIds)
-        return Mono.`when`(roles, carriers, regions)
+        val distributors = insertBatch("ASOP_USER_CARDS_DISTRIBUTORS", "user_id", "cards_distributor_id", userId, cardsDistributorIds)
+        return Mono.`when`(roles, carriers, regions, distributors)
     }
 
     private fun clearAssociations(userId: UUID): Mono<Void> {
@@ -167,8 +211,10 @@ class UserAdminService(
     private fun insertBatch(table: String, col1: String, col2: String, val1: UUID, ids: List<String>): Mono<Void> {
         if (ids.isEmpty()) return Mono.empty()
         val placeholders = ids.mapIndexed { i, _ -> "(:v1, :v2_$i)" }.joinToString(", ")
-        val spec = db.sql("INSERT INTO $table ($col1, $col2) VALUES $placeholders").bind("v1", val1)
-        ids.forEachIndexed { i, id -> spec.bind("v2_$i", parseId(id)) }
+        // DatabaseClient.bind() возвращает НОВЫЙ immutable spec — результат каждого
+        // bind обязателен к сохранению (промпт 009: «No parameter specified for [v2_0]»).
+        var spec = db.sql("INSERT INTO $table ($col1, $col2) VALUES $placeholders").bind("v1", val1)
+        ids.forEachIndexed { i, id -> spec = spec.bind("v2_$i", parseId(id)) }
         return spec.fetch().rowsUpdated().then()
     }
 

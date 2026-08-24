@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import ru.asop.api.route.dto.request.PathServiceCreateRequest
@@ -18,7 +19,10 @@ import ru.asop.api.route.dto.response.PathServiceResponse
 interface PathServiceApi {
 
     @GetMapping
-    fun list(): Flux<PathServiceResponse>
+    fun list(
+        @RequestParam(required = false) regionId: java.util.UUID? = null,
+        @RequestParam(required = false) carrierId: java.util.UUID? = null
+    ): Flux<PathServiceResponse>
 
     @GetMapping("/{id}")
     fun get(

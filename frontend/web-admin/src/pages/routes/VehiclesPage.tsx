@@ -1,17 +1,19 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getVehicles, createVehicle, updateVehicle, deleteVehicle, getVehicleTypes, getVehicleModels } from '../../api/routes';
 import { getCarriers } from '../../api/reference';
 import type { Vehicle } from '../../types/route';
 
 export function VehiclesPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['vehicles'], queryFn: getVehicles });
+  const { regionId: globalRegionId, carrierId: globalCarrierId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['vehicles', globalRegionId, globalCarrierId], queryFn: () => getVehicles({ regionId: globalRegionId || undefined, carrierId: globalCarrierId || undefined }) });
   const [edit, setEdit] = useState<Partial<Vehicle> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { data: carriers } = useQuery({ queryKey: ['carriers', globalRegionId], queryFn: () => getCarriers(globalRegionId || undefined) });
   const { data: vehicleTypes } = useQuery({ queryKey: ['vehicle-types'], queryFn: getVehicleTypes });
   const { data: vehicleModels } = useQuery({ queryKey: ['vehicle-models'], queryFn: getVehicleModels });
 

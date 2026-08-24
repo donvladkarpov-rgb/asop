@@ -61,12 +61,12 @@ export function SessionsPage() {
   });
 
   const { data: terminals } = useQuery({ queryKey: ['terminals'], queryFn: () => getTerminals() });
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
-  const { data: routes } = useQuery({ queryKey: ['routes'], queryFn: getRoutes });
-  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
-  const { data: vehicles } = useQuery({ queryKey: ['vehicles'], queryFn: getVehicles });
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: () => getCarriers() });
+  const { data: routes } = useQuery({ queryKey: ['routes'], queryFn: () => getRoutes() });
+  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: () => getPaths() });
+  const { data: vehicles } = useQuery({ queryKey: ['vehicles'], queryFn: () => getVehicles() });
   const { data: benefits } = useQuery({ queryKey: ['benefits'], queryFn: () => getBenefits() });
-  const { data: adminUsers } = useQuery({ queryKey: ['adminUsers'], queryFn: getAdminUsers });
+  const { data: adminUsers } = useQuery({ queryKey: ['adminUsers'], queryFn: () => getAdminUsers() });
 
   const [expandedTripId, setExpandedTripId] = useState<string | null>(null);
   const { data: txs } = useQuery({

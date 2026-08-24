@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getFareZones, createFareZone, updateFareZone, deleteFareZone } from '../../api/routes';
 import { getRegions } from '../../api/reference';
 import type { FareZone } from '../../types/route';
@@ -7,7 +8,8 @@ import type { FareZone } from '../../types/route';
 
 export function FareZonesPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['fare-zones'], queryFn: getFareZones });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['fare-zones', globalRegionId], queryFn: () => getFareZones({ regionId: globalRegionId || undefined }) });
   const [edit, setEdit] = useState<Partial<FareZone> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);

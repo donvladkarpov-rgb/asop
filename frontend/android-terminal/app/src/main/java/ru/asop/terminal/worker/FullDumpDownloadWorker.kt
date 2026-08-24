@@ -74,25 +74,22 @@ class FullDumpDownloadWorker @AssistedInject constructor(
 
             deltaProgressTracker.startDelta(eventId, pbCount)
 
-            var applied = 0
+            // Все .pb-файлы собираются и применяются АТОМАРНО (clear + apply + watermark)
+            // — полная выкачка заменяет справочники целиком, мёртвые строки прошлых
+            // выкачок/другой БД не остаются (ReferenceSyncStore.applyFullDump).
+            val files = mutableMapOf<String, ByteArray>()
             ZipInputStream(bytes.inputStream()).use { zip ->
                 var entry = zip.nextEntry
                 while (entry != null) {
-                    if (!entry.isDirectory) {
-                        val name = entry.name
-                        if (name.endsWith(".pb")) {
-                            val table = "asop_${name.removeSuffix(".pb")}"
-                            referenceSyncStore.applyFile(table, zip.readBytes())
-                            applied++
-                            deltaProgressTracker.reportChunk(eventId, applied)
-                        }
+                    if (!entry.isDirectory && entry.name.endsWith(".pb")) {
+                        val table = "asop_${entry.name.removeSuffix(".pb")}"
+                        files[table] = zip.readBytes()
                     }
                     zip.closeEntry()
                     entry = zip.nextEntry
                 }
             }
-
-            referenceSyncStore.updateGlobalWatermark()
+            referenceSyncStore.applyFullDump(files)
             deltaProgressTracker.finish(eventId)
 
             deltaSyncJobDao.markCompleted(eventId, 0, System.currentTimeMillis())

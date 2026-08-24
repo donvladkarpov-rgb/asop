@@ -19,7 +19,8 @@ interface UserRoleApi {
     @GetMapping
     fun list(
         @RequestParam("userId", required = false) userId: String? = null,
-        @RequestParam("roleId", required = false) roleId: String? = null
+        @RequestParam("roleId", required = false) roleId: String? = null,
+        @RequestParam(required = false) regionId: java.util.UUID? = null
     ): Flux<UserRoleResponse>
 
     @PostMapping

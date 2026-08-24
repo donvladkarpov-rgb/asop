@@ -19,7 +19,9 @@ interface ContractRouteApi {
     @GetMapping
     fun list(
         @RequestParam("contractId", required = false) contractId: String? = null,
-        @RequestParam("routeId", required = false) routeId: String? = null
+        @RequestParam("routeId", required = false) routeId: String? = null,
+        @RequestParam(required = false) regionId: java.util.UUID? = null,
+        @RequestParam(required = false) carrierId: java.util.UUID? = null
     ): Flux<ContractRouteResponse>
 
     @PostMapping

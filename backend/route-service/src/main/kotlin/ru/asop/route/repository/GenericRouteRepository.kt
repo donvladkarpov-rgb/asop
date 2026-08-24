@@ -42,6 +42,51 @@ class GenericRouteRepository(
         return db.sql(sql).fetch().all()
     }
 
+    /**
+     * Список с опциональными scope-фильтрами (web-admin глобальный фильтр).
+     * Семантика как у [findDelta], но без version/deleted-условий:
+     *  • REGION_ID_TABLES — прямой region_id = :regionId;
+     *  • CARRIER_ID_TABLES — carrier_id = :carrierId, а при заданном только регионе —
+     *    carrier_id IN (перевозчики региона);
+     *  • regionJoinClause (path-benefits, contract-routes) — JOIN-фильтр по региону.
+     * Таблицы вне этих множеств (vehicle-types/models — глобальные справочники) не фильтруются.
+     */
+    fun listFiltered(
+        info: ResourceInfo,
+        regionId: UUID?,
+        carrierId: UUID?
+    ): Flux<Map<String, Any?>> {
+        val selectClause = info.selectColumns ?: "*"
+        if (regionId == null && carrierId == null) return list(info)
+
+        val useJoin = regionId != null && info.regionJoinClause != null
+        val joinSql: String = if (useJoin) " ${info.regionJoinClause}" else ""
+
+        val conditions = mutableListOf<String>()
+        var bindRegion = false
+        var bindCarrier = false
+        if (regionId != null && !useJoin && info.tableName in REGION_ID_TABLES) {
+            conditions += "${info.tableName}.region_id = :regionId"
+            bindRegion = true
+        }
+        if (info.tableName in CARRIER_ID_TABLES) {
+            if (carrierId != null) {
+                conditions += "${info.tableName}.carrier_id = :carrierId"
+                bindCarrier = true
+            } else if (regionId != null) {
+                conditions +=
+                    "${info.tableName}.carrier_id IN (SELECT c.carrier_id FROM ASOP_CARRIERS c WHERE c.region_id = :regionId AND c.deleted_at IS NULL)"
+                bindRegion = true
+            }
+        }
+        if (conditions.isEmpty() && !useJoin) return list(info) // JOIN сам несёт фильтр региона — не выходим
+        val sql = "SELECT $selectClause FROM ${info.tableName}$joinSql WHERE ${conditions.joinToString(" AND ")} ORDER BY ${info.pkColumn} ASC"
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+        if (bindRegion || useJoin) spec = spec.bind("regionId", regionId!!)
+        if (bindCarrier) spec = spec.bind("carrierId", carrierId!!)
+        return spec.fetch().all()
+    }
+
     fun getById(info: ResourceInfo, id: UUID): Mono<Map<String, Any?>> {
         val selectClause = info.selectColumns ?: "*"
         val sql = "SELECT $selectClause FROM ${info.tableName} WHERE ${info.pkColumn} = :id LIMIT 1"

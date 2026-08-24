@@ -100,7 +100,13 @@ class TransactionCommandConsumer(
                 } else {
                     reactor.core.publisher.Mono.just(1L)
                 }
-            }.then()
+            }
+            // Баланс поездок карты: metadata.tripsAfter + metadata.tripsAt (время операции
+            // НА ТЕРМИНАЛЕ — epoch ms). Транзакции могут запаздывать, поэтому last-wins
+            // по времени операции, а не по времени приёма: обновляем только если операция
+            // новее последней учтённой (TRIPS_SYNCED_AT). Работает и для анонимных карт.
+            .flatMap { updateTripsBalance(event) }
+            .then()
 
         if (terminalId == null) {
             applyMono
@@ -143,6 +149,37 @@ class TransactionCommandConsumer(
                 }
                 .subscribe()
         }
+    }
+
+    /**
+     * ASOP_CARD_MIFARES.TRIPS_LEFT ← metadata {tripsAfter, tripsAt}.
+     * Пополнение (type 0802) и списание (type 0803) пишут оба поля; при отсутствии
+     * полей (legacy/прочие транзакции) — no-op. Last-wins по времени операции:
+     * запаздывающая транзакция с более старым tripsAt баланс не перетирает.
+     */
+    private fun updateTripsBalance(event: TransactionCompletedEvent): Mono<Long> {
+        val cardId = event.cardId ?: return Mono.just(0L)
+        val node = runCatching { event.metadata?.let { objectMapper.readTree(it) } }.getOrNull()
+        val tripsAfter = node?.get("tripsAfter")?.asInt() ?: return Mono.just(0L)
+        val tripsAtMs = node?.get("tripsAt")?.asLong() ?: return Mono.just(0L)
+        if (tripsAfter < 0 || tripsAfter > 0xFFFF) return Mono.just(0L)
+        val tripsAt = java.time.Instant.ofEpochMilli(tripsAtMs)
+        val sql = """UPDATE ASOP_CARD_MIFARES
+            SET TRIPS_LEFT = :tripsLeft, TRIPS_SYNCED_AT = :tripsAt
+            WHERE CARD_ID = :cardId
+              AND (TRIPS_SYNCED_AT IS NULL OR :tripsAt > TRIPS_SYNCED_AT)"""
+        return db.sql(sql)
+            .bind("tripsLeft", tripsAfter)
+            .bind("tripsAt", tripsAt)
+            .bind("cardId", cardId)
+            .fetch().rowsUpdated()
+            .doOnNext { updated ->
+                if (updated > 0) {
+                    log.info("Trips balance updated: cardId={} tripsLeft={} at={}", cardId, tripsAfter, tripsAt)
+                } else {
+                    log.debug("Trips balance skipped (stale tripsAt={}): cardId={}", tripsAt, cardId)
+                }
+            }
     }
 
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {

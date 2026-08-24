@@ -33,8 +33,8 @@ class VehicleController(
     }
 
 
-    override fun list(): Flux<VehicleResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->
+    override fun list(regionId: UUID?, carrierId: UUID?): Flux<VehicleResponse> =
+        service.list(regionId, carrierId).flatMapMany { Flux.fromIterable(it) }.map { row ->
             VehicleResponse(
                 id = row["vehicle_id"]?.toString() ?: "",
                 carrierId = row["carrier_id"]?.toString(),

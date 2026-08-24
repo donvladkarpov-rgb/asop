@@ -33,8 +33,8 @@ class RouteController(
     }
 
 
-    override fun listRoutes(): Flux<RouteResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->
+    override fun listRoutes(regionId: UUID?, carrierId: UUID?): Flux<RouteResponse> =
+        service.list(regionId, carrierId).flatMapMany { Flux.fromIterable(it) }.map { row ->
             RouteResponse(
                 id = row["route_id"]?.toString() ?: "",
                 routeNumber = row["route_number"]?.toString() ?: "",

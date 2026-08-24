@@ -38,6 +38,8 @@ export interface Card {
   cardTech?: 'DESFIRE' | 'CLASSIC' | string;
   /** ASOP_CARD_MIFARES.CARD_ROLE (14 ролей АСОП). */
   cardRole?: string;
+  /** Остаток поездок на карте (ASOP_CARD_MIFARES.TRIPS_LEFT) — из терминальных транзакций. */
+  tripsLeft?: number | null;
   /** ASOP_CARD_TYPES.CARD_TYPE_NAME. */
   cardTypeName?: string;
   /** ФИО владельца из ASOP_USERS. */

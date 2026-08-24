@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getRoutes, createRoute, updateRoute, deleteRoute } from '../../api/routes';
 import { getRegions, getOrganizers } from '../../api/reference';
 import type { Route } from '../../types/route';
@@ -8,13 +9,14 @@ const ROUTE_CATEGORIES = ['CITY', 'SUBURBAN', 'INTERCITY', 'EXPRESS'] as const;
 
 export function RoutesPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['routes'], queryFn: getRoutes });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['routes', globalRegionId], queryFn: () => getRoutes({ regionId: globalRegionId || undefined }) });
   const [edit, setEdit] = useState<Partial<Route> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data: organizers } = useQuery({ queryKey: ['organizers'], queryFn: getOrganizers });
+  const { data: organizers } = useQuery({ queryKey: ['organizers', globalRegionId], queryFn: () => getOrganizers(globalRegionId || undefined) });
 
   const createMut = useMutation({
     mutationFn: createRoute,

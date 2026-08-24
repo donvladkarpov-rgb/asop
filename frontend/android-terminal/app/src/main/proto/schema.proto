@@ -535,7 +535,7 @@ message TariffRatesRow {
 
 message TidsRow {
   string tid_id = 1;
-  string carrier_id = 2;
+  string carrier_id = 2;      // перевозчик-владелец договора (JOIN ASOP_CONTRACTS)
   string terminal_id = 3;
   string tid_value = 4;
   string status = 5;
@@ -545,6 +545,8 @@ message TidsRow {
   string updated_at = 9;
   string deleted_at = 10;
   int64 version = 11;
+  string contract_id = 12;    // банковский договор (CONTRACTOR_TYPE='BANK')
+  bool is_valid = 13;         // договор актуален (STATUS=ACTIVE + даты) — TID usable
 }
 
 message AsopKeysRow {

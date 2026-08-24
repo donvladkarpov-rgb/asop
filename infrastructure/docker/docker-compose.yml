@@ -182,7 +182,10 @@ services:
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
       - ./certs/dev-ca:/data/dev-ca:ro
-      - crypto_data:/data
+      # dev: bind-mount вместо named volume — Root/Intermediate CA и server-key
+      # переживают `down -v` (терминалы не пере-cert'аются при пересоздании env).
+      # Для полного fresh-start (смена CA): rm -rf infrastructure/docker/crypto-data
+      - ./crypto-data:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -skf https://localhost:8081/actuator/health || exit 1"]
       interval: 5s
@@ -750,7 +753,6 @@ networks:
 
 volumes:
   postgres_data:
-  crypto_data:
   certs_data:
   redis_data:
   minio_data:

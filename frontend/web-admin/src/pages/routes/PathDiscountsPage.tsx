@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getPathDiscounts, createPathDiscount, updatePathDiscount, deletePathDiscount, getPaths, getVehicles } from '../../api/routes';
 import { getCarriers, getTariffTypes } from '../../api/reference';
 import type { PathDiscount } from '../../types/route';
@@ -8,14 +9,15 @@ const DISCOUNT_TYPES = ['PERCENT', 'FIXED'] as const;
 
 export function PathDiscountsPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['path-discounts'], queryFn: getPathDiscounts });
+  const { regionId: globalRegionId, carrierId: globalCarrierId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['path-discounts', globalRegionId, globalCarrierId], queryFn: () => getPathDiscounts({ regionId: globalRegionId || undefined, carrierId: globalCarrierId || undefined }) });
   const [edit, setEdit] = useState<Partial<PathDiscount> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
-  const { data: vehicles } = useQuery({ queryKey: ['vehicles'], queryFn: getVehicles });
+  const { data: paths } = useQuery({ queryKey: ['paths', globalRegionId], queryFn: () => getPaths({ regionId: globalRegionId || undefined }) });
+  const { data: carriers } = useQuery({ queryKey: ['carriers', globalRegionId], queryFn: () => getCarriers(globalRegionId || undefined) });
+  const { data: vehicles } = useQuery({ queryKey: ['vehicles', globalRegionId, globalCarrierId], queryFn: () => getVehicles({ regionId: globalRegionId || undefined, carrierId: globalCarrierId || undefined }) });
   const { data: tariffTypes } = useQuery({ queryKey: ['tariff-types'], queryFn: getTariffTypes });
 
   const createMut = useMutation({

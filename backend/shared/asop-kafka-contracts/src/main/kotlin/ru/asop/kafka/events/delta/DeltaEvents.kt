@@ -13,6 +13,11 @@ data class DeltaSyncCommand(
     val terminalId: UUID,
     val carrierId: UUID? = null,
     val regionId: UUID? = null,
+    // Налэбл-фильтры персональных карт по привязкам пользователя (user_krs /
+    // user_cards_distributors). Пробрасываются в admin-users/delta → userIdsIn →
+    // дельты карт (терминал получает только персональные карты своего scope).
+    val auditServiceId: UUID? = null,
+    val cardsDistributorId: UUID? = null,
     val lastVersion: Long? = null
 )
 

@@ -8,7 +8,7 @@ export function UserBenefitsPage() {
   const qc = useQueryClient();
   const { regionId: globalRegionId, setRegionId: setGlobalRegionId } = useGlobalFilter();
   const { data, isLoading, error } = useQuery({ queryKey: ['user-benefits'], queryFn: () => getUserBenefits() });
-  const { data: users } = useQuery({ queryKey: ['admin-users'], queryFn: getAdminUsers });
+  const { data: users } = useQuery({ queryKey: ['admin-users'], queryFn: () => getAdminUsers() });
   const { data: userRegions } = useQuery({ queryKey: ['user-regions'], queryFn: () => getUserRegions() });
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
   const { data: benefits } = useQuery({ queryKey: ['benefits'], queryFn: () => getBenefits() });

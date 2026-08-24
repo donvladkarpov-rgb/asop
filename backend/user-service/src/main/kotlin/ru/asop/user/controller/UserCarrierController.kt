@@ -55,7 +55,20 @@ class UserCarrierController(
         val conditions = mutableListOf<String>()
         if (versionSince != null) conditions += "version > :since"
         if (includeDeleted != true) conditions += "deleted_at IS NULL"
-        if (carrierId != null) conditions += "carrier_id = :carrierId"
+        // Терминал региона должен видеть привязки user↔carrier ВСЕХ перевозчиков своего
+        // региона (иначе dropdown пользователей при активации карты нового перевозчика пуст:
+        // терминал привязан к другому carrier, а связки по carrierId терминала не доходят).
+        // ВАЖНО: orchestrator для FILTERED_TABLES шлёт ОБА параметра (carrierId терминала
+        // + regionId). Смешивать их через AND нельзя — фильтр вырождается в «только
+        // carrier терминала» и связки с другими перевозчиками региона не доезжают.
+        when {
+            regionId != null && carrierId != null ->
+                conditions += "(carrier_id = :carrierId OR carrier_id IN (SELECT carrier_id FROM ASOP_CARRIERS WHERE region_id = :regionId AND deleted_at IS NULL))"
+            carrierId != null ->
+                conditions += "carrier_id = :carrierId"
+            regionId != null ->
+                conditions += "carrier_id IN (SELECT carrier_id FROM ASOP_CARRIERS WHERE region_id = :regionId AND deleted_at IS NULL)"
+        }
         val where = if (conditions.isEmpty()) "" else " WHERE ${conditions.joinToString(" AND ")}"
         val sql = """
             SELECT user_id AS "userId", carrier_id AS "carrierId",
@@ -68,6 +81,7 @@ class UserCarrierController(
         var spec = db.sql(sql)
         if (versionSince != null) spec = spec.bind("since", versionSince)
         if (carrierId != null) spec = spec.bind("carrierId", carrierId)
+        if (regionId != null) spec = spec.bind("regionId", regionId)
         return spec.bind("limit", limit).fetch().all()
     }
 }

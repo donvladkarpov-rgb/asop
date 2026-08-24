@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getPathBenefits, createPathBenefit, updatePathBenefit, deletePathBenefit, getPaths } from '../../api/routes';
 import { getBenefits } from '../../api/reference';
 import type { PathBenefit } from '../../types/route';
@@ -7,13 +8,14 @@ import type { PathBenefit } from '../../types/route';
 
 export function PathBenefitsPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['path-benefits'], queryFn: getPathBenefits });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['path-benefits', globalRegionId], queryFn: () => getPathBenefits({ regionId: globalRegionId || undefined }) });
   const [edit, setEdit] = useState<Partial<PathBenefit> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  const { data: paths } = useQuery({ queryKey: ['paths'], queryFn: getPaths });
-  const { data: benefits } = useQuery({ queryKey: ['benefits'], queryFn: () => getBenefits() });
+  const { data: paths } = useQuery({ queryKey: ['paths', globalRegionId], queryFn: () => getPaths({ regionId: globalRegionId || undefined }) });
+  const { data: benefits } = useQuery({ queryKey: ['benefits', globalRegionId], queryFn: () => getBenefits(globalRegionId || undefined) });
 
   const createMut = useMutation({
     mutationFn: createPathBenefit,

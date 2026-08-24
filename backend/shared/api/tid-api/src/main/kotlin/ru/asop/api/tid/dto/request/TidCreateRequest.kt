@@ -6,8 +6,8 @@ import jakarta.validation.constraints.Size
 import java.util.UUID
 
 data class TidCreateRequest(
-    @field:NotNull(message = "Carrier ID is required")
-    val carrierId: UUID,
+    @field:NotNull(message = "Contract ID is required")
+    val contractId: UUID,
 
     @field:NotBlank(message = "TID value is required")
     @field:Size(max = 20, message = "TID value must be less than 20 characters")

@@ -33,8 +33,8 @@ class FareZoneController(
     }
 
 
-    override fun listFareZones(): Flux<FareZoneResponse> =
-        service.list().flatMapMany { Flux.fromIterable(it) }.map { row ->
+    override fun listFareZones(regionId: UUID?, carrierId: UUID?): Flux<FareZoneResponse> =
+        service.list(regionId, carrierId).flatMapMany { Flux.fromIterable(it) }.map { row ->
             FareZoneResponse(
                 id = row["zone_id"]?.toString() ?: "",
                 zoneCode = row["zone_code"]?.toString() ?: "",

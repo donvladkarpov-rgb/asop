@@ -175,6 +175,38 @@ class CardActivationService(
                         )
                     }
             })
+            // Единая концепция ролей: карта — лишь носитель части ролей. Роли с активированной
+            // карты дописываются в профиль пользователя (ASOP_USER_ROLES), чтобы «Роли
+            // пользователей» и прочие списки показывали их без дублирования источников.
+            .delayUntil { syncUserRolesFromCard(vcm1.entityId, bitmask) }
+    }
+
+    /**
+     * Роли карты → user_roles (аддитивно). Добавляет отсутствующие активные связки
+     * user↔role; ON CONFLICT оживляет soft-deleted (PK user_id+role_id составной —
+     * повторная активация не падает). Роли НЕ снимаются: у человека может быть
+     * несколько ролей из разных источников (web-admin, другие карты). PASSENGER_ANONYMOUS
+     * не синкается (entityType=none, без userId).
+     */
+    private fun syncUserRolesFromCard(userId: UUID?, bitmask: Int): Mono<Void> {
+        if (userId == null) return Mono.empty()
+        val roles = allRolesForBitmask(bitmask).filter { it != "PASSENGER_ANONYMOUS" }
+        if (roles.isEmpty()) return Mono.empty()
+        return reactor.core.publisher.Flux.fromIterable(roles)
+            .concatMap { roleName ->
+                databaseClient.sql(
+                    """
+                    INSERT INTO ASOP_USER_ROLES (user_id, role_id)
+                    SELECT :userId, r.role_id FROM ASOP_ROLES r
+                    WHERE r.role_name = :roleName
+                    ON CONFLICT (user_id, role_id) DO UPDATE SET deleted_at = NULL
+                    """.trimIndent()
+                )
+                    .bind("userId", userId)
+                    .bind("roleName", roleName)
+                    .fetch().rowsUpdated()
+            }
+            .then()
     }
 
     /**

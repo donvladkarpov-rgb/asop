@@ -1,15 +1,20 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getBenefitSteps, createBenefitStep, updateBenefitStep, deleteBenefitStep, getBenefits } from '../api/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 import type { BenefitStep } from '../types/reference';
 
 const PERIOD_TYPES = ['DAILY', 'WEEKLY', 'MONTHLY', 'QUARTERLY', 'YEARLY'];
 
 export function BenefitStepsPage() {
   const qc = useQueryClient();
+  const { regionId: globalRegionId } = useGlobalFilter();
   const [filterBenefit, setFilterBenefit] = useState('');
-  const { data: benefits } = useQuery({ queryKey: ['benefits'], queryFn: () => getBenefits() });
+  const { data: benefits } = useQuery({ queryKey: ['benefits', globalRegionId], queryFn: () => getBenefits(globalRegionId || undefined) });
   const { data, isLoading, error } = useQuery({ queryKey: ['benefit-steps', filterBenefit], queryFn: () => getBenefitSteps(filterBenefit || undefined) });
+  // Глобальный фильтр: шаги только льгот выбранного региона (льготы уже отфильтрованы серверно).
+  const regionBenefitIds = new Set((benefits || []).map((b) => b.id));
+  const visibleSteps = (data || []).filter((s) => !globalRegionId || regionBenefitIds.has(s.benefitId));
   const [edit, setEdit] = useState<Partial<BenefitStep> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -70,7 +75,7 @@ export function BenefitStepsPage() {
           </tr>
         </thead>
         <tbody>
-          {data?.map((s) => {
+          {visibleSteps?.map((s) => {
             const benefit = benefits?.find((b) => b.id === s.benefitId);
             return (
               <tr key={s.id}>

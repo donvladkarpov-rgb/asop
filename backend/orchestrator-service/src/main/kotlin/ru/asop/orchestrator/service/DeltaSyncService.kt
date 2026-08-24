@@ -64,7 +64,7 @@ class DeltaSyncService(
 
     private fun fetchUserIds(command: DeltaSyncCommand): Mono<Set<String>> {
         val ep = MasterRegistry.USER_TABLES["asop_users"]!!
-        return fetchDelta(ep, command.carrierId, command.regionId, command.lastVersion)
+        return fetchDelta(ep, command.carrierId, command.regionId, command.lastVersion, command.auditServiceId, command.cardsDistributorId)
             .map { node -> node.get("userId")?.asText() ?: node.get("user_id")?.asText() }
             .filter { it != null }
             .map { it!! }
@@ -92,7 +92,9 @@ class DeltaSyncService(
         ep: MasterEndpoint,
         carrierId: UUID?,
         regionId: UUID?,
-        versionSince: Long?
+        versionSince: Long?,
+        auditServiceId: UUID? = null,
+        cardsDistributorId: UUID? = null
     ): Flux<JsonNode> {
         return fetchAllPages(versionSince) { cursor ->
             masterWebClient.get().uri { u ->
@@ -104,6 +106,10 @@ class DeltaSyncService(
                     .queryParam("limit", LIMIT)
                 carrierId?.let { builder.queryParam("carrierId", it.toString()) }
                 regionId?.let { builder.queryParam("regionId", it.toString()) }
+                // Налэбл-фильтры персональных карт по привязкам пользователя (КРС/дистрибьютор).
+                // Поддерживаются admin-users/delta; прочие мастер-сервисы их игнорируют.
+                auditServiceId?.let { builder.queryParam("auditServiceId", it.toString()) }
+                cardsDistributorId?.let { builder.queryParam("cardsDistributorId", it.toString()) }
                 cursor?.let { builder.queryParam("versionSince", it.toString()) }
                 builder.build(ep.resource)
             }.retrieve().bodyToFlux(JsonNode::class.java)

@@ -4,11 +4,13 @@ import { getContracts, createContract, updateContract, deleteContract } from '..
 import { getCarriers } from '../api/carriers';
 import { getCardsDistributors } from '../api/cardsDistributors';
 import type { Contract } from '../types/reference';
+import { useGlobalFilter } from '../contexts/GlobalFilterContext';
 
 export function ContractsPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['contracts'], queryFn: getContracts });
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { carrierId: globalCarrierId, cardsDistributorId: globalDistributorId, regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['contracts', globalCarrierId, globalDistributorId], queryFn: () => getContracts({ carrierId: globalCarrierId || undefined, cardsDistributorId: globalDistributorId || undefined }) });
+  const { data: carriers } = useQuery({ queryKey: ['carriers', globalRegionId], queryFn: () => getCarriers(globalRegionId || undefined) });
   const { data: distributors } = useQuery({ queryKey: ['cards-distributors'], queryFn: getCardsDistributors });
   const [edit, setEdit] = useState<Partial<Contract> | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -74,7 +76,7 @@ export function ContractsPage() {
           {data?.map((c) => (
             <tr key={c.id}>
               <td>{c.contractNumber}</td>
-              <td>{c.contractorType || '—'}</td>
+              <td>{({ ORGANIZER: 'Организатор', BANK: 'Банк', CARDS_DISTRIBUTOR: 'Дистрибьютор карт', CARRIER: 'Перевозчик' } as Record<string, string>)[c.contractorType || ''] || c.contractorType || '—'}</td>
               <td>
                 {c.carrierId ? (carriers?.find((cr) => cr.id === c.carrierId)?.carrierName || '—')
                   : c.cardsDistributorId ? (distributors?.find((d) => d.id === c.cardsDistributorId)?.distributorName || '—')
@@ -112,12 +114,13 @@ function ContractForm({ initial, carriers, distributors, onSave, onCancel }: {
         <label>Тип контрагента
           <select value={contractorType} onChange={(e) => setForm({ ...form, contractorType: e.target.value, carrierId: undefined, cardsDistributorId: undefined })}>
             <option value="">—</option>
-            <option value="CARRIER">Перевозчик</option>
-            <option value="CARDS_DISTRIBUTOR">Дистрибьютор</option>
+            <option value="ORGANIZER">Организатор перевозок</option>
+            <option value="BANK">Банк (эквайринг)</option>
+            <option value="CARDS_DISTRIBUTOR">Дистрибьютор карт</option>
           </select>
         </label>
         <label>Номер договора <input value={form.contractNumber || ''} onChange={(e) => setForm({ ...form, contractNumber: e.target.value })} /></label>
-        {contractorType === 'CARRIER' ? (
+        {(contractorType === 'ORGANIZER' || contractorType === 'BANK') ? (
           <label>Перевозчик
             <select value={form.carrierId || ''} onChange={(e) => setForm({ ...form, carrierId: e.target.value || undefined })}>
               <option value="">Выберите...</option>

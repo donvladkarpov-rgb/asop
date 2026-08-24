@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { getTransportStops, createTransportStop, updateTransportStop, deleteTransportStop, getFareZones } from '../../api/routes';
 import { getRegions } from '../../api/reference';
 import type { TransportStop } from '../../types/route';
@@ -7,13 +8,14 @@ import type { TransportStop } from '../../types/route';
 
 export function TransportStopsPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ['transport-stops'], queryFn: getTransportStops });
+  const { regionId: globalRegionId } = useGlobalFilter();
+  const { data, isLoading, error } = useQuery({ queryKey: ['transport-stops', globalRegionId], queryFn: () => getTransportStops({ regionId: globalRegionId || undefined }) });
   const [edit, setEdit] = useState<Partial<TransportStop> | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   const { data: regions } = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const { data: fareZones } = useQuery({ queryKey: ['fare-zones'], queryFn: getFareZones });
+  const { data: fareZones } = useQuery({ queryKey: ['fare-zones', globalRegionId], queryFn: () => getFareZones({ regionId: globalRegionId || undefined }) });
 
   const createMut = useMutation({
     mutationFn: createTransportStop,

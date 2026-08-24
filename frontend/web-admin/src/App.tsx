@@ -37,6 +37,8 @@ import { ContractRoutesPage } from './pages/routes/ContractRoutesPage';
 import { UsersAdminPage } from './pages/security/UsersAdminPage';
 import { UserRolesPage } from './pages/security/UserRolesPage';
 import { UserCarriersPage } from './pages/security/UserCarriersPage';
+import { UserDistributorsPage } from './pages/security/UserDistributorsPage';
+import { UserKrsPage } from './pages/security/UserKrsPage';
 import { UserRegionsPage } from './pages/security/UserRegionsPage';
 import { UserBenefitsPage } from './pages/security/UserBenefitsPage';
 import { LoginPage } from './pages/Login';
@@ -118,6 +120,8 @@ function AppRoutes() {
         <Route path="admin-users" element={<UsersAdminPage />} />
         <Route path="user-roles" element={<UserRolesPage />} />
         <Route path="user-carriers" element={<UserCarriersPage />} />
+        <Route path="user-distributors" element={<UserDistributorsPage />} />
+        <Route path="user-krs" element={<UserKrsPage />} />
         <Route path="user-regions" element={<UserRegionsPage />} />
         <Route path="user-benefits" element={<UserBenefitsPage />} />
         <Route path="asop-keys" element={<AsopKeysPage />} />

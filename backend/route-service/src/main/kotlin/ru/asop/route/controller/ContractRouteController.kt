@@ -35,8 +35,8 @@ class ContractRouteController(
     }
 
 
-    override fun list(contractId: String?, routeId: String?): Flux<ContractRouteResponse> =
-        service.list(contractId, routeId).map { row ->
+    override fun list(contractId: String?, routeId: String?, regionId: UUID?, carrierId: UUID?): Flux<ContractRouteResponse> =
+        service.list(contractId, routeId, regionId, carrierId).map { row ->
             ContractRouteResponse(
                 contractId = row["contract_id"]?.toString() ?: "",
                 routeId = row["route_id"]?.toString() ?: "",

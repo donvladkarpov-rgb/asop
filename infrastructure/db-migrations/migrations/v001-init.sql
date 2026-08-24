@@ -317,7 +317,9 @@ CREATE TABLE ASOP_CARRIERS
 CREATE TABLE ASOP_CONTRACTS
 (
     CONTRACT_ID            UUID         NOT NULL,  -- UUIDv7
-    CONTRACTOR_TYPE        VARCHAR(20)  NOT NULL CHECK (CONTRACTOR_TYPE IN ('CARRIER', 'CARDS_DISTRIBUTOR')),
+    -- С кем заключён договор перевозчика: ORGANIZER (организатор перевозок), BANK (эквайринг),
+    -- CARDS_DISTRIBUTOR (дистрибьютор карт). TID вешается только на BANK-договоры.
+    CONTRACTOR_TYPE        VARCHAR(20)  NOT NULL CHECK (CONTRACTOR_TYPE IN ('ORGANIZER', 'BANK', 'CARDS_DISTRIBUTOR')),
     CARRIER_ID             UUID,
     CARDS_DISTRIBUTOR_ID   UUID,
     CONTRACT_NUMBER        VARCHAR(100) NOT NULL,
@@ -336,9 +338,8 @@ CREATE TABLE ASOP_CONTRACTS
     CONSTRAINT fk_contracts_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
     CONSTRAINT fk_contracts_cards_distributor FOREIGN KEY (CARDS_DISTRIBUTOR_ID) REFERENCES ASOP_CARDS_DISTRIBUTORS (CARDS_DISTRIBUTOR_ID),
     CONSTRAINT chk_contracts_contractor CHECK (
-        (CARRIER_ID IS NOT NULL AND CARDS_DISTRIBUTOR_ID IS NULL) OR
-        (CARDS_DISTRIBUTOR_ID IS NOT NULL AND CARRIER_ID IS NULL) OR
-        (CARRIER_ID IS NULL AND CARDS_DISTRIBUTOR_ID IS NULL)
+        (CONTRACTOR_TYPE IN ('ORGANIZER', 'BANK') AND CARRIER_ID IS NOT NULL AND CARDS_DISTRIBUTOR_ID IS NULL) OR
+        (CONTRACTOR_TYPE = 'CARDS_DISTRIBUTOR' AND CARDS_DISTRIBUTOR_ID IS NOT NULL AND CARRIER_ID IS NULL)
     )
 );
 COMMENT ON TABLE ASOP_CONTRACTS IS 'Общий справочник договоров с контрагентами (перевозчиками или дистрибьюторами карт).';
@@ -480,6 +481,35 @@ CREATE TABLE ASOP_USER_REGIONS
     CONSTRAINT fk_ureg_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
     CONSTRAINT fk_ureg_region FOREIGN KEY (REGION_ID) REFERENCES ASOP_REGIONS (REGION_ID)
 );
+
+CREATE TABLE ASOP_USER_CARDS_DISTRIBUTORS
+(
+    USER_ID               UUID NOT NULL,
+    CARDS_DISTRIBUTOR_ID  UUID NOT NULL,
+    CREATED_AT            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT            TIMESTAMPTZ,
+    VERSION               BIGINT,
+    CONSTRAINT pk_user_cards_distributors PRIMARY KEY (USER_ID, CARDS_DISTRIBUTOR_ID),
+    CONSTRAINT fk_ucd_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
+    CONSTRAINT fk_ucd_distributor FOREIGN KEY (CARDS_DISTRIBUTOR_ID) REFERENCES ASOP_CARDS_DISTRIBUTORS (CARDS_DISTRIBUTOR_ID)
+);
+
+CREATE TABLE ASOP_USER_KRS
+(
+    USER_ID          UUID NOT NULL,
+    AUDIT_SERVICE_ID UUID NOT NULL,  -- КРС = ASOP_AUDIT_SERVICES
+    CREATED_AT       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UPDATED_AT       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    DELETED_AT       TIMESTAMPTZ,
+    VERSION          BIGINT,
+    CONSTRAINT pk_user_krs PRIMARY KEY (USER_ID, AUDIT_SERVICE_ID),
+    CONSTRAINT fk_uks_user FOREIGN KEY (USER_ID) REFERENCES ASOP_USERS (USER_ID),
+    CONSTRAINT fk_uks_krs FOREIGN KEY (AUDIT_SERVICE_ID) REFERENCES ASOP_AUDIT_SERVICES (AUDIT_SERVICE_ID)
+);
+
+COMMENT ON TABLE ASOP_USER_CARDS_DISTRIBUTORS IS 'Привязки пользователей к дистрибьюторам карт. Админ с несколькими дистрибьюторами — админ в каждом из них.';
+COMMENT ON TABLE ASOP_USER_KRS IS 'Привязки пользователей к КРС (контрольно-ревизионным службам, ASOP_AUDIT_SERVICES).';
 
 -- ========================
 -- 4. МАРШРУТЫ И ПУТИ
@@ -725,6 +755,11 @@ CREATE TABLE ASOP_CARD_MIFARES
     VALID_UNTIL          TIMESTAMPTZ,
     REVOKED_AT           TIMESTAMPTZ,
     REVOCATION_REASON    VARCHAR(255),
+    -- Остаток поездок на карте (MIFARE Classic VCM1, UInt16). Обновляется терминальными
+    -- транзакциями (пополнение/списание) через metadata.tripsAfter + tripsAt; при
+    -- запаздывающих транзакциях применяется значение с БОЛЕЕ ПОЗДНИМ временем операции.
+    TRIPS_LEFT             INT,
+    TRIPS_SYNCED_AT        TIMESTAMPTZ,
     LAST_AUTH_AT         TIMESTAMPTZ,
     LAST_AUTH_TERMINAL   UUID,
 
@@ -1028,7 +1063,7 @@ CREATE INDEX idx_distributor_terminals_status ON ASOP_DISTRIBUTOR_TERMINALS (STA
 CREATE TABLE ASOP_TIDS
 (
     TID_ID        UUID        NOT NULL,  -- UUIDv7
-    CARRIER_ID    UUID        NOT NULL,
+    CONTRACT_ID   UUID        NOT NULL,  -- банковский договор перевозчика (ASOP_CONTRACTS, CONTRACTOR_TYPE='BANK')
     TERMINAL_ID   UUID,
     TID_VALUE     VARCHAR(20) NOT NULL,
     STATUS        VARCHAR(20) DEFAULT 'UNUSED',
@@ -1039,10 +1074,11 @@ CREATE TABLE ASOP_TIDS
     DELETED_AT TIMESTAMPTZ,
     VERSION BIGINT,
     CONSTRAINT pk_tids PRIMARY KEY (TID_ID),
-    CONSTRAINT fk_tids_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
+    CONSTRAINT fk_tids_contract FOREIGN KEY (CONTRACT_ID) REFERENCES ASOP_CONTRACTS (CONTRACT_ID),
     CONSTRAINT uq_tids_value UNIQUE (TID_VALUE),
     CONSTRAINT chk_tid_status CHECK (STATUS IN ('UNUSED', 'ASSIGNED', 'REVOKED'))
 );
+COMMENT ON COLUMN ASOP_TIDS.CONTRACT_ID IS 'Банковский договор перевозчика (эквайринг). TID вешается ТОЛЬКО на договор с CONTRACTOR_TYPE=BANK.';
 COMMENT ON TABLE ASOP_TIDS IS 'Пул TID. 1:N к перевозчику.';
 
 -- ИСПРАВЛЕНО: Добавлен CHECK для STATUS
@@ -2029,6 +2065,11 @@ CREATE INDEX IF NOT EXISTS ix_asop_vehicle_models_deleted ON asop_vehicle_models
 CREATE INDEX IF NOT EXISTS ix_asop_vehicles_updated_deleted ON asop_vehicles (UPDATED_AT, DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_vehicles_deleted ON asop_vehicles (DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_users_updated_deleted ON asop_users (UPDATED_AT, DELETED_AT);
+
+-- Уникальный телефон ЖИВОГО пользователя: NULL/пустая строка и soft-deleted строки
+-- не конфликтуют (partial index) — повторное заведение человека с тем же телефоном
+-- отвергается БД, но удалённый пользователь не блокирует нового.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone ON asop_users (PHONE) WHERE PHONE IS NOT NULL AND PHONE <> '' AND DELETED_AT IS NULL;
 CREATE INDEX IF NOT EXISTS ix_asop_users_deleted ON asop_users (DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_fare_zones_updated_deleted ON asop_fare_zones (UPDATED_AT, DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_fare_zones_deleted ON asop_fare_zones (DELETED_AT);
@@ -2187,6 +2228,29 @@ CREATE TRIGGER trg_delta_version_asop_benefits BEFORE INSERT OR UPDATE ON asop_b
 CREATE TRIGGER trg_delta_version_asop_benefit_steps BEFORE INSERT OR UPDATE ON asop_benefit_steps FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_carriers BEFORE INSERT OR UPDATE ON asop_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_contracts BEFORE INSERT OR UPDATE ON asop_contracts FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+-- Изменение актуальности договора (статус/даты) bump'ает все его TID-ы:
+-- delta_version-триггер на ASOP_TIDS присвоит новый VERSION, и дельта привезёт
+-- терминалам тиды с актуальным признаком isValid (договор протух → тид протух).
+CREATE OR REPLACE FUNCTION trg_fn_bump_tids_on_contract_change()
+RETURNS TRIGGER AS $body$
+BEGIN
+    UPDATE ASOP_TIDS
+       SET UPDATED_AT = NOW()
+     WHERE CONTRACT_ID = NEW.CONTRACT_ID
+       AND DELETED_AT IS NULL;
+    RETURN NEW;
+END;
+$body$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_contracts_bump_tids
+AFTER UPDATE OF STATUS, START_DATE, END_DATE ON asop_contracts
+FOR EACH ROW
+WHEN (OLD.STATUS IS DISTINCT FROM NEW.STATUS
+   OR OLD.START_DATE IS DISTINCT FROM NEW.START_DATE
+   OR OLD.END_DATE IS DISTINCT FROM NEW.END_DATE)
+EXECUTE FUNCTION trg_fn_bump_tids_on_contract_change();
+
 CREATE TRIGGER trg_delta_version_asop_cards_distributors BEFORE INSERT OR UPDATE ON asop_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_vehicle_types BEFORE INSERT OR UPDATE ON asop_vehicle_types FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_vehicle_models BEFORE INSERT OR UPDATE ON asop_vehicle_models FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
@@ -2214,6 +2278,23 @@ CREATE TRIGGER trg_delta_version_asop_contract_routes BEFORE INSERT OR UPDATE ON
 CREATE TRIGGER trg_delta_version_asop_user_roles BEFORE INSERT OR UPDATE ON asop_user_roles FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_user_carriers BEFORE INSERT OR UPDATE ON asop_user_carriers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_user_regions BEFORE INSERT OR UPDATE ON asop_user_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+-- User ↔ cards distributor links (v001, model gap fix)
+CREATE INDEX IF NOT EXISTS ix_asop_user_cards_distributors_updated_deleted ON asop_user_cards_distributors (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_cards_distributors_deleted ON asop_user_cards_distributors (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_cards_distributors_distributor ON asop_user_cards_distributors (CARDS_DISTRIBUTOR_ID);
+CREATE TRIGGER trg_soft_delete_asop_user_cards_distributors BEFORE DELETE ON asop_user_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('user_id', 'cards_distributor_id');
+CREATE TRIGGER trg_touch_updated_asop_user_cards_distributors BEFORE INSERT OR UPDATE ON asop_user_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_delta_version_asop_user_cards_distributors BEFORE INSERT OR UPDATE ON asop_user_cards_distributors FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+-- User ↔ KRS links (v001, model gap fix)
+CREATE INDEX IF NOT EXISTS ix_asop_user_krs_updated_deleted ON asop_user_krs (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_krs_deleted ON asop_user_krs (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_user_krs_krs ON asop_user_krs (AUDIT_SERVICE_ID);
+CREATE TRIGGER trg_soft_delete_asop_user_krs BEFORE DELETE ON asop_user_krs FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete_2col('user_id', 'audit_service_id');
+CREATE TRIGGER trg_touch_updated_asop_user_krs BEFORE INSERT OR UPDATE ON asop_user_krs FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_delta_version_asop_user_krs BEFORE INSERT OR UPDATE ON asop_user_krs FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
 CREATE TRIGGER trg_delta_version_asop_keys BEFORE INSERT OR UPDATE ON asop_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_config_params BEFORE INSERT OR UPDATE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 

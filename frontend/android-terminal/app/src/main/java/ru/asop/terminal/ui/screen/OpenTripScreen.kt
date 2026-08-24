@@ -90,10 +90,33 @@ fun TripCascadePicker(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             if (isPassengerMode && state.openTrip != null) {
-                // Промпт 014: режим ожидания пассажиров — большой круг + галочка/крест
+                // Промпт 014: режим ожидания пассажиров — контекст рейса (маршрут +
+                // водитель) + большой круг + галочка/крест
                 val now = System.currentTimeMillis()
                 val showResult = state.validationResultTime > 0 &&
                     (now - state.validationResultTime) < 2500
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    // Промпт 014+: контекст рейса — наименование маршрута и имя водителя
+                    state.passengerRouteLabel?.let { route ->
+                        Text(
+                            "Маршрут: $route",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    state.passengerDriverLabel?.let { driver ->
+                        Text(
+                            "Водитель: $driver",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
                     contentAlignment = Alignment.Center

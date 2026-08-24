@@ -49,6 +49,9 @@ sk-*.txt
 *.crt
 *.der
 
+# Persistent CA для crypto-service (bind-mount, dev): переживает down -v
+infrastructure/docker/crypto-data/
+
 # ============================================================
 # Logs
 # ============================================================

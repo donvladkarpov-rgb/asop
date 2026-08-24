@@ -27,6 +27,8 @@ data class CardResponse(
     val cardTech: String? = null,
     /** ASOP_CARD_MIFARES.CARD_ROLE (14 ролей АСОП). null для не-MIFARE карт. */
     val cardRole: String? = null,
+    /** Остаток поездок (VCM1 UInt16; ASOP_CARD_MIFARES.TRIPS_LEFT). Обновляется терминальными транзакциями. */
+    val tripsLeft: Int? = null,
     /** ASOP_CARD_TYPES.CARD_TYPE_NAME (напр. "MIFARE DESFire"). */
     val cardTypeName: String? = null,
     /** ФИО владельца из ASOP_USERS (join по USER_ID). null для анонимных карт. */

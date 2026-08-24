@@ -51,7 +51,7 @@ function BitmaskBadges({ bitmask, isClassic }: { bitmask?: number; isClassic?: b
 
 export function CardsPage() {
   const { regionId, carrierId } = useGlobalFilter();
-  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: getCarriers });
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: () => getCarriers() });
   const { data, isLoading, error } = useQuery({
     queryKey: ['cards', regionId, carrierId],
     queryFn: () => getCards({
@@ -80,6 +80,7 @@ export function CardsPage() {
             <th>Тип</th>
             <th>Технология</th>
             <th>Роли (bitmask)</th>
+            <th>Поездок</th>
             <th>Владелец</th>
             <th>Перевозчик</th>
             <th>Статус</th>
@@ -100,6 +101,7 @@ export function CardsPage() {
                 )}
               </td>
               <td><BitmaskBadges bitmask={card.bitmask} isClassic={card.isClassic} /></td>
+              <td>{card.tripsLeft != null ? card.tripsLeft : '—'}</td>
               <td>{card.holderName || (card.userId ? card.userId.slice(0, 8) + '…' : '—')}</td>
               <td>{card.carrierId ? carrierName(card.carrierId) : '—'}</td>
               <td>

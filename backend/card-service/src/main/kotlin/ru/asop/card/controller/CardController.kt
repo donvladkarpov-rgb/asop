@@ -64,6 +64,7 @@ class CardController(
                    m.uid                 AS "uid",
                    m.card_tech           AS "card_tech",
                    m.card_role           AS "card_role",
+                   m.trips_left          AS "trips_left",
                    m.identity_json       AS "identity_json",
                    m.valid_until         AS "valid_until",
                    m.revoked_at          AS "revoked_at",
@@ -145,13 +146,15 @@ class CardController(
         @RequestParam(required = false) userIdsIn: String?,
         @RequestParam(required = false, defaultValue = "10000") limit: Int
     ): Flux<CardEntity> {
-        var extra: Criteria? = null
+        // Только ПЕРСОНАЛЬНЫЕ карты (user_id IS NOT NULL): анонимные карты на терминал
+        // не синкаются (валидация офлайн, остаток на карте, транзакции — на сервер).
+        val criteriaList = mutableListOf(Criteria.where("user_id").isNotNull)
         if (!userIdsIn.isNullOrBlank()) {
             val ids = userIdsIn.split(',').map { it.trim() }.filter { it.isNotEmpty() }.map { UUID.fromString(it) }
-            if (ids.isNotEmpty()) extra = Criteria.where("user_id").`in`(ids)
+            if (ids.isNotEmpty()) criteriaList += Criteria.where("user_id").`in`(ids)
         }
         return template.select(CardEntity::class.java)
-            .matching(DeltaSupport.query(versionSince, includeDeleted, limit, extra))
+            .matching(DeltaSupport.query(versionSince, includeDeleted, limit, Criteria.from(criteriaList)))
             .all()
     }
 }
@@ -195,6 +198,7 @@ private fun rowToCardResponse(row: Map<String, Any?>): CardResponse {
         uid = (row["uid"] as? ByteArray)?.joinToString("") { "%02X".format(it) },
         cardTech = cardTech,
         cardRole = row["card_role"] as? String,
+        tripsLeft = (row["trips_left"] as? Number)?.toInt(),
         cardTypeName = row["card_type_name"] as? String,
         holderName = holderName,
         validUntil = validUntil,

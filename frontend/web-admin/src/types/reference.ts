@@ -132,6 +132,7 @@ export interface Contract {
 
 export interface Tid {
   id: string;
+  contractId: string;
   carrierId: string;
   terminalId?: string;
   tidValue: string;
