@@ -474,110 +474,231 @@ docker exec docker-gateway-service-1 bash -c '
 
 **Ожидаемый результат:** для каждой из 7 таблиц количество rows для `0101` и `0103` меньше, чем total. Например, для organizer-territories: 0101 → только organizer 0301 (Москва), 0103 → только 0303 (Крым), никакого взаимного overlap.
 
-```
-
 ## Smoke Test: Driver Session workflow (промпт 011)
 
-**Goal:** Проверить, что lifecycle «открыть смену → открыть рейс → валидации пассажиров → закрыть рейс → закрыть смену» работает end-to-end, с проверкой матрицы прав и 409 conflict guard для TRIP-ов.
+**Goal:** проверить end-to-end lifecycle «открыть смену → открыть рейс → валидация пассажира → закрыть рейс → закрыть смену»: mTLS от имени терминала, клиентская идемпотентность (`ON CONFLICT (SESSION_ID) DO NOTHING`), 409-guard на второй активный TRIP и матрица авторизации закрытия (`SessionService.canClose`).
 
-### Endpoint basic flow
-
-```bash
-SHIFT_TYPE="00000000-0000-0000-0000-000000000601"
-TRIP_TYPE="00000000-0000-0000-0000-000000000603"
-DRIVER_USER="019ff5b6-fc58-7865-a2c5-0d86e90699f7"  # Admin (driver role)
-CARRIER="00000000-0000-0000-0000-0000000001403"          # ГУП «Крымавтотранс»
-TERMINAL_ID="$(cat /tmp/terminal-id.txt 2>/dev/null || echo "00000000-0000-0000-0000-000000000001")"
-
-# Generate same client UUIDv7 twice → idempotency assurance
-SHIFT_CLIENT_ID="$(uuidgen | tr A-Z a-z)"
-TRIP_CLIENT_ID="$(uuidgen | tr A-Z a-z)"
-
-# 1. Open SHIFT
-docker exec docker-gateway-service-1 curl -k -s -X POST \
-  "https://gateway-service:8080/api/v1/sync/sessions/open" \
-  -H "Content-Type: application/json" \
-  -d "{\"sessionTypeId\":\"$SHIFT_TYPE\",\"tidId\":null,\"pathId\":null,\"vehicleId\":null,\"openedByUserId\":\"$DRIVER_USER\",\"cardId\":\"02B206F1-AAAA-BBBB-CCCC-000000000001\",\"carrierId\":\"$CARRIER\",\"regionId\":\"00000000-0000-0000-0000-0000000000103\",\"timezone\":\"Europe/Moscow\"}" \
-  | jq .eventId
-# Ожидаем 202 + X-Event-Id в ответе.
-
-# 2. Verify in DB
-docker exec docker-postgres-1 psql -U asop -d asop -c \
-  "SELECT session_type_code, parent_session_id, opened_by_user_id, status FROM asop_sessions WHERE opened_by_user_id='$DRIVER_USER' AND session_type_id='$SHIFT_TYPE' AND status='IN_PROGRESS';"
-# Ожидаем 1 row: SHIFT, parent=NULL, opened_by=DRIVER, IN_PROGRESS
-
-# 3. Open TRIP referencing shift.id as parent
-TRIP_ATTR="{\"carrierId\":\"$CARRIER\",\"regionId\":\"00000000-0000-0000-0000-0000000000103\"}"
-docker exec docker-gateway-service-1 curl -k -s -X POST \
-  "https://gateway-service:8080/api/v1/sync/sessions/open" \
-  -H "Content-Type: application/json" \
-  -d "{\"sessionTypeId\":\"$TRIP_TYPE\",\"parentSessionId\":\"$SHIFT_ID\",\"openedByUserId\":\"$DRIVER_USER\",\"tidId\":\"$TID_ID\",\"pathId\":\"$PATH_ID\",\"vehicleId\":\"$VEHICLE_ID\",\"carrierId\":\"$CARRIER\",\"regionId\":\"00000000-0000-0000-0000-0000000000103\"}"
-
-# 4. Try parallel Trip (should fail with 409 in production server, 202 here but DB-level will dedupe)
-docker exec docker-gateway-service-1 curl -k -s -X POST ...
-# Ожидаем либо 409 Conflict (если включен server-side check) либо вторую запись с другим sessionId;
-# после двух updates server-side SessionService должен вернуть либо 409 (включен guard) либо server detect duplicate.
-
-# 5. Close TRIP — same user or admin
-docker exec docker-gateway-service-1 curl -k -s -X PUT \
-  "https://gateway-service:8080/api/v1/sync/sessions/$TRIP_ID/close" \
-  -H "Content-Type: application/json" \
-  -d "{\"reason\":\"end_of_trip\",\"cardId\":\"$DRIVER_CARD_ID\"}"
-
-# 6. Tap passenger cards → INSERT trip_payments (offline) + emit Kafka transactions
-# ref. Phase 7 Android SyncApi.completeTransaction
-# Каждый tap → session=TRIP.id, typeCode=...0803 (VALIDATION), resultCode=...0903 (VALIDATION_ONLY), amount=0.
-
-# 7. Close SHIFT — by another driver of same carrier (auth matrix test)
-ANOTHER_DRIVER_USER="019ff5b6-fc58-7865-a2c5-000000000002"  # hypothetical same carrier
-docker exec docker-gateway-service-1 curl -k -s -X PUT \
-  "https://gateway-service:8080/api/v1/sync/sessions/$SHIFT_ID/close" \
-  -H "Content-Type: application/json" \
-  -d "{\"reason\":\"end_of_shift\",\"cardId\":\"$ANOTHER_DRIVER_CARD\"}"
-# Ожидаем 202 — `canCloseShift` через carrier_id из ATTRIBUTES JSONB и ANOTHER_DRIVER's
-# asop_user_carriers.carrier_id == $CARRIER → OK.
-
-# 8. Verify final DB state
-docker exec docker-postgres-1 psql -U asop -d asop -c \
-  "SELECT session_type_code, status FROM asop_sessions WHERE opened_by_user_id='$DRIVER_USER' ORDER BY started_at DESC LIMIT 3;"
-# Ожидаем: SHIFT (CLOSED), TRIP (CLOSED), and maybe TRIP (CLOSED).
-```
-
-### Authorization matrix verification
-
-Создайте seed users через Keycloak admin:
-- `DRIVER_A` (`CARRIER_DISPATCHER` нет, только DRIVER на carrier=1403)
-- `DRIVER_B` (`CARRIER_DISPATCHER` нет, только DRIVER на carrier=1403)
-- `DISPATCHER_C` (`CARRIER_DISPATCHER` на carrier=1403)
-- `DISPATCHER_F` (другой carrier, тот же region)
-- `ORGADMIN_D` (`ORGANIZER_ADMIN` для организатора 1403)
-- `REGADMIN_E` (`REGION_ADMIN` для региона 0103)
-- `ROOT` (`SUPER_ADMIN`)
-
-```sql
--- Вставить userCarriers и userRegions через seed-data-delta-*.sql или прямой INSERT
-INSERT INTO asop_user_carriers (user_id, carrier_id) VALUES (USER_OF_DRIVER_A, CARRIER_1403);
--- (аналогично для остальных)
-```
-
-Затем для каждой смены, открытой DRIVER_A на carrier=1403:
-- DRIVER_B → закрывает смену → **ОК** (тот же carrier_id)
-- DISPATCHER_C → закрывает смену → **ОК** (CARRIER_DISPATCHER на 1403)
-- DISPATCHER_F → закрывает смену → **403** (другой carrier)
-- ORGADMIN_D → закрывает смену → **ОК** (cascade через организатор → carrier)
-- REGADMIN_E → закрывает смену → **ОК** (cascade через region → organizer → carrier)
-- ROOT → закрывает смену → **ОК** (SUPER_ADMIN)
-
-### 409 Conflict guard (TRIP uniqueness inside SHIFT)
+Все команды выполняются из корня репозитория. Предварительно: стек поднят (см. Pre-conditions) и накатаны seed-скрипты:
 
 ```bash
-# Откройте shift один.
-# Попытайтесь открыть TRIP A.
-docker exec -i docker-postgres-1 psql -U asop -d asop -c \
-  "UPDATE asop_sessions SET status='CLOSED', closed_at=NOW() WHERE session_type_code='TRIP' AND parent_session_id='$SHIFT_ID';"
-# Попытайтесь открыть TRIP B (тот же parent).
-# Server-side guard в SessionCommandConsumer должен вернуть 409.
-docker exec docker-gateway-service-1 curl -k -s -w "%{http_code}\n" -X POST ...
-# Ожидаем 409 Conflict, т.к. существующий IN_PROGRESS TRIP для shift уже есть (если сохранился).
-# Если первая попытка TRIP закрылась — вторая должна пройти.
+for f in seed-data.sql seed-data-delta-1.sql seed-data-delta-2.sql seed-data-delta-3.sql; do
+  docker compose -f infrastructure/docker/docker-compose.yml exec -T postgres psql -U asop -d asop < infrastructure/docker/$f
+done
+```
 
+### Константы (все ID — из seed-data.sql)
+
+```bash
+BASE="https://localhost:8080"
+PSQL="docker compose -f infrastructure/docker/docker-compose.yml exec -T postgres psql -U asop -d asop -tAc"
+
+REGION="00000000-0000-0000-0000-000000000103"       # Республика Крым
+CARRIER="00000000-0000-0000-0000-000000001403"      # ГУП «Крымавтотранс»
+SHIFT_TYPE="00000000-0000-0000-0000-000000000601"   # SHIFT
+TRIP_TYPE="00000000-0000-0000-0000-000000000603"    # TRIP
+VAL_TYPE="00000000-0000-0000-0000-000000000803"     # «Валидация (без списания)»
+VAL_RESULT="00000000-0000-0000-0000-000000000903"   # «Зафиксировано (без списания)»
+DRIVER_A="00000000-0000-0000-0000-302000002200"     # Пётр  (user_carriers → 1403)
+DRIVER_B="00000000-0000-0000-0000-302000002400"     # Анна  (user_carriers → 1403)
+ALIEN_DRIVER="00000000-0000-0000-0000-301000001200" # Татьяна (1402 — ЧУЖОЙ перевозчик)
+
+# Poll события до терминального статуса (COMPLETED/FAILED), ≤ 80 сек
+poll() {
+  for i in $(seq 1 40); do
+    S="$(curl -sk "$BASE/api/v1/events/$1" | jq -r '.state')"
+    [ "$S" = "COMPLETED" ] && break
+    [ "$S" = "FAILED" ] && break
+    sleep 2
+  done
+  curl -sk "$BASE/api/v1/events/$1"
+}
+```
+
+Sanity-check сида (каждый запрос должен вернуть `1`):
+
+```bash
+$PSQL "SELECT COUNT(*) FROM asop_carriers WHERE carrier_id='$CARRIER' AND region_id='$REGION';"
+$PSQL "SELECT COUNT(*) FROM asop_session_types WHERE session_type_id IN ('$SHIFT_TYPE','$TRIP_TYPE');"
+$PSQL "SELECT COUNT(*) FROM asop_user_carriers WHERE user_id IN ('$DRIVER_A','$DRIVER_B') AND carrier_id='$CARRIER';"
+```
+
+### Шаг 0. Терминальный сертификат (mTLS-креденшал для curl)
+
+Весь сценарий проходит под mTLS, поэтому сначала получаем сертификат тестового терминала
+через cert-sign saga (детали — Scenario 1 выше):
+
+```bash
+mkdir -p /tmp/asop-smoke && cd /tmp/asop-smoke
+openssl ecparam -name prime256v1 -genkey -noout -out terminal-key.pem
+openssl req -new -key terminal-key.pem -subj "/CN=E2E-SMOKE-001" -out terminal.csr
+PUB_B64="$(openssl ec -in terminal-key.pem -pubout -outform DER | base64 -w0)"
+
+RESP="$(curl -sk -X POST "$BASE/api/v1/terminals/cert-sign" \
+  -H 'Content-Type: application/json' \
+  -d "{\"terminalSerial\":\"E2E-SMOKE-001\",\"publicKeyBase64\":\"$PUB_B64\"}")"
+EVENT_ID="$(echo "$RESP" | jq -r '.eventId')"
+echo "202 Accepted, X-Event-Id=$EVENT_ID"
+
+BODY="$(poll "$EVENT_ID")"
+[ "$(echo "$BODY" | jq -r '.state')" = "COMPLETED" ] || { echo "$BODY"; exit 1; }
+
+echo "$BODY" | jq -r '.resultData | fromjson | .certificateBase64' | base64 -d \
+  | openssl x509 -inform DER -out terminal-cert.pem
+echo "$BODY" | jq -r '.resultData | fromjson | .caChain' > ca-chain.pem
+
+MTLS="--cert /tmp/asop-smoke/terminal-cert.pem --key /tmp/asop-smoke/terminal-key.pem"
+curl -sk $MTLS -o /dev/null -w "mTLS OK: HTTP %{http_code}\n" "$BASE/api/v1/events/$EVENT_ID"
+cd - >/dev/null
+```
+
+### Шаг 1. Открыть смену (SHIFT)
+
+`sessionId` генерирует КЛИЕНТ (UUIDv7) — он же ключ идемпотентности при offline retry:
+
+```bash
+SHIFT_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+
+EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/sessions/open" \
+  -H 'Content-Type: application/json' -d "{
+    \"sessionId\": \"$SHIFT_ID\",
+    \"sessionTypeId\": \"$SHIFT_TYPE\",
+    \"openedByUserId\": \"$DRIVER_A\",
+    \"cardId\": \"02000000-0000-0000-0000-0000000000a1\",
+    \"carrierId\": \"$CARRIER\",
+    \"regionId\": \"$REGION\",
+    \"timezone\": \"Europe/Moscow\"
+  }" | jq -r '.eventId')"
+# → 202 Accepted; дожидаемся обработки:
+poll "$EV" | jq -r '.state'    # → COMPLETED
+```
+
+Проверки:
+
+```bash
+# Ровно одна запись:
+$PSQL "SELECT session_id, session_type_code, status FROM asop_sessions WHERE session_id='$SHIFT_ID';"
+# → $SHIFT_ID | SHIFT | IN_PROGRESS
+
+# Идемпотентность: повторный POST с тем же sessionId НЕ создаёт дубль
+# (consumer: INSERT … ON CONFLICT (SESSION_ID) DO NOTHING):
+$PSQL "SELECT COUNT(*) FROM asop_sessions WHERE session_id='$SHIFT_ID';"   # → 1
+```
+
+### Шаг 2. Открыть рейс (TRIP) внутри смены
+
+```bash
+TRIP_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+
+EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/sessions/open" \
+  -H 'Content-Type: application/json' -d "{
+    \"sessionId\": \"$TRIP_ID\",
+    \"sessionTypeId\": \"$TRIP_TYPE\",
+    \"parentSessionId\": \"$SHIFT_ID\",
+    \"openedByUserId\": \"$DRIVER_A\",
+    \"tidId\": null, \"pathId\": null, \"vehicleId\": null,
+    \"carrierId\": \"$CARRIER\", \"regionId\": \"$REGION\", \"timezone\": \"Europe/Moscow\"
+  }" | jq -r '.eventId')"
+poll "$EV" | jq -r '.state'    # → COMPLETED
+
+$PSQL "SELECT session_id, status FROM asop_sessions
+       WHERE parent_session_id='$SHIFT_ID' AND status='IN_PROGRESS';"
+# → одна строка: $TRIP_ID | IN_PROGRESS
+```
+
+### Шаг 3. 409 Conflict guard: второй активный TRIP запрещён
+
+Пока TRIP из шага 2 в `IN_PROGRESS`, открытие второго TRIP той же смены падает на consumer'е
+(`EXISTS … PARENT_SESSION_ID AND STATUS='IN_PROGRESS'` → событие FAILED, запись не создаётся):
+
+```bash
+TRIP_2ND="$(uuidgen | tr 'A-Z' 'a-z')"
+
+EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/sessions/open" \
+  -H 'Content-Type: application/json' -d "{
+    \"sessionId\": \"$TRIP_2ND\",
+    \"sessionTypeId\": \"$TRIP_TYPE\",
+    \"parentSessionId\": \"$SHIFT_ID\",
+    \"openedByUserId\": \"$DRIVER_A\",
+    \"carrierId\": \"$CARRIER\", \"regionId\": \"$REGION\"
+  }" | jq -r '.eventId')"
+
+[ "$(poll "$EV" | jq -r '.state')" = "FAILED" ]                           # событие FAILED
+$PSQL "SELECT COUNT(*) FROM asop_sessions WHERE session_id='$TRIP_2ND';"  # → 0
+```
+
+После закрытия первого TRIP (шаг 5) второй открыть можно.
+
+### Шаг 4. Валидация пассажира (tap, MVP без списания)
+
+```bash
+PAX_CARD="$(uuidgen | tr 'A-Z' 'a-z')"
+NOW_MS="$(date +%s)000"
+
+EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/transactions" \
+  -H 'Content-Type: application/json' -d "{
+    \"sessionId\": \"$TRIP_ID\",
+    \"transactionTypeId\": \"$VAL_TYPE\",
+    \"transactionResultId\": \"$VAL_RESULT\",
+    \"amount\": 0,
+    \"currency\": \"RUB\",
+    \"cardId\": \"$PAX_CARD\",
+    \"metadata\": \"{\\\"tripsBefore\\\":10,\\\"tripsAfter\\\":9,\\\"tripsAt\\\":$NOW_MS,\\\"anonymous\\\":false}\",
+    \"carrierId\": \"$CARRIER\", \"regionId\": \"$REGION\"
+  }" | jq -r '.eventId')"
+poll "$EV" | jq -r '.state'    # → COMPLETED
+
+$PSQL "SELECT COUNT(*), MIN(amount) FROM asop_transactions WHERE session_id='$TRIP_ID';"
+# → 1 | 0   (тип/результат …0803 / …0903, amount = 0)
+# Если пассажирская карта зарегистрирована в ASOP_CARD_MIFARES, её TRIPS_LEFT станет 9
+# (updateTripsBalance, last-wins по tripsAt — запаздывающие транзакции не перетирают свежий баланс).
+```
+
+### Шаг 5. Закрыть рейс
+
+```bash
+EV="$(curl -sk $MTLS -X PUT "$BASE/api/v1/sync/sessions/$TRIP_ID/close" \
+  -H 'Content-Type: application/json' \
+  -d "{\"reason\": \"end_of_trip\", \"closedByUserId\": \"$DRIVER_A\"}" | jq -r '.eventId')"
+poll "$EV" | jq -r '.state'    # → COMPLETED
+
+$PSQL "SELECT status FROM asop_sessions WHERE session_id='$TRIP_ID';"    # → CLOSED
+```
+
+### Шаг 6. Закрыть смену — матрица авторизации `canClose`
+
+**Позитив:** другой водитель ТОГО ЖЕ перевозчика закрывает смену водителя A:
+
+```bash
+EV="$(curl -sk $MTLS -X PUT "$BASE/api/v1/sync/sessions/$SHIFT_ID/close" \
+  -H 'Content-Type: application/json' \
+  -d "{\"reason\": \"end_of_shift\", \"closedByUserId\": \"$DRIVER_B\"}" | jq -r '.eventId')"
+poll "$EV" | jq -r '.state'    # → COMPLETED
+
+$PSQL "SELECT status, closed_by_user_id FROM asop_sessions WHERE session_id='$SHIFT_ID';"
+# → CLOSED | $DRIVER_B
+```
+
+**Негатив:** водитель чужого перевозчика смену закрыть НЕ может. Откройте новую смену
+от `DRIVER_A` (шаг 1 с новым `sessionId` в `NEW_SHIFT_ID`), затем:
+
+```bash
+EV="$(curl -sk $MTLS -X PUT "$BASE/api/v1/sync/sessions/$NEW_SHIFT_ID/close" \
+  -H 'Content-Type: application/json' \
+  -d "{\"reason\": \"alien_close_attempt\", \"closedByUserId\": \"$ALIEN_DRIVER\"}" | jq -r '.eventId')"
+
+[ "$(poll "$EV" | jq -r '.state')" = "FAILED" ]   # canClose=false → событие FAILED
+$PSQL "SELECT status FROM asop_sessions WHERE session_id='$NEW_SHIFT_ID';"   # → IN_PROGRESS
+```
+
+Расширенная матрица (опционально): создайте через web-admin пользователей `DISPATCHER_C`
+(CARRIER_DISPATCHER @1403), `ORGADMIN_D` (ORGANIZER_ADMIN организатора перевозчика 1403),
+`REGADMIN_E` (REGION_ADMIN @103), `ROOT` (SUPER_ADMIN) и повторите закрытие свежей смены
+с каждым `closedByUserId`: C/D/E/R → COMPLETED (смена CLOSED); пользователь вне scope → FAILED.
+
+### Шаг 7. Финальное состояние
+
+```bash
+$PSQL "SELECT session_type_code, status FROM asop_sessions
+       WHERE opened_by_user_id='$DRIVER_A' ORDER BY started_at DESC LIMIT 4;"
+# Ожидаемо: SHIFT CLOSED ×1–2, TRIP CLOSED ×1 (+ SHIFT IN_PROGRESS из негативного кейса)
+```

@@ -462,7 +462,7 @@ MIFARE Classic — один из самых клонируемых чипов в
 Sector 1 (`0x04`) приложения АСОП (CRYPTO1-protected) используется в трёх сценариях:
 
 1. **Активация карты водителя (промпт 008)**: VCM1 запись на сектор 1 при первом tap карты через activation flow.
-2. **Открытие смены водителем (промпт 011)**: 8-байтный UUID `ASOP_CARDS.card_id` в `sector 1.Block 1` используется как `ASOP_SESSIONS.card_id` поля. При tap для shift-open:
+2. **Открытие смены водителем (промпт 011)**: 16-байтный UUIDv7 `cardId` (MSB-first) в sector 1 block 1 (block 0: magic VCM1 + bitmask u16 LE + tripsLeft u16 LE + reserved) используется как `ASOP_SESSIONS.card_id` поля. При tap для shift-open:
    - `SessionFlowViewModel.onCardTappedForAuth()` читает VCM1 identity (`File 0`/`File 1` по DESFire NFC) или CRYPTO1 auth + MIFARE-Classic read (sector 1) для получения `cardId, userId, bitmask`.
    - bitmask содержит роль `DRIVER` ordinal → резолвится carrier через `asop_user_carriers` payload в локальной таблице `reference_rows`.
    - После успеха аутентификации: emit Kafka `asop.session.commands` с `sessionId = client-generated UUIDv7`.

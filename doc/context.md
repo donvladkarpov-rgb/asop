@@ -59,7 +59,8 @@ backend/
 ├── fiscal-service/            # Фискализация (ОФД)
 ├── audit-service/             # КРС (контролёры)
 ├── admin-service/             # Справочники (Regions, Territories, Organizers)
-└── route-service/             # Маршруты, тарифные зоны, остановки, ТС (R2DBC)
+├── route-service/             # Маршруты, тарифные зоны, остановки, ТС (R2DBC)
+└── orchestrator-service/      # Delta/full-синхронизация справочников (порт 8094)
 ```
 
 ---
@@ -85,11 +86,13 @@ backend/shared/api/{name}-api/
 
 **Service → API dependency:** `implementation(project(":backend:shared:api:{domain}-api"))`
 
-### Все модули (28)
+### Все модули (31)
 ```
 :backend:shared:asop-common
 :backend:shared:asop-dto
 :backend:shared:asop-kafka-contracts
+:backend:shared:asop-proto            # Protobuf схемы delta/full-sync (DeltaChunk, XxxFile)
+:backend:shared:watermark-processor   # per-terminal seq watermark
 :backend:shared:api:gateway-api
 :backend:shared:api:crypto-api
 :backend:shared:api:carrier-api
@@ -116,6 +119,7 @@ backend/shared/api/{name}-api/
 :backend:audit-service
 :backend:admin-service
 :backend:route-service
+:backend:orchestrator-service         # Delta/full-sync справочников (порт 8094)
 ```
 
 ### Сервисы и порты
@@ -162,7 +166,7 @@ backend/shared/api/{name}-api/
   - `200 OK` с `resultData` когда COMPLETED (cert saga — JSON с PEM)
   - `422 Unprocessable Entity` с `errorMessage` когда FAILED
   - `404 Not Found` если eventId неизвестен
-- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус остаётся PENDING в течение TTL 24 ч.
+- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Доменные сервисы публикуют `CommandResult` (COMPLETED/FAILED/PENDING_WATERMARK) в `{domain}.events`; gateway `CommandEventConsumer` обновляет EventService.
 
 #### 4. Cert signing saga (choreographed, 4 hops)
 Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg):
@@ -203,7 +207,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 | `controller/EventController.kt` | GET /api/v1/events/{eventId} |
 | `controller/CarrierController.kt` | POST /api/v1/carriers (async) |
 | `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (open HTTPS, async через Kafka) |
-| `service/EventService.kt` | Redis-backed event store (key `asop:event:{eventId}`, TTL 24 ч, reactive) |
+| `ru.asop.common.event.EventService` (asop-common) | Redis-backed event store (key `asop:event:{eventId}`, TTL 24 ч, reactive); bean через `EventServiceConfig` (gateway + orchestrator) |
 | `service/CarrierCommandService.kt` | Kafka producer с X-Keycloak-Id header |
 | `service/CertCommandService.kt` | CertSignRequested producer в asop.terminal.cert.commands |
 | `kafka/CertEventConsumer.kt` | Listener asop.terminal.cert.events → EventService.complete/fail |
@@ -297,7 +301,7 @@ Spring Boot 3.3.5 WebFlux. **БЕЗ R2DBC** (кроме purge-job). Читает
 - `BEFORE DELETE` триггер: generic `trg_fn_soft_delete()` (single-PK) + `trg_fn_soft_delete_2col()` (composite-PK: organizer-territories, contract-routes, user-roles, user-carriers, user-regions). Превращает DELETE в `UPDATE DELETED_AT = NOW(), UPDATED_AT = NOW()` и возвращает NULL.
 - `trg_fn_touch_updated()` — авто-pristine `UPDATED_AT` на UPDATE (приложение не обязано проставлять вручную).
 - Индексы: `ix_<table>_updated_deleted ON (UPDATED_AT, DELETED_AT)` + `ix_<table>_deleted ON (DELETED_AT) WHERE DELETED_AT IS NOT NULL`.
-- **VERSION-курсор**: глобальный sequence `asop_delta_version_seq`; `trg_fn_assign_version()` присваивает `VERSION = nextval(...)` на INSERT/UPDATE/DELETE. Все 42 справочные таблицы имеют `VERSION BIGINT`. `UPDATED_AT` остаётся для аудита, но **дельта-курсор — это `VERSION`** (монотонный глобальный sequence, не зависит от часовых поясов и обновлений несправочных таблиц). Мастера фильтруют `VERSION > versionSince` и сортируют `ORDER BY VERSION ASC` для keyset-пагинации.
+- **VERSION-курсор**: глобальный sequence `asop_delta_version_seq`; `trg_fn_delta_version()` присваивает `VERSION = nextval(...)` на INSERT/UPDATE/DELETE. Все 42 справочные таблицы имеют `VERSION BIGINT`. `UPDATED_AT` остаётся для аудита, но **дельта-курсор — это `VERSION`** (монотонный глобальный sequence, не зависит от часовых поясов и обновлений несправочных таблиц). Мастера фильтруют `VERSION > versionSince` и сортируют `ORDER BY VERSION ASC` для keyset-пагинации.
 
 ### Protobuf
 
@@ -462,7 +466,7 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Хранение
 - Root CA в PKCS#12 (`./data/root-ca.p12`), авто-генерация при первом старте
 - ECC P-256 через Bouncy Castle
-- Все подписи через Intermediate CA (пересоздаётся при каждом рестарте в MVP)
+- Все подписи через Intermediate CA (persisted в `./data/intermediate-ca.p12`, НЕ пересоздаётся при рестарте; цепочку Root→Intermediate→leaf строит `provision.sh` до старта JVM)
 
 ### Важные замечания
 - `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` нет в Spring 6.1 — использовать `"application/x-pem-file"`
@@ -472,12 +476,12 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Endpoint'ы crypto-service
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/cert-sign` | Выпуск сертификата терминала (open HTTPS, async 4-hop Kafka saga) |
+| Kafka | `asop.terminal.cert.commands` | Consumer `CertCommandConsumer` выпускает сертификат (открытый HTTPS endpoint — на gateway) |
 | POST | `/api/v1/smart-cards/issue` | Выпуск сертификата карты |
 | GET | `/api/v1/terminals/root-ca(/{format})` | Root CA в PEM/DER |
 
 ### Роли смарт-карт
-`PASSENGER_ANONYMOUS`, `PASSENGER_BENEFIT`, `DRIVER`, `CONTROLLER`, `DISPATCHER`, `CARRIER_ADMIN`, `REGION_ADMIN`, `SUPER_ADMIN`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_TERMINAL`, `SERVICE`
+14 ролей (`ASOP_CARD_MIFARES.CARD_ROLE`): `SUPER_ADMIN`, `REGION_ADMIN`, `ORGANIZER_ADMIN`, `CARRIER_ADMIN`, `CARRIER_DISPATCHER`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_DISPATCHER`, `KRS_ADMIN`, `KRS_DISPATCHER`, `KRS_FOREMAN`, `KRS_CONTROLLER`, `DRIVER`, `PASSENGER`, `PASSENGER_ANONYMOUS`
 
 ### Ключи ASOP_KEYS (промпт 006)
 
@@ -511,7 +515,7 @@ Root CA (self-signed, ECC P-256, 10 лет)
 - Записи с DELETED_AT физически удаляются, порядок KEY_ID DESC
 
 **web-admin:**
-- Страницы `ThreeDesKeys` (`/three-des-keys`) и `ConfigParams` (`/config-params`)
+- Страницы `AsopKeys` (`/asop-keys`) и `ConfigParams` (`/config-params`)
 - Раздел «Ключи и параметры» в Sidebar
 
 ---
@@ -555,9 +559,9 @@ Root CA (self-signed, ECC P-256, 10 лет)
 **Перевозчики:**
 - `ASOP_CARRIERS` — перевозчики
 - `ASOP_CARDS_DISTRIBUTORS` — дистрибьюторы карт (юридические лица, пополняющие MIFARE-карты через свои платёжные терминалы)
-- `ASOP_CONTRACTS` — договоры (общий для перевозчиков и дистрибьюторов)
-  - `CONTRACTOR_TYPE` VARCHAR(20) — `CARRIER` | `CARDS_DISTRIBUTOR` (nullable)
-  - `CARRIER_ID`, `CARDS_DISTRIBUTOR_ID` — оба nullable; CHECK `chk_contracts_contractor` разрешает оба NULL, но запрещает оба NOT NULL
+- `ASOP_CONTRACTS` — договоры (общий для контрагентов)
+  - `CONTRACTOR_TYPE VARCHAR(20) NOT NULL` — `ORGANIZER` (перевозочный) | `BANK` (эквайринг — на такие договоры вешаются TID) | `CARDS_DISTRIBUTOR`
+  - CHECK `chk_contracts_contractor`: ORGANIZER/BANK требуют `CARRIER_ID NOT NULL`; CARDS_DISTRIBUTOR требует `CARDS_DISTRIBUTOR_ID NOT NULL`. Валидация дублируется в `ContractService.create/update` (IllegalArgumentException → 400). Актуальность = `STATUS='ACTIVE'` + даты действия; триггер `trg_contracts_bump_tids` бампает VERSION его TID-ов → дельта привозит обновлённый `isValid`
   - `ATTRIBUTES JSONB` — произвольная абстрактная информация по договору (nullable)
   - `COMMISSION_PERCENT` NUMERIC(5,2) — 0-100, nullable
 
@@ -597,10 +601,11 @@ Root CA (self-signed, ECC P-256, 10 лет)
 **Terminal assign carrier (`PUT /api/v1/terminals/{id}/carrier`, terminal-service)** — синхронная привязка терминала к перевозчику. Запрос `TerminalCarrierAssignRequest { carrierId: UUID? }` (null = отвязать), ответ `TerminalResponse`. Используется Android-экраном "Привязать перевозчика" из drawer-меню.
 
 **TID CRUD (carrier-service, sync-proxy)** — `GET/POST/PUT/DELETE /api/v1/tids[/{id}]`:
-- `GET /api/v1/tids?carrierId=UUID` — список TID перевозчика (`@RequestParam(required=false) carrierId: UUID?`, `TidRepository.findByCarrierId`); если `carrierId` не передан — все TID.
-- `POST /api/v1/tids` — создать (`TidCreateRequest { carrierId: UUID (NotNull), tidValue: String (NotBlank, Size 20) }`, status всегда `UNUSED`).
-- `PUT /api/v1/tids/{id}` — обновить (`TidUpdateRequest { carrierId?, tidValue?, status?, terminalId? }`; смена `status` и/или `terminalId` корректно обновляет `ASSIGNED_AT`/`UNASSIGNED_AT`).
-- `DELETE /api/v1/tids/{id}` — удалить.
+- **TID привязан к ДОГОВОРУ, не к перевозчику**: `ASOP_TIDS.CONTRACT_ID` → `ASOP_CONTRACTS` (FK `fk_tids_contract`); договор обязан быть `CONTRACTOR_TYPE='BANK'` и актуальным — валидация в `TidService.create/update` (IllegalArgumentException → 400).
+- `GET /api/v1/tids?carrierId=UUID&regionId=UUID` — список с фильтрами через JOIN договоров.
+- `POST /api/v1/tids` — создать (`TidCreateRequest { contractId: UUID (NotNull), tidValue: String (NotBlank, Size 20) }`, status всегда `UNUSED`).
+- `PUT /api/v1/tids/{id}` — обновить (`TidUpdateRequest { contractId?, tidValue?, status?, terminalId? }`; смена статуса проставляет `ASSIGNED_AT`/`UNASSIGNED_AT`).
+- `DELETE /api/v1/tids/{id}` — удалить (soft-delete триггером). Дельта `/api/v1/tids/delta` включает `contractId` и `isValid`.
 - Sync-CRUD (R2DBC, `R2dbcEntityTemplate.insert()` для новых), без Kafka. Gateway `ServiceRegistry` маппит `tids` → `carrier-service:8087`, `ProxyController` пересылает.
 
 **Транзакции:**
@@ -880,12 +885,12 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build user-se
 
 Каждый сервис имеет свой `Dockerfile` (`eclipse-temurin:21-jre`).
 Liquibase запускается отдельным контейнером (image: `liquibase:4.27`), который монтирует `infrastructure/db-migrations/` в `/db-migrations/`, выполняет миграции и завершается.
-Docker-compose включает 19 контейнеров (11 application services + route-service + web-admin + postgres + kafka + keycloak + zookeeper + liquibase + certs-init).
+Docker-compose определяет 24 сервиса: 11 application-сервисов + orchestrator-service + web-admin + инфраструктура (postgres, liquibase, certs-init, zookeeper, kafka, redis, minio + minio-init, kcat).
 
 **Важно:**
 - `down -v` удаляет `crypto_data`, `certs_data`, `postgres_data` — всё пересоздаётся с нуля
 - `--build` обязателен после пересборки JARs — иначе Docker запустит старые образы
-- `admin-service` имеет `mem_limit: 256m` (128m недостаточно — OOM-killer на 14 R2DBC repositories)
+- `admin-service` и `route-service` имеют `mem_limit: 512m` (128m недостаточно — OOM-killer на 14/10 R2DBC repositories), `orchestrator-service` — 1g
 - `web-admin` Dockerfile использует `npm ci --legacy-peer-deps` (конфликт typescript 6.x vs openapi-typescript 7.x)
 - `provision.sh` корректно пересылает SIGTERM в JVM (trap handler) для graceful shutdown
 - `start.ps1` — PowerShell-аналог `start.sh` для запуска из Windows (Git Bash не видит Docker Desktop)

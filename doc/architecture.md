@@ -51,14 +51,16 @@
 
 ## 2. Структура модулей
 
-28 модулей в иерархии:
+31 модуль в иерархии:
 
 ```
 :backend:shared:asop-common           # BaseEntity, DomainEvent, ErrorCode, KafkaTopic, утилиты
 :backend:shared:asop-dto              # Пусто — DTO перенесены в API-модули
 :backend:shared:asop-kafka-contracts  # Классы Kafka-событий
+:backend:shared:asop-proto            # Protobuf-схемы delta/full-sync
+:backend:shared:watermark-processor   # per-terminal seq watermark
 :backend:shared:api:{domain}-api      # 13 модулей: интерфейсы контроллеров + DTO (без реализации), включая tid-api
-:backend:{domain}-service             # 12 Spring Boot приложений с реализацией
+:backend:{domain}-service             # 13 Spring Boot приложений с реализацией (вкл. orchestrator-service)
 ```
 
 ### Граф зависимостей
@@ -126,7 +128,7 @@ backend/shared/api/{name}-api/
   - `200 OK` с `resultData` (JSON) когда COMPLETED (cert saga — PEM)
   - `422 Unprocessable Entity` с `errorMessage` когда FAILED
   - `404 Not Found` если eventId неизвестен
-- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Для остальных команд пока сервисы не публикуют события — статус остаётся PENDING в течение TTL 24 ч.
+- Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Доменные сервисы публикуют `CommandResult` в `{domain}.events`; gateway `CommandEventConsumer` обновляет EventService.
 
 #### 4. Cert signing flow (choreographed saga, 4 hops)
 Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg при первой регистрации):
@@ -337,7 +339,7 @@ Gateway проверяет JWT, извлекает `sub` (keycloakId), пере�
 ### Сессии водителя: open/close shift & trip flow (промпт 011)
 
 ```
-Android (mTLS) → Gateway → asop.shift.commands
+Android (mTLS) → Gateway → asop.session.commands
        ↓
 session-service @KafkaListener (X-Event-Id в headers)
   ├─ ON CONFLICT (SESSION_ID) DO NOTHING — idempotent
@@ -345,7 +347,7 @@ session-service @KafkaListener (X-Event-Id в headers)
   └─ INSERT ASOP_SESSIONS с opened_by_user_id, closed_by_user_id, card_id,
      tid_id, attributes JSONB (carrierId/regionId/timezone)
        ↓
-       → asop.shift.events → CommandEventConsumer
+       → asop.session.events → CommandEventConsumer
        → EventService.complete(eventId, {status=SESSION_OPEN}}) → 200 OK терминалу
 ```
 
@@ -391,13 +393,13 @@ Root CA (self-signed, ECC P-256, 10 лет)
 ### Реализация
 - Root CA в PKCS#12 (`./data/root-ca.p12`), авто-генерация при первом старте
 - ECC P-256 через Bouncy Castle
-- Все подписи через Intermediate CA (пересоздаётся при каждом рестарте в MVP)
+- Все подписи через Intermediate CA (persisted, не пересоздаётся при рестарте; цепочку строит `provision.sh` до старта JVM)
 - `MediaType.APPLICATION_PEM_CERTIFICATE_VALUE` нет в Spring 6.1 — использовать `"application/x-pem-file"`
 
 ### Эндпоинты crypto-service
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/v1/terminals/cert-sign` | Выпуск сертификата терминала (open HTTPS, 202 + X-Event-Id, 4-hop Kafka saga) |
+| Kafka | `asop.terminal.cert.commands` | Consumer выпускает сертификат терминала (открытый HTTPS endpoint — на gateway) |
 | POST | `/api/v1/smart-cards/issue` | Выпуск сертификата смарт-карты |
 | GET | `/api/v1/terminals/root-ca(/{format})` | Root CA в PEM/DER |
 | POST | `/api/v1/certificates/server` | Выпуск серверного сертификата |
@@ -406,7 +408,7 @@ Root CA (self-signed, ECC P-256, 10 лет)
 **Kafka consumer**: `@KafkaListener("asop.terminal.cert.commands")` в `CertCommandConsumer.kt` выпускает сертификат через `TerminalCertService.issueTerminalCertificate()` и публикует `CertIssued` в `asop.terminal.cert.issued` с пробросом `X-Event-Id` header. CA chain включается в `CertIssued.caChain`.
 
 ### Роли смарт-карт
-`PASSENGER_ANONYMOUS`, `PASSENGER_BENEFIT`, `DRIVER`, `CONTROLLER`, `DISPATCHER`, `CARRIER_ADMIN`, `REGION_ADMIN`, `SUPER_ADMIN`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_TERMINAL`, `SERVICE`
+14 ролей: `SUPER_ADMIN`, `REGION_ADMIN`, `ORGANIZER_ADMIN`, `CARRIER_ADMIN`, `CARRIER_DISPATCHER`, `DISTRIBUTOR_ADMIN`, `DISTRIBUTOR_DISPATCHER`, `KRS_ADMIN`, `KRS_DISPATCHER`, `KRS_FOREMAN`, `KRS_CONTROLLER`, `DRIVER`, `PASSENGER`, `PASSENGER_ANONYMOUS`
 
 ### DN-шаблоны
 ```yaml
@@ -482,7 +484,7 @@ Android → POST /sync/references/delta (body: terminalId, lastVersion) → 202 
 - В `GenericRouteRepository.findDelta` добавлено поле `ResourceInfo.regionJoinClause: String?` — если задано и `regionId != null`, используется вместо стандартного `region_id = :regionId`. Это generic механизм для произвольных JOIN-фильтров.
 - `MasterRegistry.kt` НЕ изменён — orchestrator уже передаёт `regionId`/`carrierId`; правки сделаны только на master-стороне.
 
-**VERSION-курсор**: все ~42 справочные таблицы имеют `VERSION BIGINT` — глобальный монотонный sequence `asop_delta_version_seq` (`trg_fn_assign_version()` присваивает `nextval(...)` на INSERT/UPDATE/DELETE). Дельта-фильтр — `VERSION > versionSince`, сортировка `ORDER BY VERSION ASC` (стабильная keyset-пагинация, не зависит от таймзоны/изменения часов, в отличие от `UPDATED_AT`). `UPDATED_AT` остаётся для аудита и soft-delete.
+**VERSION-курсор**: все ~42 справочные таблицы имеют `VERSION BIGINT` — глобальный монотонный sequence `asop_delta_version_seq` (`trg_fn_delta_version()` присваивает `nextval(...)` на INSERT/UPDATE/DELETE). Дельта-фильтр — `VERSION > versionSince`, сортировка `ORDER BY VERSION ASC` (стабильная keyset-пагинация, не зависит от таймзоны/изменения часов, в отличие от `UPDATED_AT`). `UPDATED_AT` остаётся для аудита и soft-delete.
 
 `userIdsIn`-фильтр для user/card таблиц: URL ограничен ~4 КБ (Reactor Netty `max-initial-line-length`) → оркестратор шлёт userIds батчами по 80 (`USER_IDS_BATCH`) и объединяет результат.
 
@@ -507,8 +509,7 @@ Soft-delete: все ~42 справочные таблицы имеют `DELETED_
 
 ### Соглашения
 - **Все ID**: UUID v7 через `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`)
-- **Миграции**: Liquibase, в `infrastructure/db-migrations/{service}/`
-- Активные миграции только в user-service; у остальных `liquibase.enabled=false`
+- **Миграции**: единый changelog в `infrastructure/db-migrations/` (`db.changelog-master.yaml` → `migrations/v001-init.yaml` → `v001-init.sql`), накатывается отдельным контейнером `liquibase:4.27`; сервисы БЕЗ Liquibase/DataSource (только R2DBC)
 
 ---
 
@@ -529,9 +530,9 @@ Soft-delete: все ~42 справочные таблицы имеют `DELETED_
 **Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED.
 
 **Компоненты:**
-- `AppDatabase` (Room, version 3): 6 сущностей — `PendingEventEntity`, `SessionEntity`, `TransactionEntity` (write-команды) + `SyncMetaEntity`, `DeltaSyncJobEntity`, `ReferenceRowEntity` (справочники). `ReferenceRowEntity` — generic-таблица `reference_rows` (tableName, rowId, payloadJson, updatedAt, deletedAt), composite PK `(table_name, row_id)`. `fallbackToDestructiveMigration()`.
+- `AppDatabase` (Room, version 6): 8 сущностей — базовые 6 (`PendingEventEntity`, `SessionEntity`, `TransactionEntity`, `SyncMetaEntity`, `DeltaSyncJobEntity`, `ReferenceRowEntity`) + `TerminalKeyEntity` (ключи АСОП) + `TripPaymentEntity` (валидации пассажиров). `ReferenceRowEntity` — generic-таблица `reference_rows` (tableName, rowId, payloadJson, updatedAt, deletedAt), composite PK `(table_name, row_id)`. `fallbackToDestructiveMigration()`.
 - `SyncPreferences` (DataStore): terminalId, sessionId, lastSyncTime, lastVersion (VERSION-курсор)
-- `SyncApi` (Retrofit): 10 async endpoints под `/api/v1/sync/**` (mTLS)
+- `SyncApi` (Retrofit): 16 endpoints под `/api/v1/sync/**` (mTLS) — 10 базовых async + `smart-cards/sign`, `cards/activate`, `cards/activate-vcm1`, `cards/by-uid`, `auth/root`, `terminals/{id}/event-watermark`
 - `GatewayApi` (Retrofit): terminal CRUD + `GET /api/v1/events/{eventId}` + `GET /api/v1/regions` + `GET /api/v1/carriers?regionId=...` (sync-proxy через gateway, `permitAll` для mTLS-терминала) + `PUT /api/v1/terminals/{id}/carrier`
 - `SyncWorker`: отправка PENDING событий на gateway (15 min periodic, one-shot on network restore)
 - `EventPollWorker`: polling SENDING событий (5 min periodic, `retryCount >= 20` → FAILED)
@@ -541,6 +542,7 @@ Soft-delete: все ~42 справочные таблицы имеют `DELETED_
 - `ReferenceSyncStore`: парсинг protobuf (`ru.asop.proto.v1.*File`), `applyChunk`/`applyFile`, `db.withTransaction` + sync_meta
 - `WorkScheduler`: периодические DeltaSync 60м + DeltaChunkPoll 5м, one-shot delta, `enqueueFullDump`
 - `GpsTrackingService`: foreground service, `FusedLocationProviderClient`, 30s interval, batch threshold 10 → trigger sync
+- `WatermarkSyncWorker`: периодический (60 мин) репорт event-watermark терминала
 - `NetworkMonitor`: `ConnectivityManager.NetworkCallback` → one-shot sync on network restore
 - `CertificateService`: ECC P-256 keypair generation, `POST /cert-sign`, event polling, PEM store. `terminalSerial` = `Settings.Secure.ANDROID_ID`.
 - `MtlsManager.resetKeyAndCert()`: чистит alias AndroidKeyStore + SharedPreferences — для принудительного перевыпуска сертификата через drawer-меню "Сертификат".
@@ -614,7 +616,7 @@ docker compose -f infrastructure/docker/docker-compose.yml up -d --build
 Каждый сервис имеет `Dockerfile` (eclipse-temurin:21-jre). Liquibase миграции монтируются из `infrastructure/db-migrations/` в `/db-migrations/` внутри контейнера.
 
 ### Docker Compose
-Все 12 сервисов + route-service + PostgreSQL + Kafka + Keycloak + Zookeeper + Liquibase + web-admin на общей сети `asop-net`.
+24 сервиса: 11 application-сервисов + orchestrator-service + web-admin + инфраструктура (postgres, liquibase, certs-init, zookeeper, kafka, redis, minio + minio-init, kcat) на общей сети `asop-net`.
 
 **Запуск из Windows:** `.\infrastructure\docker\start.ps1` (PowerShell wave-based скрипт). Git Bash не видит Docker Desktop.
 

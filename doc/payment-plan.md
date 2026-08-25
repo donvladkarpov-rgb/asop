@@ -146,13 +146,13 @@ payment-service (новый модуль, порт ~809x)
 **Tap-флоу пассажира** для MVP:
 
 ```
-Пассажир прикладывает карту → CardReadScreen
-  → MifareClassicCardWriter.detectAndEmitPayment(eventId)
-  → INSERT TripPaymentEntity (amount=0, transactionResultId='VALIDATION_ONLY')
-  → emit PendingEvent(TRANSACTION_COMPLETE) → SyncWorker
+Пассажир прикладывает карту → OpenTripScreen (TAP_PASSENGER)
+  → INSERT TripPaymentEntity (amount=0, transactionResultId='…0903 VALIDATION_ONLY')
+  → PendingEvent(TRANSACTION_COMPLETE) → SyncWorker
   → POST /sync/transactions
-  → gateway SessionCommandService → Kafka asop.transaction.commands
-  → transaction-service → INSERT ASOP_TRANSACTIONS (amount=0)
+  → gateway TransactionCommandService → Kafka asop.transaction.commands
+  → card-service TransactionCommandConsumer → INSERT ASOP_TRANSACTIONS (amount=0)
+    + updateTripsBalance (last-wins по metadata.tripsAt)
 ```
 
 При переходе к Phase 5 (реальное списание ВТБ):
