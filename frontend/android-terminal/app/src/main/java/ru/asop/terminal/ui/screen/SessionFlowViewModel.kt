@@ -632,7 +632,7 @@ class SessionFlowViewModel @Inject constructor(
      */
     fun confirmCloseShift() {
         val tap = _state.value.cardTap ?: run {
-            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту водителя/админа") }
+            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту водителя/администратора") }
             return
         }
         val shift = _state.value.openShift
@@ -721,7 +721,7 @@ class SessionFlowViewModel @Inject constructor(
             return
         }
         if (tap == null) {
-            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту водителя/админа") }
+            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Сначала приложите карту водителя/администратора") }
             return
         }
         _state.update { it.copy(submitState = SubmitState.SUBMITTING) }

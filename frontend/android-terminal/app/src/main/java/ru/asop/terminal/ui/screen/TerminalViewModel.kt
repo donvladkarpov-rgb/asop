@@ -13,11 +13,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import ru.asop.terminal.cert.MtlsManager
+import org.json.JSONObject
+import kotlinx.coroutines.flow.collectLatest
 import ru.asop.terminal.db.SyncPreferences
+import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.network.GatewayApi
 import ru.asop.terminal.network.models.CarrierResponse
 import ru.asop.terminal.network.models.RegionResponse
-import ru.asop.terminal.network.models.TerminalCarrierAssignRequest
 import ru.asop.terminal.network.models.TerminalRegisterRequest
 import ru.asop.terminal.network.models.TerminalResponse
 import ru.asop.terminal.service.CertificateService
@@ -29,8 +31,22 @@ class TerminalViewModel @Inject constructor(
     private val mtlsManager: MtlsManager,
     private val certificateService: CertificateService,
     private val gatewayApi: GatewayApi,
-    private val syncPreferences: SyncPreferences
+    private val syncPreferences: SyncPreferences,
+    private val referenceRowDao: ReferenceRowDao
 ) : ViewModel() {
+
+    init {
+        viewModelScope.launch {
+            syncPreferences.regionId.collectLatest { id ->
+                _regionLabel.value = if (id.isNullOrBlank()) "—" else resolveReferenceName("asop_regions", id)
+            }
+        }
+        viewModelScope.launch {
+            syncPreferences.carrierId.collectLatest { id ->
+                _carrierLabel.value = if (id.isNullOrBlank()) "—" else resolveReferenceName("asop_carriers", id)
+            }
+        }
+    }
 
     sealed class UiState {
         data object Idle : UiState()
@@ -51,6 +67,23 @@ class TerminalViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     val androidId: String = getAndroidId(application)
+
+    /** Регион/перевозчик — неизменяемая информация из регистрации (имена из локального кэша справочников). */
+    private val _regionLabel = MutableStateFlow("—")
+    val regionLabel: StateFlow<String> = _regionLabel.asStateFlow()
+    private val _carrierLabel = MutableStateFlow("—")
+    val carrierLabel: StateFlow<String> = _carrierLabel.asStateFlow()
+
+    private suspend fun resolveReferenceName(table: String, id: String): String {
+        val payload = runCatching { referenceRowDao.rawPayloadById(table, id) }.getOrNull()
+            ?: return "—"
+        val json = runCatching { JSONObject(payload) }.getOrNull() ?: return "—"
+        val name = when (table) {
+            "asop_regions" -> json.optString("municipalDivision")
+            else -> json.optString("carrierName")
+        }
+        return name.ifBlank { "—" }
+    }
 
     private val _regions = MutableStateFlow<List<RegionResponse>>(emptyList())
     val regions: StateFlow<List<RegionResponse>> = _regions.asStateFlow()
@@ -143,18 +176,6 @@ class TerminalViewModel @Inject constructor(
                 _carriers.value = gatewayApi.listCarriers(regionId)
             } catch (e: Exception) {
                 _state.value = UiState.Error(e.message ?: "Ошибка загрузки перевозчиков")
-            }
-        }
-    }
-
-    fun assignCarrier(carrierId: String?) {
-        viewModelScope.launch {
-            try {
-                val id = terminalId.value ?: return@launch
-                val response = gatewayApi.assignCarrier(id, TerminalCarrierAssignRequest(carrierId))
-                _terminalInfo.value = response
-            } catch (e: Exception) {
-                _state.value = UiState.Error(e.message ?: "Ошибка привязки перевозчика")
             }
         }
     }

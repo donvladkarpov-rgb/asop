@@ -19,18 +19,18 @@ enum class AsopCardType(
      */
     val regionDropDownOptional: Boolean = false,
 ) {
-    SUPER_ADMIN("Root админ", "SUPER_ADMIN", needsUser = true),
+    SUPER_ADMIN("Главный администратор", "SUPER_ADMIN", needsUser = true),
 
     // Промпт 009: PASSENGER (персональный) — опц. region filter.
     PASSENGER("Пассажир персональный", "PASSENGER", needsUser = true, regionDropDownOptional = true),
 
-    REGION_ADMIN("Админ региона", "REGION_ADMIN", needsRegion = true, needsUser = true),
-    ORGANIZER_ADMIN("Админ организатора", "ORGANIZER_ADMIN", needsRegion = true, needsOrganizer = true, needsUser = true),
-    CARRIER_ADMIN("Админ перевозчика", "CARRIER_ADMIN", needsRegion = true, needsOrganizer = true, needsCarrier = true, needsUser = true),
-    DISTRIBUTOR_ADMIN("Админ дистрибутора", "DISTRIBUTOR_ADMIN", needsRegion = true, needsOrganizer = true, needsDistributor = true, needsUser = true),
-    KRS_ADMIN("Админ КРС", "KRS_ADMIN", needsRegion = true, needsOrganizer = true, needsAuditService = true, needsUser = true),
+    REGION_ADMIN("Администратор региона", "REGION_ADMIN", needsRegion = true, needsUser = true),
+    ORGANIZER_ADMIN("Администратор организатора", "ORGANIZER_ADMIN", needsRegion = true, needsOrganizer = true, needsUser = true),
+    CARRIER_ADMIN("Администратор перевозчика", "CARRIER_ADMIN", needsRegion = true, needsOrganizer = true, needsCarrier = true, needsUser = true),
+    DISTRIBUTOR_ADMIN("Администратор дистрибьютора", "DISTRIBUTOR_ADMIN", needsRegion = true, needsOrganizer = true, needsDistributor = true, needsUser = true),
+    KRS_ADMIN("Администратор КРС", "KRS_ADMIN", needsRegion = true, needsOrganizer = true, needsAuditService = true, needsUser = true),
     CARRIER_DISPATCHER("Диспетчер перевозчика", "CARRIER_DISPATCHER", needsRegion = true, needsOrganizer = true, needsCarrier = true, needsUser = true),
-    DISTRIBUTOR_DISPATCHER("Диспетчер дистрибутора", "DISTRIBUTOR_DISPATCHER", needsRegion = true, needsOrganizer = true, needsDistributor = true, needsUser = true),
+    DISTRIBUTOR_DISPATCHER("Диспетчер дистрибьютора", "DISTRIBUTOR_DISPATCHER", needsRegion = true, needsOrganizer = true, needsDistributor = true, needsUser = true),
     KRS_DISPATCHER("Диспетчер КРС", "KRS_DISPATCHER", needsRegion = true, needsOrganizer = true, needsAuditService = true, needsUser = true),
     DRIVER("Водитель", "DRIVER", needsRegion = true, needsOrganizer = true, needsCarrier = true, needsUser = true),
     KRS_FOREMAN("Бригадир КРС", "KRS_FOREMAN", needsRegion = true, needsOrganizer = true, needsAuditService = true, needsUser = true),

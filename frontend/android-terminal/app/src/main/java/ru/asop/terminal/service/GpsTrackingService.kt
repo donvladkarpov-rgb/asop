@@ -178,7 +178,7 @@ class GpsTrackingService : android.app.Service() {
             "GPS Tracking",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "Уведомление о работе GPS-трекинга"
+            description = "Уведомление о работе геопозиции"
             setShowBadge(false)
         }
         val manager = getSystemService(NotificationManager::class.java)
@@ -194,7 +194,7 @@ class GpsTrackingService : android.app.Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ASOP Терминал")
-            .setContentText("GPS-трекинг активен")
+            .setContentText("Геопозиция активна")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

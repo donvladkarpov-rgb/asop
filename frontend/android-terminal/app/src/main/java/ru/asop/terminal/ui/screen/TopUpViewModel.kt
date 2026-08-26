@@ -59,7 +59,7 @@ class TopUpViewModel @Inject constructor(
 
     data class State(
         val step: Step = Step.AUTH,
-        val message: String = "Приложите карту дистрибьютора или админа",
+        val message: String = "Приложите карту дистрибьютора или администратора",
         val authorizedRoles: List<String> = emptyList(),
         val targetUid: String? = null,
         val targetCardId: String? = null,

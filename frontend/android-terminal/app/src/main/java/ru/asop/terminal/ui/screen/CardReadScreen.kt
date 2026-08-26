@@ -322,7 +322,7 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                     HorizontalDivider()
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "ASOP cardIdentity",
+                        "cardIdentity АСОП",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -382,7 +382,7 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                     Spacer(Modifier.height(2.dp))
                     Text(
                         "Блок данных 16 байт / trailer (последний блок сектора). " +
-                            "Если сектор пуст — auth не прошёл (factory/ASOP).",
+                            "Если сектор пуст — auth не прошёл (factory/АСОП).",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -556,7 +556,7 @@ private fun ResultCard(result: DesfireCardReader.ReadResult, onReread: () -> Uni
                     HorizontalDivider()
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "ASOP cardIdentity (SAC1, из sectors 1..end)",
+                        "cardIdentity АСОП (SAC1, из sectors 1..end)",
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.primary
                     )

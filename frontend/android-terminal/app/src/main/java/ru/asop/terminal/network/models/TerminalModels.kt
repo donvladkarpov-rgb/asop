@@ -15,11 +15,6 @@ data class TerminalRegisterRequest(
 )
 
 @JsonClass(generateAdapter = true)
-data class TerminalCarrierAssignRequest(
-    @Json(name = "carrierId") val carrierId: String? = null
-)
-
-@JsonClass(generateAdapter = true)
 data class TerminalStatusChangeRequest(
     @Json(name = "newStatus") val newStatus: String,
     @Json(name = "reason") val reason: String? = null

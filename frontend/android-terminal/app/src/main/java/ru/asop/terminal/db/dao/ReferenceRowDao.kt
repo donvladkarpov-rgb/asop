@@ -14,6 +14,16 @@ interface ReferenceRowDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(rows: List<ReferenceRowEntity>)
 
+    /** Payload одной строки справочника по PK — для резолва имён (регион/перевозчик) офлайн. */
+    @Query(
+        """
+        SELECT payload_json FROM reference_rows
+        WHERE table_name = :tableName AND row_id = :rowId AND deleted_at IS NULL
+        LIMIT 1
+        """
+    )
+    suspend fun rawPayloadById(tableName: String, rowId: String): String?
+
     /** Полная выкачка: очистка справочников перед атомарной заменой (мёртвые строки
      *  прошлых выкачок/другой БД не должны оставаться). */
     @Query("DELETE FROM reference_rows")

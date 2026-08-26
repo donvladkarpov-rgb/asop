@@ -29,7 +29,7 @@ fun ProvisioningScreen(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "ASOP Терминал",
+            text = "АСОП Терминал",
             style = MaterialTheme.typography.headlineLarge
         )
         Spacer(Modifier.height(24.dp))
@@ -42,10 +42,6 @@ fun ProvisioningScreen(
                     viewModel.autoProvision()
                 }) {
                     Text("Сгенерировать ключи и запросить сертификат")
-                }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton(onClick = { /* Import from file - TODO */ }) {
-                    Text("Импортировать PKCS#12")
                 }
             }
             is TerminalViewModel.UiState.Provisioning -> {

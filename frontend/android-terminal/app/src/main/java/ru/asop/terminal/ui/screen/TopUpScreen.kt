@@ -142,7 +142,7 @@ fun TopUpScreen(
             Text(state.message, style = MaterialTheme.typography.bodyLarge)
 
             when (state.step) {
-                TopUpViewModel.Step.AUTH -> Card { Text("Поднесите карту дистрибьютора или админа", modifier = Modifier.padding(16.dp)) }
+                TopUpViewModel.Step.AUTH -> Card { Text("Поднесите карту дистрибьютора или администратора", modifier = Modifier.padding(16.dp)) }
 
                 TopUpViewModel.Step.TARGET_CARD -> Card {
                     Column(modifier = Modifier.padding(16.dp)) {

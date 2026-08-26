@@ -154,7 +154,7 @@ class CardActivationViewModel @Inject constructor(
     val nfcAvailable: Boolean get() = nfcAdapter != null && (nfcAdapter?.isEnabled ?: false)
 
     private val humanTagsByStep = mapOf(
-        Step.AuthForm to "Приложите авторизующую карту (свою)",
+        Step.AuthForm to "Приложите карту авторизации",
         Step.ReferenceForm to "Заполните поля и нажмите «Активировать»"
     )
 
@@ -173,8 +173,8 @@ class CardActivationViewModel @Inject constructor(
                 },
                 message = when {
                     !online -> "Нет сети: активация недоступна офлайн"
-                    type.requiresRoot -> "Введите логин/пароль root-администратора"
-                    else -> "Приложите авторизующую карту"
+                    type.requiresRoot -> "Введите логин/пароль Главного администратора"
+                    else -> "Приложите карту авторизации"
                 },
                 operatorRoles = emptyList(),
                 authorizedByRoot = false,
@@ -217,7 +217,7 @@ class CardActivationViewModel @Inject constructor(
             _state.update { it.copy(validatedError = "Заполните логин и пароль") }
             return
         }
-        _state.update { it.copy(busy = true, message = "Проверка root-учётной записи…") }
+        _state.update { it.copy(busy = true, message = "Проверка учётной записи Главного администратора…") }
         viewModelScope.launch(Dispatchers.IO) {
             val result = runCatching {
                 val resp = syncApi.rootLogin(RootLoginRequest(s.rootUsername.trim(), s.rootPassword))
@@ -234,12 +234,12 @@ class CardActivationViewModel @Inject constructor(
                             operatorRoles = listOf("SUPER_ADMIN"),
                             busy = false,
                             step = Step.TargetCard,
-                            message = "Root авторизован. Приложите целевую КАРТУ"
+                            message = "Теперь приложите целевую карту"
                         )
                     }
                 },
                 onFailure = { e ->
-                    _state.update { it.copy(busy = false, validatedError = "Root-логин не прошёл: ${e.message}") }
+                    _state.update { it.copy(busy = false, validatedError = "Авторизация Главного администратора не прошла: ${e.message}") }
                 }
             )
         }
@@ -301,7 +301,7 @@ class CardActivationViewModel @Inject constructor(
             }
             val roles = try { identifyCardRoles(iso) } finally { writer.close(iso) }
             if (roles == null) {
-                _state.update { it.copy(message = "Не удалось прочитать авторизующую карту (ключ/identity)") }
+                _state.update { it.copy(message = "Не удалось прочитать карту авторизации (ключ/identity)") }
                 return@launch
             }
             val target = _state.value.cardType ?: return@launch
@@ -310,7 +310,7 @@ class CardActivationViewModel @Inject constructor(
                     it.copy(
                         operatorRoles = roles,
                         step = Step.TargetCard,
-                        message = "Авторизация OK (${roles.joinToString()}). Приложите целевую КАРТУ"
+                        message = "Теперь приложите целевую карту"
                     )
                 }
                 // Tone отключён на auth-флоу — пользователь сказал что терминал пищит
@@ -373,7 +373,7 @@ class CardActivationViewModel @Inject constructor(
                 }
 
             _state.update {
-                it.copy(message = "Авторизующая карта не опознана — ни один ASOP-ключ не подошёл")
+                it.copy(message = "Карта авторизации не опознана — ни один АСОП-ключ не подошёл")
             }
             } finally {
                 try { mfc.close() } catch (_: Exception) {}
@@ -401,7 +401,7 @@ class CardActivationViewModel @Inject constructor(
                 workingKeyClassicA = keyA,
                 workingKeyClassicB = keyB,
                 step = Step.TargetCard,
-                message = "Авторизация OK ($source, ${roles.joinToString()}). Приложите целевую КАРТУ"
+                message = "Теперь приложите целевую карту"
             )
         }
         addReceipt("Авторизация оператора: ${roles.joinToString()}")
@@ -1242,8 +1242,8 @@ pendingWriteVcm1 = null
         val writer = MifareClassicCardWriter()
         val keys = terminalKeyDao.getActive(5)
         val newestKey = keys.firstOrNull()?.let { terminalKeyCryptor.decrypt(it.keyMaterialEnc) }
-            ?: return "нет ASOP-ключей в terminal_keys"
-        if (newestKey.size < 12) return "ASOP-ключ короче 12 байт — для Classic нужно keyA(6)+keyB(6)"
+            ?: return "нет АСОП-ключей в terminal_keys"
+        if (newestKey.size < 12) return "АСОП-ключ короче 12 байт — для Classic нужно keyA(6)+keyB(6)"
 
         val keyA = newestKey.copyOfRange(0, 6)
         val keyB = newestKey.copyOfRange(6, 12)

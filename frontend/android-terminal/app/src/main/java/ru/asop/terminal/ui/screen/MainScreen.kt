@@ -29,6 +29,8 @@ fun MainScreen(
     val terminalState by terminalViewModel.state.collectAsState()
     val terminal by terminalViewModel.terminalInfo.collectAsState()
     val terminalId by terminalViewModel.terminalId.collectAsState()
+    val regionLabel by terminalViewModel.regionLabel.collectAsState()
+    val carrierLabel by terminalViewModel.carrierLabel.collectAsState()
     val certStatus by certExpiryViewModel.status.collectAsState()
     val pendingCount by syncViewModel.pendingCount.collectAsState()
     val currentSession by syncViewModel.currentSession.collectAsState()
@@ -47,7 +49,7 @@ fun MainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("ASOP Терминал") },
+                title = { Text("АСОП Терминал") },
                 actions = {
                     if (pendingCount > 0) {
                         BadgedBox(badge = {
@@ -171,7 +173,8 @@ fun MainScreen(
                 terminal?.let { t ->
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
-                            InfoRow("Статус", t.status)
+                                                        InfoRow("Регион", regionLabel)
+                            InfoRow("Перевозчик", carrierLabel)
                             InfoRow("Серийный номер", t.terminalSerial)
                             t.terminalNumber?.let { InfoRow("Номер", it) }
                             t.terminalModel?.let { InfoRow("Модель", it) }
@@ -260,7 +263,7 @@ private fun GpsTrackingCard() {
         ) {
             Column {
                 Text(
-                    text = "GPS-трекинг",
+                    text = "Геопозиция",
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(

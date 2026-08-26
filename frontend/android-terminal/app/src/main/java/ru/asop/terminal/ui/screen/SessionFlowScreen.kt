@@ -195,10 +195,10 @@ fun SessionFlowScreen(
             val closeHint = when (state.kind) {
                 SessionFlowViewModel.FlowKind.CLOSE_SHIFT ->
                     "Закрыть смену может любой водитель этого перевозчика, " +
-                        "диспетчер, админ перевозчика / организатора / региона / root."
+                        "диспетчер, администратор перевозчика / организатора / региона / главный администратор."
                 SessionFlowViewModel.FlowKind.CLOSE_TRIP ->
                     "Закрыть рейс может любой водитель этого перевозчика, " +
-                        "диспетчер, админ перевозчика / организатора / региона / root."
+                        "диспетчер, администратор перевозчика / организатора / региона / главный администратор."
                 else -> null
             }
             if (closeHint != null) {
@@ -225,7 +225,7 @@ fun SessionFlowScreen(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Шаг 1: приложите карту водителя/админа", fontWeight = FontWeight.Bold)
+                    Text("Шаг 1: приложите карту водителя/администратора", fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     val stateCard = when (state.cardStep) {
                         SessionFlowViewModel.CardStep.WAITING_TAP -> "Ожидание NFC tap"

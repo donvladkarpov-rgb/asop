@@ -208,7 +208,7 @@ private fun RootCallForm(
     viewModel: CardActivationViewModel
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Аутентификация root-администратора", style = MaterialTheme.typography.headlineSmall)
+        Text("Аутентификация Главного администратора", style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(
             value = state.rootUsername,
             onValueChange = viewModel::onRootUsername,
@@ -261,30 +261,22 @@ private fun NfcListeningCard(
                     modifier = Modifier.width(48.dp).height(48.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    when (state.step) {
-                        CardActivationViewModel.Step.AuthForm -> "Приложите АВТОРИЗУЮЩУЮ карту"
-                        else -> "Приложите ЦЕЛЕВУЮ карту"
-                    },
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    state.message.ifBlank { "Ожидание Mifare DESFire…" },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                if (state.authorizedByRoot) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("Авторизация: root", style = MaterialTheme.typography.bodySmall)
-                } else if (state.operatorRoles.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Роли оператора: ${state.operatorRoles.joinToString(", ")}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                val prompt = when (state.step) {
+                    CardActivationViewModel.Step.AuthForm -> "Приложите карту авторизации"
+                    else -> "Теперь приложите целевую карту"
                 }
+                Spacer(Modifier.height(16.dp))
+                Text(prompt, style = MaterialTheme.typography.titleMedium)
+                state.message
+                    .takeIf { it.isNotBlank() && it != prompt }
+                    ?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
             }
         }
     }
@@ -439,7 +431,7 @@ private fun UserSearchField(
             val msg = if (carrierMissing) {
                 "Терминал не привязан к перевозчику — зарегистрируйте терминал"
             } else if (needsCarrier) {
-                "Нет пользователей, привязанных к перевозчику в админке (раздел «Перевозчики пользователей»)"
+                "Нет пользователей, привязанных к перевозчику в панели администрирования (раздел «Перевозчики пользователей»)"
             } else if (state.selectedCarrierId != null && state.selectedCarrierId.isNotBlank()) {
                 "Нет пользователей, привязанных к этому перевозчику"
             } else {

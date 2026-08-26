@@ -27,12 +27,6 @@ interface GatewayApi {
     @GET("api/v1/events/{eventId}")
     suspend fun getEventStatus(@Path("eventId") eventId: String): Response<EventStatusResponse>
 
-    @PUT("api/v1/terminals/{id}/carrier")
-    suspend fun assignCarrier(
-        @Path("id") id: String,
-        @Body request: TerminalCarrierAssignRequest
-    ): TerminalResponse
-
     @GET("api/v1/regions")
     suspend fun listRegions(): List<RegionResponse>
 

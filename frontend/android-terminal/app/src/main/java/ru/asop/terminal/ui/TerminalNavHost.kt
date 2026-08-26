@@ -38,7 +38,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import kotlinx.coroutines.launch
-import ru.asop.terminal.ui.screen.AssignCarrierScreen
 import ru.asop.terminal.ui.screen.CardActivationScreen
 import ru.asop.terminal.ui.screen.TopUpScreen
 import ru.asop.terminal.ui.screen.CardReadScreen
@@ -117,7 +116,7 @@ fun TerminalNavHost() {
             text = {
                 Text(
                     "Строк в локальных справочниках: $activeReferenceCount\n" +
-                        "Активных дельта-заданий: $pendingDeltaCount"
+                        "Активных задач загрузки: $pendingDeltaCount"
                 )
             },
             confirmButton = {
@@ -133,7 +132,7 @@ fun TerminalNavHost() {
                     showReferencesDialog = false
                     referenceSyncViewModel.requestDeltaSync()
                 }) {
-                    Text("Дельта сейчас")
+                    Text("Инкрементальная загрузка сейчас")
                 }
             }
         )
@@ -146,7 +145,7 @@ fun TerminalNavHost() {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    text = "ASOP Терминал",
+                    text = "АСОП Терминал",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp)
                 )
@@ -239,14 +238,6 @@ fun TerminalNavHost() {
                     }
                 )
                 NavigationDrawerItem(
-                    label = { Text("Привязать перевозчика") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        navController.navigate("assign-carrier")
-                    }
-                )
-                NavigationDrawerItem(
                     label = { Text("Загрузить справочники") },
                     selected = false,
                     onClick = {
@@ -255,7 +246,7 @@ fun TerminalNavHost() {
                     }
                 )
                 NavigationDrawerItem(
-                    label = { Text(if (deltaJobsEnabled) "Остановить дельта-выкачку" else "Запустить дельта-выкачку") },
+                    label = { Text(if (deltaJobsEnabled) "Остановить инкрементальную загрузку" else "Запустить инкрементальную загрузку") },
                     selected = false,
                     onClick = {
                         scope.launch { drawerState.close() }
@@ -270,7 +261,7 @@ fun TerminalNavHost() {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("ASOP") },
+                    title = { Text("АСОП") },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
                             Icon(Icons.Default.Menu, contentDescription = "Меню")
@@ -296,11 +287,6 @@ fun TerminalNavHost() {
                 }
                 composable("main") {
                     MainScreen()
-                }
-                composable("assign-carrier") {
-                    AssignCarrierScreen(
-                        onSaved = { navController.popBackStack() }
-                    )
                 }
                 composable("card-read") {
                     CardReadScreen(
