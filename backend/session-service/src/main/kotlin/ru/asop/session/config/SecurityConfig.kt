@@ -20,6 +20,7 @@ class SecurityConfig {
             .authorizeExchange { exchanges ->
                 exchanges
                     .pathMatchers("/actuator/health", "/actuator/info").permitAll()
+                    .pathMatchers("/api/v1/tracking/**").permitAll()
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .anyExchange().authenticated()
             }

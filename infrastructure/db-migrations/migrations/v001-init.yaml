@@ -9,3 +9,9 @@ databaseChangeLog:
             splitStatements: false
             stripComments: true
             encoding: UTF-8
+        - sqlFile:
+            path: ../sql/v001-gps-tracking.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+            stripComments: true
+            encoding: UTF-8

@@ -186,3 +186,27 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **android-test** — отдельное приложение (Kotlin + Compose), проверка синка через ContentProvider. `assets/expected-1.json` в git (~746 КБ); `expected-2.json` (~40 МБ) и `expected-all.json` (~47 МБ) gitignored (регенерируются `generate-ethalon.sh`).
 - [x] **E2E validation** — реальный дельта-синк через Kafka: 627 чанков + meta в Redis, событие COMPLETED. Все 42 таблицы сверены с ethalon (canonicalized).
 - [x] **Build verification** — `./gradlew build -x test` SUCCESS, `:app:assembleDebug` SUCCESS (android-terminal + android-test), `tsc -b` 0 ошибок. Docker: 20 контейнеров Up, `rolsuper=t`, soft-delete trigger works, orchestrator 42 tables, Kafka consumers assigned. seed-data.sql INSERTs OK.
+
+## 13. GPS-трекинг, live-карта и пассажирское приложение ✅
+
+Полный контур: терминал (mock/Fused) → gateway → Kafka → session-service → `ASOP_GPS_TRACKING` → snap-to-route → web-admin LiveMap `/live-map` + пассажирское Android-приложение (osmdroid). Подробно — `doc/gps.md`.
+
+- [x] **session-service: приём GPS** — `GpsCommandConsumer` (группа `session-service-v5`): экспоненциальное сглаживание (`GpsPositionFilter`, alpha 0.6, per-terminal, `GpsPositionFilterRegistry` + cleanup 30 мин), watermark-ordering (`X-Terminal-Seq`: APPLIED/ALREADY_APPLIED/DEFERRED), INSERT `ASOP_GPS_TRACKING` (`ST_GeogFromText`, `STATUS='MOVING'`, `SESSION_ID=shift.id`), `CommandResult` → `asop.gps.events`.
+- [x] **session-service: snap-to-route** — `gps/GpsRouteSnapper.kt`: `snap(pathId, lat, lon, maxDistanceMeters=300)`, кэш геометрии `ROUTE_OBJECT` TTL 5 мин, equirectangular-проекция + haversine.
+- [x] **session-service: Live-API** — `TrackingController`/`TrackingService`: `GET /api/v1/tracking/live?regionId&carrierId&vehicleId&freshSec` (DISTINCT ON, JOIN vehicles/paths/vehicle-types, snapped поля) + `GET /api/v1/tracking/vehicle/{id}/track?minutes`. SecurityConfig `permitAll` на `/tracking/**`.
+- [x] **gateway: публичный контур** — `ApiKeyHmacFilter` (X-API-Key + HMAC-SHA256 + rate-limit 60/мин), `PublicProxyController` (`/api/v1/public/**`: tracking→session, stops→route), `ServiceRegistry` `tracking`→session-service:8085, `stops`→route-service:8092, новая chain `@Order(0)` `/api/v1/public/**`.
+- [x] **web-admin: LiveMap** — `LiveMapPage.tsx` (Leaflet, OSM, polling 3 c freshSec=120, CSS-интерполяция 4.5 c, цвет по типу ТС, фильтр raw/snapped, поиск, follow-vehicle). Sidebar «Мониторинг»/«Карта ТС».
+- [x] **web-admin: RouteEditor** — `RouteEditorPage.tsx` (`RouteDrawer`: клик=вершина, Enter/«Готово» завершает, dblclick убран; `densifyPolyline` 40 м; `save()` пишет `ROUTE_OBJECT` GeoJSON `[lon,lat]`). Sidebar «Маршруты и Пути»/«Редактор маршрута».
+- [x] **пассажирское приложение** — `frontend/passenger-app` (`ru.asop.passenger`, osmdroid + Hilt + Moshi + Retrofit): `MapScreen` (MAPNIK, скрывает ТС без снапа, интерполяция 4.5 c, трек, остановки/маршруты), `PassengerViewModel` (polling 3 c), `HmacInterceptor` (API-ключ + HMAC). Base URL `https://192.168.1.6:8080` (из `local.properties` `gateway.host`).
+- [x] **route-service: публичные остановки** — `StopsBboxController` (`/api/v1/stops/bbox`, `ST_Centroid(ZONE_POLYGON)`), `StopRoutesController` (`/api/v1/stops/{id}/routes`).
+- [x] **терминал: mock GPS** — `MockRoutePlayer` (`ROUTE_FILE="mock_route_301.json"`, 356 точек, `% points.size` цикл), `assets/mock_route_301.json`, `isDebugGps` (dev default true). GpsTrackingService `LOCATION_INTERVAL_MS=5_000`/fastest 3 c, требует открытый SHIFT+TRIP с ТС/путём, `SESSION_ID=shift.id`, batch≥10.
+- [x] **DB/seed** — `ASOP_GPS_TRACKING` (GEOGRAPHY, индексы vehicle_time + GIST, партиционирование по RECORDED_AT); геометрия маршрута 301 (`...006700`, 356 точек) в `seed-data.sql` (`UPDATE ASOP_PATHS SET ROUTE_OBJECT`).
+- [x] **E2E проверка** — on F20 debug-мок движется по 301 за ~5 с; `tracking/live` возвращает «ММ100777» с snap `(44.9441, 34.1255)`; web-admin LiveMap и пассажирское приложение показывают ТС по обеим точкам входа (count: 1, snapped).
+
+## 14. Оставшиеся GPS-доработки (планы)
+
+- [ ] **ETA / прогноз прибытия** (движок светки расписания с движением — отдельная фаза, +3–5 дн.).
+- [ ] **Push-уведомления** о приближении ТС.
+- [ ] **Heading/bearing** — направление по двум последним точкам (+0,25 дн.).
+- [ ] **Retention / партиционирование** `ASOP_GPS_TRACKING` по месяцам.
+- [ ] **Self-hosted тайл-сервер + офлайн-кэш osmdroid** для продакшена (см. `doc/gps_maps.md`).

@@ -47,6 +47,8 @@ import { PasswordChangePage } from './pages/PasswordChange';
 import { AsopKeysPage } from './pages/AsopKeys';
 import { ConfigParamsPage } from './pages/ConfigParams';
 import { SessionsPage } from './pages/Sessions';
+import { LiveMapPage } from './pages/LiveMapPage';
+import { RouteEditorPage } from './pages/routes/RouteEditorPage';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -127,6 +129,8 @@ function AppRoutes() {
         <Route path="asop-keys" element={<AsopKeysPage />} />
         <Route path="config-params" element={<ConfigParamsPage />} />
         <Route path="sessions" element={<SessionsPage />} />
+        <Route path="live-map" element={<LiveMapPage />} />
+        <Route path="route-editor" element={<RouteEditorPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

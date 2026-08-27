@@ -310,7 +310,8 @@ API → asop-common dependency via `api(platform(...))` pattern.
 - В Vite dev mode (`npm run dev`) проксирует `/api` → `http://localhost:8080` (gateway)
 - `useCommand` hook — паттерн 202 + polling для команд записи
 - API-клиент через axios, BASE=`/api/v1`, авторизация через Bearer token из oidc-client-ts
-- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, TIDs, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule, Sessions (иерархия смен/рейсов + валидации), UserBenefits (назначение льгот пользователям: фильтр по региону, поиск по имени)
+- Страницы: Login, Callback (OIDC), Dashboard, Users, Terminals, Cards, Carriers, TIDs, CardsDistributors, Contracts, Regions, Territories, Organizers, Routes, FareZones, TransportStops, Vehicles, Paths, Schedule, Sessions (иерархия смен/рейсов + валидации), UserBenefits (назначение льгот пользователям: фильтр по региону, поиск по имени), LiveMap (Карта ТС, `/live-map`), RouteEditor (Редактор маршрута, `/route-editor`)
+- **`frontend/passenger-app/`**: пассажирское Android-приложение (Kotlin + Compose + osmdroid + Hilt + Moshi + Retrofit) — публичный контур `/api/v1/public/**` с API-ключом; live-карта ТС и остановки. Подробно — раздел `GPS-трекинг, live-карта и пассажирское приложение` ниже.
 - **Глобальный фильтр** (правая панель `GlobalFilterPanel`, контекст `GlobalFilterContext`, persist в localStorage `asop.globalFilter`): регион/перевозчик/дистрибьютор. Применяется на ВСЕХ страницах со scope-данными — server-side через query-параметры list-endpoint'ов (`regionId`/`carrierId`/`cardsDistributorId`): carriers, tids, terminals, cards, contracts, organizers, services, admin-users, user-roles, user-carriers, user-regions + все 11 ресурсов route-service (`listFiltered` в GenericRouteRepository: REGION_ID_TABLES — прямой фильтр, CARRIER_ID_TABLES — carrier_id ИЛИ carriers-региона, path-benefits/contract-routes — JOIN). Sessions/UserBenefits/ConfigParams/BenefitSteps — client-side. Локальные фильтры региона (Territories/Benefits/Services) ограничены глобальным (effectiveRegion). Глобальные справочники (regions, roles, card-types, tariff-types, session/event/transaction-types, vehicle-types/models, asop-keys) фильтром не затрагиваются. Латентный баг /services?regionId (бэкенд игнорировал параметр) исправлен.
 - Язык UI: русский (для переключения на английский нужен i18n — react-intl/i18next)
 
@@ -701,3 +702,89 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 **Известные ограничения MVP**:
 - TID/Vehicle/Route/Path pickers в `OpenTripScreen.kt` оставлены как hint-card, финальный каскад-picker вынесен в отдельный flow (Phase 4.2.b).
 - Trip payments идут в `transaction-service` отдельным session=TRIP.id, не в `ASOP_CARD_REGISTER` — не нужно регистрировать пассажирскую карту как Driver card.
+
+## GPS-трекинг, live-карта и пассажирское приложение (промпт 014/015+)
+
+Полный контур: терминал → gateway → Kafka → session-service (запись) → API `/tracking/live` (snap-to-route) → web-admin LiveMap **и** пассажирское Android-приложение (osmdroid).
+
+### Цепочка записи координат (session-service)
+
+```
+Android GpsTrackingService (foreground, mock/FusedLocation) → POST /sync/gps/positions (mTLS, X-Event-Seq)
+→ gateway GpsCommandController → EventService PENDING + Kafka asop.gps.commands (headers X-Event-Id/X-Terminal-Seq/X-Carrier-Id/X-Region-Id/X-Timezone)
+→ session-service GpsCommandConsumer (группа session-service-v5):
+    KalmanFilterRegistry.getFilter(terminalKey) → GpsPositionFilter.filter(lat,lon) → (smoothedLat, smoothedLon)  [alpha=0.6, экспоненциальное сглаживание]
+    watermark.applyInOrder(terminalId, seq, ...) → APPLIED/ALREADY_APPLIED → CommandResult COMPLETED в asop.gps.events (gateway CommandEventConsumer → EventService complete/fail)
+    INSERT ASOP_GPS_TRACKING (ST_GeogFromText WKT, STATUS='MOVING', SESSION_ID=shift.id)
+@Scheduled 30 мин → filterRegistry.cleanup() (idle >30 мин)
+```
+
+**Watermark-ordering** (`X-Terminal-Seq` из HTTP `X-Event-Seq`): `terminalId == null` → применяется сразу без watermark; иначе APPLIED / ALREADY_APPLIED / DEFERRED (PENDING_WATERMARK) — порядок событий терминала сохранён (промпт 012).
+
+**Условие записи точки на терминале**: включён тумблер «Геопозиция», открыта смена (SHIFT) и рейс (TRIP) с ТС+путём. `vehicleId = trip?.vehicleId ?: shift?.vehicleId`, `pathId — аналогично`; если оба null → точка молча отбрасывается. `SESSION_ID = shift.id` (НЕ trip.id) — GPS-привязка к смене, `vehicleId/pathId` из открытого TRIP. Интервал: `LOCATION_INTERVAL_MS=5_000` / fastest 3 c, batch ≥10 → trigger sync. Debug GPS через `MockRoutePlayer` (`isDebugGps` default true).
+
+### Snap-to-route (session-service `gps/GpsRouteSnapper.kt`)
+
+- `snap(pathId, lat, lon, maxDistanceMeters=300.0): Mono<SnappedPoint>` — проекция точки на полилинию `ASOP_PATHS.ROUTE_OBJECT` (jsonb GeoJSON `LineString`, `[lon,lat]`).
+- Кэш геометрии `ConcurrentHashMap<UUID, CachedGeometry>` **TTL 5 мин** + re-entrancy guard (in-flight расшарен).
+- `parseLineString` → `[lat,lon]`; `projectPointToSegment` — локальная equirectangular аппроксимация (`DEG_TO_M_LAT=111_320`, `DEG_TO_M_LON=78_800`); `haversineMeters` (`EARTH_RADIUS_M=6_371_000`). Если лучшая дистанция > maxDistanceMeters → null (без снапа).
+
+### Live-API (session-service `controller/TrackingController.kt`, `service/TrackingService.kt`)
+
+- `GET /api/v1/tracking/live?regionId&carrierId&vehicleId&freshSec` (default **freshSec=600**):
+  CTE `latest` `DISTINCT ON (g.VEHICLE_ID)` с `RECORDED_AT > NOW() - freshSec`, `ST_Y/ST_X(GPS_COORD::geometry)`, JOIN `ASOP_VEHICLES` (VEHICLE_NUMBER/VEHICLE_NAME), LEFT JOIN `ASOP_PATHS` (PATH_NAME/ROUTE_ID), LEFT JOIN `ASOP_VEHICLE_TYPES` (TYPE_NAME). Фильтры: `v.CARRIER_ID=:carrierId`, регион через `CARRIER_ID IN (SELECT CARRIER_ID FROM ASOP_CARRIERS WHERE REGION_ID=:regionId)`. `flatMap` → `findSnapped(pathId, lat, lon)`.
+  `LiveVehicleDto`: `vehicleId, vehicleNumber, vehicleName, vehicleType, latitude, longitude, snappedLatitude?, snappedLongitude?, speedKmh?, recordedAt, pathId?, pathName?, routeId?, sessionId?`.
+- `GET /api/v1/tracking/vehicle/{vehicleId}/track?minutes` (default 15) → `TrackPointDto` (все точки за N минут ASC, каждая снапнута).
+- session-service `SecurityConfig`: `pathMatchers("/api/v1/tracking/**").permitAll()` (публичный — auth делает gateway).
+
+### Gateway публичный контур + proxy
+
+- `config/ApiKeyHmacFilter.kt` — WebFilter `/api/v1/public/**`: `X-API-Key` (иначе 401), в keyCache (403), sliding-window rate-limit (default 60/мин → 429). Если `X-Timestamp`+`X-Signature` → HMAC-SHA256 по `"" + timestamp`, `|now-ts|>300с` → 401. Конфиг `asop.api-keys`/env `ASOP_API_KEYS`, формат `key:hmac_secret:rate_limit`.
+  Default: `asop-passenger-prod-key-2026:a1b2...e1f2:60`.
+- `controller/PublicProxyController.kt` — `/api/v1/public/**`: `sub.startsWith("tracking")` → session-service:8085, `starts("stops")` → route-service:8092, иначе 404. Пробрасывает query-string, снимает `public/`.
+- `SecurityConfig` gateway: **новая chain `@Order(0)`** `publicPassengerFilterChain` для `/api/v1/public/**` (`permitAll`, auth в WebFilter).
+- `ServiceRegistry`: `tracking` → session-service:8085, `stops` → route-service:8092 (и для JWT-proxy web-admin).
+
+### web-admin LiveMap + редактор маршрута
+
+- `pages/LiveMapPage.tsx` — Leaflet, OSM-тайлы, центр `[44.95,34.11]` zoom 12; `useQuery(['liveVehicles'], getLiveVehicles({freshSec:120}), refetchInterval:3000)`. `VehicleLayer`: плавное перемещение маркеров CSS `transition: transform 4.5s linear`, цвет по `vehicleType` (Автобус #2563eb, Троллейбус #16a34a, Трамвай #dc2626, Маршрутное такси #f59e0b, else #6b7280). Попап: №ТС/тип/имя/pathName/скорость/запись. Фильтры: «По маршруту (snapped)» (`showSnapped` → snappedCoord vs rawCoord), поиск по №, типы ТС, удаление устаревших маркеров. Follow-vehicle (клик → pan, debounce 2.5 c).
+- `pages/routes/RouteEditorPage.tsx` — редактор геометрии пути: `RouteDrawer` (клик=вершина, пунктир-превью, Enter/«Готово (линия)» завершает — **dblclick убран**), Ctrl+click удаляет вершину. `densifyPolyline(points, DENSE_STEP_METERS=40)` — пересэмплинг ~40 м. `save()`: `routeObject = JSON.stringify({type:'LineString', coordinates: dense.map(([lat,lon])=>[lon,lat])})` (GeoJSON `[lon,lat]`), `updatePath`. Показ «Вершин (кликов)» + «Точек в базе (шаг 40 м)». `finishedRef` всегда `false` на загрузке (можно продлевать).
+- `api/tracking.ts` — `getLiveVehicles({regionId?,carrierId?,vehicleId?,freshSec?})`, `getVehicleTrack(vehicleId,minutes=15)`.
+- Sidebar: «Мониторинг»/«Карта ТС» (`/live-map`), «Маршруты и Пути»/«Редактор маршрута» (`/route-editor`).
+
+### Пассажирское приложение (`frontend/passenger-app`, `ru.asop.passenger`)
+
+- Kotlin + Compose + **osmdroid 6.1.18** + Hilt + Moshi + Retrofit. `applicationId="ru.asop.passenger"`, minSdk 26 / targetSdk 35.
+- Base URL `https://192.168.1.6:8080` (BuildConfig `GATEWAY_BASE_URL` из `local.properties` `gateway.host`, default `10.0.2.2`); **отладка отключает SSL-проверку** (trustAllCerts) — production вернуть.
+- `network/PassengerApi.kt`: `GET public/tracking/live`, `public/tracking/vehicle/{id}/track`, `public/stops/bbox(?southWest&northEast)`, `public/stops/{stopId}/routes`.
+- `network/HmacInterceptor.kt` — добавляет `X-API-Key`/`X-Timestamp`/`X-Signature` (ключ/секрет захардкожены в `AppModule.kt`).
+- `ui/MapScreen.kt`: `TileSourceFactory.MAPNIK`, zoom 15; `displayVehicles = vehicles.filter { snappedLatitude != null && snappedLongitude != null }` — **скрывает ТС без снапа** (не на маршруте). Маркер на `snappedLatitude ?: latitude`; **интерполяция 4.5 c** (coroutine, 30 шагов). Трек выбранного ТС — polyline (синий, 6px). Экранные состояния `MapScreenState`: MAP_ONLY/STOP_SELECTED/ROUTE_SELECTED/VEHICLE_SELECTED. FAB → `loadStops(bbox)`.
+- `model/PassengerViewModel.kt`: polling `getLiveVehicles(freshSec=120)` каждые **3 c**.
+- Остановки (route-service `controller/StopsBboxController.kt` `/api/v1/stops/bbox`), маршруты остановки (`StopRoutesController.kt` `/api/v1/stops/{stopId}/routes`) — публичные, SNap через gateway.
+
+### Mock GPS (терминал)
+
+- `gps/MockRoutePlayer.kt` — `ROUTE_FILE = "mock_route_301.json"` (assets), список `RoutePoint(lat,lon,speed,delayMs)`; зацикливание `currentIndex = (currentIndex+1) % points.size`; emit через `Handler(Looper.getMainLooper())`.
+- `assets/mock_route_301.json` — 356 точек по маршруту 301 (`...222000006700`), `delayMs=5000`, `speed=40`, цикл ~29.7 мин. Геометрия сидится в `seed-data.sql` (`UPDATE ASOP_PATHS SET ROUTE_OBJECT = '{"type":"LineString","coordinates":[...356...]}'::jsonb WHERE PATH_ID='00000000-0000-0000-0000-222000006700'`).
+- `SyncPreferences.KEY_DEBUG_GPS` (`isDebugGps`, default true dev): debug → MockRoutePlayer → `handleMockLocation`, иначе `FusedLocationProviderClient` (PRIORITY_HIGH_ACCURACY).
+- Старый `mock_route_simferopol.json` (100 точек, путь `...222000008400`) — геометрия в `infrastructure/docker/seed-route-geometries.sql` (не используется).
+
+### DDL `ASOP_GPS_TRACKING` (asop_schema.sql)
+
+```
+POSITION_ID UUID PK      VEHICLE_ID UUID NOT NULL   PATH_ID UUID NOT NULL
+SESSION_ID  UUID NULL     GPS_COORD GEOGRAPHY(POINT,4326)
+RECORDED_AT TIMESTAMPTZ   SPEED_KMH NUMERIC(5,2)     STATUS VARCHAR(30) DEFAULT 'MOVING'
+PK (POSITION_ID, RECORDED_AT); PARTITION BY RANGE (RECORDED_AT)
+FK: fk_gps_vehicle→ASOP_VEHICLES (CASCADE), fk_gps_path→ASOP_PATHS, fk_gps_session→ASOP_SESSIONS
+Индексы: idx_gps_vehicle_time (VEHICLE_ID, RECORDED_AT DESC), idx_gps_geo GIST(GPS_COORD)
+```
+
+### Константы/дефолты (quick ref)
+
+- `LOCATION_INTERVAL_MS=5_000`, `LOCATION_FASTEST_INTERVAL_MS=3_000`, `GPS_BATCH_SIZE=10` (терминал)
+- `freshSec` дефолт **600** (бэкенд), web-admin и пассажир поллят с **freshSec=120** каждые **3 c**
+- `maxDistanceMeters=300.0` (snap), геометрия-kкэш **TTL 5 мин**
+- `DENSE_STEP_METERS=40` (редактор маршрута)
+- Интерполяция маркеров **4.5 c** (web-admin CSS transition / пассажир coroutine)
+- API-key default `asop-passenger-prod-key-2026:a1b2...e1f2:60`

@@ -19,12 +19,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ru.asop.terminal.MainActivity
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.SessionDao
 import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.SyncPreferences
+import ru.asop.terminal.gps.MockRoutePlayer
 import ru.asop.terminal.network.SyncApi
 import ru.asop.terminal.network.SeqHeaderHolder
 import ru.asop.terminal.network.models.GpsPositionReport
@@ -44,12 +46,14 @@ class GpsTrackingService : android.app.Service() {
     @Inject lateinit var workScheduler: WorkScheduler
     @Inject lateinit var moshi: Moshi
 
+    private var mockRoutePlayer: MockRoutePlayer? = null
+
     companion object {
         private const val TAG = "GpsTrackingService"
         private const val CHANNEL_ID = "gps_tracking"
         private const val NOTIFICATION_ID = 1001
-        private const val LOCATION_INTERVAL_MS = 30_000L
-        private const val LOCATION_FASTEST_INTERVAL_MS = 15_000L
+        private const val LOCATION_INTERVAL_MS = 5_000L
+        private const val LOCATION_FASTEST_INTERVAL_MS = 3_000L
         private const val GPS_BATCH_SIZE = 10
         const val ACTION_STOP = "ru.asop.terminal.action.STOP_GPS"
 
@@ -123,23 +127,66 @@ class GpsTrackingService : android.app.Service() {
         super.onDestroy()
     }
 
+    @Volatile
+    private var locationUpdatesStarted = false
+
     private fun startLocationUpdates() {
-        try {
-            val request = LocationRequest.Builder(LOCATION_INTERVAL_MS)
-                .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
-                .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
-                .build()
-            fusedLocationClient.requestLocationUpdates(request, locationCallback, mainLooper)
-            Log.d(TAG, "Location updates started")
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Missing location permission", e)
-            stopSelf()
+        if (locationUpdatesStarted) return
+        locationUpdatesStarted = true
+        serviceScope.launch {
+            val debugGps = syncPreferences.isDebugGps.first()
+            if (debugGps) {
+                Log.d(TAG, "Debug GPS mode: using MockRoutePlayer")
+                mockRoutePlayer = MockRoutePlayer(applicationContext, moshi) { lat, lon, speed ->
+                    serviceScope.launch {
+                        handleMockLocation(lat, lon, speed)
+                    }
+                }
+                mockRoutePlayer?.start()
+            } else {
+                try {
+                    val request = LocationRequest.Builder(LOCATION_INTERVAL_MS)
+                        .setMinUpdateIntervalMillis(LOCATION_FASTEST_INTERVAL_MS)
+                        .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
+                        .build()
+                    fusedLocationClient.requestLocationUpdates(request, locationCallback, mainLooper)
+                    Log.d(TAG, "Location updates started (FusedLocationProvider)")
+                } catch (e: SecurityException) {
+                    Log.e(TAG, "Missing location permission", e)
+                    stopSelf()
+                }
+            }
         }
     }
 
     private fun stopLocationUpdates() {
+        locationUpdatesStarted = false
+        mockRoutePlayer?.stop()
+        mockRoutePlayer = null
         fusedLocationClient.removeLocationUpdates(locationCallback)
         Log.d(TAG, "Location updates stopped")
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    private suspend fun handleMockLocation(lat: Double, lon: Double, speedKmh: Double?) {
+        val shift = sessionDao.getCurrentOpenShift()
+        val trip = shift?.let { sessionDao.getCurrentOpenTrip(it.id) }
+        val sessionId = shift?.id
+        val vehicleId = trip?.vehicleId ?: shift?.vehicleId
+        val pathId = trip?.pathId ?: shift?.pathId
+        if (vehicleId == null || pathId == null) {
+            return
+        }
+        val report = GpsPositionReport(
+            vehicleId = vehicleId,
+            pathId = pathId,
+            sessionId = sessionId,
+            latitude = lat,
+            longitude = lon,
+            speedKmh = speedKmh,
+            recordedAt = Instant.now().toString()
+        )
+        enqueueGpsReport(report)
     }
 
     private fun enqueueGpsReport(report: GpsPositionReport) {

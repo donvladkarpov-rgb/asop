@@ -160,9 +160,11 @@ XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TE
 
 | Файл | Назначение |
 |------|------------|
-| `config/ServiceRegistry.kt` | Маппинг resource → URL сервиса |
+| `config/ServiceRegistry.kt` | Маппинг resource → URL сервиса (вкл. `tracking` → session-service:8085, `stops` → route-service:8092) |
 | `config/WebClientConfig.kt` | WebClient bean для proxy |
+| `config/ApiKeyHmacFilter.kt` | WebFilter для `/api/v1/public/**`: API-ключ + HMAC-SHA256 + rate-limit |
 | `controller/ProxyController.kt` | Sync proxy (catch-all) |
+| `controller/PublicProxyController.kt` | Proxy `/api/v1/public/**` (tracking→session, stops→route) для пассажирского приложения |
 | `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (async через Kafka) |
 | `controller/SessionCommandController.kt` | POST /sync/sessions/open, PUT /sync/sessions/{id}/close (mTLS async) |
 | `controller/TransactionCommandController.kt` | POST /sync/transactions (mTLS async) |
@@ -189,7 +191,13 @@ XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TE
 
 ## 4. Аутентификация и авторизация
 
-### Двойная аутентификация в Gateway
+### Аутентификация в Gateway (3 цепи)
+
+**Chain 0** (`@Order(0)`): публичный пассажирский контур `/api/v1/public/**`
+- `permitAll` в security-цепочке — аутентификация выполняется **WebFilter'ом `ApiKeyHmacFilter`** (API-ключ + опциональный HMAC-SHA256).
+- `X-API-Key: asop-passenger-prod-key-2026` (конфиг `asop.api-keys`, формат `key:hmac_secret:rate_limit`, rate-limit по умолчанию 60/мин, sliding-window → 429).
+- Если запрос несёт `X-Timestamp` + `X-Signature` — проверяется HMAC-SHA256 по строке `"" + timestamp` (GET body пуст); отклоняется при `|now-ts| > 300 с`. Без подписи — проверка голого ключа.
+- Используется пассажирским приложением (`HmacInterceptor`) для `GET /public/tracking/live`, `/public/stops/bbox`, `/public/stops/{id}/routes`.
 
 **Chain 1** (`@Order(1)`): mTLS для терминалов
 - Пути: `/api/v1/terminals/**`, `/api/v1/sync/**`
@@ -201,6 +209,7 @@ XA-гарантии: UNIQUE partial index `uq_tc_current_per_terminal ON ASOP_TE
 - JWKS кэшируется локально, проверка каждые 60 сек
 - Нет сетевых вызовов к Keycloak на каждый запрос
 - `GET /api/v1/regions/**` и `GET /api/v1/carriers/**` — `permitAll` (public справочники).
+- `GET /api/v1/tracking/live` (web-admin LiveMap) идёт через JWT-цепочку → `ServiceRegistry["tracking"]`.
 
 ### terminal-service SecurityConfig
 

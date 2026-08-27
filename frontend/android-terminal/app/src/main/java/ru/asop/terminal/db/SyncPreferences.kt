@@ -40,6 +40,11 @@ class SyncPreferences(private val context: Context) {
         private val KEY_NEXT_EVENT_SEQ = longPreferencesKey("next_event_seq")
         private val KEY_LAST_EVENT_SEQ = longPreferencesKey("last_event_seq")
         private val KEY_WATERMARK_FROM_SERVER = longPreferencesKey("watermark_from_server")
+
+        // Промпт 015: debug mock GPS (предзаписанный маршрут вместо FusedLocationProviderClient)
+        private val KEY_DEBUG_GPS = booleanPreferencesKey("debug_gps")
+        // Промпт 015: GPS tracking включён (switch state). Default: true для dev.
+        private val KEY_GPS_ENABLED = booleanPreferencesKey("gps_enabled")
     }
 
     val lastSyncTime: Flow<Long?> = context.syncDataStore.data.map { prefs ->
@@ -229,6 +234,28 @@ class SyncPreferences(private val context: Context) {
 
     val watermarkFromServer: Flow<Long?> = context.syncDataStore.data.map { prefs ->
         prefs[KEY_WATERMARK_FROM_SERVER]
+    }
+
+    /** Промпт 015: включён ли mock GPS вместо FusedLocationProviderClient. Default: true (dev). */
+    val isDebugGps: Flow<Boolean> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_DEBUG_GPS] ?: true
+    }
+
+    suspend fun setDebugGps(enabled: Boolean) {
+        context.syncDataStore.edit { prefs ->
+            prefs[KEY_DEBUG_GPS] = enabled
+        }
+    }
+
+    /** Промпт 015: включён ли GPS-трекинг (persisted switch state). Default: true (dev). */
+    val gpsEnabled: Flow<Boolean> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_GPS_ENABLED] ?: true
+    }
+
+    suspend fun setGpsEnabled(enabled: Boolean) {
+        context.syncDataStore.edit { prefs ->
+            prefs[KEY_GPS_ENABLED] = enabled
+        }
     }
 
     /**

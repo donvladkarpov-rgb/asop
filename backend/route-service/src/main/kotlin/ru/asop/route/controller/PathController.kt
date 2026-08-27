@@ -39,7 +39,7 @@ class PathController(
                 id = row["path_id"]?.toString() ?: "",
                 routeId = row["route_id"]?.toString() ?: "",
                 pathName = row["path_name"]?.toString() ?: "",
-                routeObject = row["route_object"]?.toString(),
+                routeObject = decodeJsonValue(row["route_object"]),
                 benefitPolicy = row["benefit_policy"]?.toString() ?: "",
                 startStopId = row["start_stop_id"]?.toString(),
                 endStopId = row["end_stop_id"]?.toString(),
@@ -102,7 +102,7 @@ class PathController(
         id = row["path_id"]?.toString() ?: "",
         routeId = row["route_id"]?.toString() ?: "",
         pathName = row["path_name"]?.toString() ?: "",
-        routeObject = row["route_object"]?.toString(),
+        routeObject = decodeJsonValue(row["route_object"]),
         benefitPolicy = row["benefit_policy"]?.toString() ?: "",
         startStopId = row["start_stop_id"]?.toString(),
         endStopId = row["end_stop_id"]?.toString(),
@@ -111,4 +111,28 @@ class PathController(
         description = row["description"]?.toString(),
         regionId = row["region_id"]?.toString() ?: ""
     )
+
+    /**
+     * R2DBC возвращает jsonb-колонку не как String, а как byte[]/обёртку
+     * `JsonByteArrayInput{...}` (toString = JsonByteArrayInput{ + json + }). Возвращаем
+     * чистый JSON текст, который фронт может распарсить через JSON.parse.
+     */
+    private fun decodeJsonValue(value: Any?): String? {
+        if (value == null) return null
+        return when (value) {
+            is ByteArray -> String(value, Charsets.UTF_8)
+            is String -> value
+            else -> decodeWrappedJson(value.toString())
+        }
+    }
+
+    private fun decodeWrappedJson(s: String): String? {
+        // Strip Spring's JsonByteArrayInput{ ... } wrapper.
+        // toString() = "JsonByteArrayInput{" + <json> + "}" — content itself is a balanced JSON object,
+        // so the wrapper adds exactly one trailing '}'. Drop one trailing brace after removing the prefix.
+        val prefix = "JsonByteArrayInput{"
+        val text = if (s.startsWith(prefix)) s.substring(prefix.length) else s
+        val result = if (text.endsWith("}")) text.dropLast(1) else text
+        return if (result.isNotBlank()) result else null
+    }
 }

@@ -223,19 +223,20 @@ docker compose exec postgres psql -U asop -d asop -c \
 
 ---
 
-## Scenario 4: GPS tracking
+## Scenario 4: GPS tracking + live-map
 
-**Goal:** Foreground GPS service sends positions during active shift.
+**Goal:** Foreground GPS service sends positions during active shift; live-map shows snapped vehicles.
 
 ### Steps
 
 1. Main screen → tap GPS toggle to ON
 2. Grant `ACCESS_FINE_LOCATION` permission (if not already granted)
 3. `GpsTrackingService` starts as foreground service (visible notification)
-4. Every ~30s, a new location point is generated
-5. Location → `GpsPositionReport` → online send attempt → if offline: PendingEvent (GPS_POSITION)
-6. After 10 offline GPS points → `WorkScheduler.enqueueOneShotSync()` triggered
-7. Tap GPS toggle to OFF → service stops
+4. **Требуется открытая смена (SHIFT) и рейс (TRIP) с выбранными ТС и путём** — иначе точка молча отбрасывается (`vehicleId/pathId` оба null)
+5. Debug-режим (`isDebugGps=true`, dev default): координаты от `MockRoutePlayer` (маршрут 301, 356 точек); иначе `FusedLocationProviderClient` (интервал 5 c / fastest 3 c)
+6. Каждая точка → `GpsPositionReport` → online send → если offline: PendingEvent (GPS_POSITION)
+7. После 10 offline GPS точек → `WorkScheduler.enqueueOneShotSync()`
+8. Tap GPS toggle to OFF → service stops
 
 ### Expected HTTP
 
@@ -248,8 +249,8 @@ curl -k --cert terminal.p12 --key terminal-key.pem \
     "vehicleId": "44444444-4444-4444-4444-444444444444",
     "pathId": "33333333-3333-3333-3333-333333333333",
     "sessionId": "55555555-5555-5555-5555-555555555555",
-    "latitude": 55.7558,
-    "longitude": 37.6173,
+    "latitude": 44.9441,
+    "longitude": 34.1255,
     "speedKmh": 42.5,
     "recordedAt": "2026-07-17T10:30:00Z"
   }'
@@ -257,13 +258,27 @@ curl -k --cert terminal.p12 --key terminal-key.pem \
 # Response: 202 Accepted
 ```
 
-### Verification
+### Verification: БД + live-API
 
 ```bash
 # PostgreSQL: GPS tracking entries
 docker compose exec postgres psql -U asop -d asop -c \
-  "SELECT * FROM ASOP_GPS_TRACKING ORDER BY RECORDED_AT DESC LIMIT 5;"
+  "SELECT POSITION_ID, VEHICLE_ID, PATH_ID, SESSION_ID, ST_Y(GPS_COORD::geometry), ST_X(GPS_COORD::geometry), SPEED_KMH, RECORDED_AT FROM ASOP_GPS_TRACKING ORDER BY RECORDED_AT DESC LIMIT 5;"
+
+# Live-API (последняя точка на ТС, при необходимости снапнута к маршруту 301)
+curl -s http://localhost:8094/api/v1/tracking/live?freshSec=120   # напрямую к session-service
+# или через gateway (JWT / public API-ключ):
+curl -s -H "X-API-Key: asop-passenger-prod-key-2026" \
+  http://localhost:8080/api/v1/public/tracking/live?freshSec=120
+
+# Трек ТС за последние 15 мин
+curl -s http://localhost:8094/api/v1/tracking/vehicle/{vehicleId}/track?minutes=15
 ```
+
+### Verification: карты
+
+- **web-admin** `https://localhost:3443/live-map` (JWT, Ctrl+Shift+R после пересборки) — ТС на маршруте 301, маркер плавно движется, попап (№ТС/тип/путь/скорость), фильтр «По маршруту (snapped)».
+- **пассажирское приложение** (Samsung, `ru.asop.passenger`) — live-карта osmdroid показывает только ТС с snapped-позицией (`freshSec=120`, polling 3 c).
 
 ---
 

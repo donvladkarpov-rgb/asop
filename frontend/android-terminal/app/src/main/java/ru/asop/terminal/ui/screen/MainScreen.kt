@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.launch
+import ru.asop.terminal.db.SyncPreferences
 import ru.asop.terminal.service.GpsTrackingService
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -44,6 +46,14 @@ fun MainScreen(
         if (terminalId != null && terminal == null) {
             terminalViewModel.loadTerminal(terminalId!!)
         }
+    }
+
+    val context = LocalContext.current
+    val syncPreferences = remember { SyncPreferences(context) }
+    val gpsEnabled by syncPreferences.gpsEnabled.collectAsState(initial = true)
+    LaunchedEffect(gpsEnabled) {
+        if (gpsEnabled) GpsTrackingService.start(context)
+        else GpsTrackingService.stop(context)
     }
 
     Scaffold(
@@ -251,8 +261,10 @@ fun MainScreen(
 
 @Composable
 private fun GpsTrackingCard() {
-    var gpsActive by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val syncPreferences = remember { SyncPreferences(context) }
+    val gpsEnabled by syncPreferences.gpsEnabled.collectAsState(initial = true)
+    val coroutineScope = rememberCoroutineScope()
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -267,16 +279,18 @@ private fun GpsTrackingCard() {
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    text = if (gpsActive) "Активен" else "Остановлен",
+                    text = if (gpsEnabled) "Активен" else "Остановлен",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (gpsActive) MaterialTheme.colorScheme.primary
+                    color = if (gpsEnabled) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Switch(
-                checked = gpsActive,
+                checked = gpsEnabled,
                 onCheckedChange = { active ->
-                    gpsActive = active
+                    coroutineScope.launch {
+                        syncPreferences.setGpsEnabled(active)
+                    }
                     if (active) {
                         GpsTrackingService.start(context)
                     } else {

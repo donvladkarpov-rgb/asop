@@ -645,7 +645,8 @@ Root CA (self-signed, ECC P-256, 10 лет)
 
 **GPS-привязка**: `ASOP_GPS_TRACKING.SESSION_ID = shift.id` (НЕ trip.id) — отчёты согласованы
 непрерывно от открытия смены до её закрытия, независимо от TRIP boundaries. `vehicleId/pathId`
-в GPS-отчёте берутся из текущего открытого TRIP (если есть); иначе NULL.
+в GPS-отчёте = `trip?.vehicleId ?: shift?.vehicleId` (fallback на смену); если оба null — точка
+молча отбрасывается. Полная live-мапа и snap-to-route — см. `doc/gps.md`.
 
 **TID selectors**: выбор TID при открытии TRIP — водопад (cascade) region→carrier→terminal.
 TID pool (`ASOP_TIDS.STATUS='UNUSED'`) → admin назначает через `PUT /api/v1/tids/{id}` (carrier-service).
@@ -681,6 +682,17 @@ TODO Phase 4.2.b.
 - `ASOP_TERRITORIES` — территории
 - `ASOP_ORGANIZERS` — организаторы
 - `ASOP_ORGANIZER_TERRITORIES` — привязка организаторов к территориям
+
+### GPS-трекинг и live-карта (промпт 014/015)
+
+`ASOP_GPS_TRACKING` — трекинг ТС; `SESSION_ID = shift.id`, `GPS_COORD GEOGRAPHY(POINT,4326)`,
+`VEHICLE_ID/PATH_ID NOT NULL`, партиционируется по `RECORDED_AT`. Сглаживание (экспоненциальное,
+alpha 0.6), watermark-ordering (`X-Terminal-Seq`) и snap-to-route — в session-service (`GpsCommandConsumer`,
+`gps/GpsRouteSnapper.kt`). Live-API: `GET /tracking/live` (последняя точка на ТС, `DISTINCT ON`,
+при необходимости снапнута) и `GET /tracking/vehicle/{id}/track`. Публичный контур пассажира —
+`/api/v1/public/**` с API-ключом (`ApiKeyHmacFilter`). Потребители: web-admin «Карта ТС» (`/live-map`,
+Leaflet) + «Редактор маршрута» (`/route-editor`, `ROUTE_OBJECT` GeoJSON LineString) и пассажирское
+Android-приложение (`frontend/passenger-app`, osmdroid). Подробно — `doc/gps.md` и `doc/gps_maps.md`.
 
 ### UUID v7
 Генерируется на уровне приложения через `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`).
@@ -738,7 +750,7 @@ Liquibase запускается **отдельным Docker-контейнер�
    - **Модель** (опционально) — `terminalModel`
    - **Инвентарный номер** (обязательно) — `terminalNumber`
    В теле запроса также передаётся сохранённый ранее `terminalId` (UUID, ПК терминала в БД), если он есть в DataStore, иначе `null`. После успешной регистрации сберегается возвращённый `id` через `SyncPreferences.setTerminalId()`.
-3. **Main** (Dashboard) — `LazyColumn` с картами: инфо терминала, синхронизация (badge PENDING-событий + кнопка «Синхронизировать сейчас», тоггл синхронизации в TopBar), GPS-трекинг. Фоновая работа: `SyncWorker` (15 мин), `EventPollWorker` (5 мин, до 20 ретраев → FAILED), `NetworkMonitor` (одноразовый sync на восстановлении сети), `GpsTrackingService` (foreground, `FusedLocationProviderClient`, 30 сек, batch ≥ 10 → trigger sync).
+3. **Main** (Dashboard) — `LazyColumn` с картами: инфо терминала, синхронизация (badge PENDING-событий + кнопка «Синхронизировать сейчас», тоггл синхронизации в TopBar), GPS-трекинг. Фоновая работа: `SyncWorker` (15 мин), `EventPollWorker` (5 мин, до 20 ретраев → FAILED), `NetworkMonitor` (одноразовый sync на восстановлении сети), `GpsTrackingService` (foreground, `LOCATION_INTERVAL_MS=5_000` / fastest 3 c, batch ≥10 → trigger sync; debug — `MockRoutePlayer` по маршруту 301).
 
 **Drawer-меню (`ModalNavigationDrawer`, hamburger-иконка в TopAppBar):** экраны терминала доступны перманентно через drawer (а не только через линейный provisioning → registration → main flow):
 - **"Сертификат"** — диалог подтверждения перевыпуска → `MtlsManager.resetKeyAndCert()` (чистит alias AndroidKeyStore + SharedPreferences) → `CertificateService.provision(androidId)` (новый cert-saga).
@@ -974,6 +986,8 @@ Docker-compose определяет 24 сервиса: 11 application-серви
 
 - `doc/architecture.md` — архитектурные решения (English)
 - `doc/auth.md` — детальная архитектура аутентификации
+- `doc/gps.md` — GPS-трекинг, live-карта, пассажирское приложение (фактическое состояние)
+- `doc/gps_maps.md` — источник тайлов, лицензии OSM, офлайн-режим
 - `infrastructure/db-migrations/asop_schema.sql` — схема БД
 - `backend/shared/asop-common/` — общие утилиты
 

@@ -63,6 +63,8 @@ class ServiceRegistry {
         "vehicle-types" to svc("route-service", 8092),
         "vehicle-models" to svc("route-service", 8092),
         "contract-routes" to svc("route-service", 8092),
+        "tracking" to svc("session-service", 8085),
+        "stops" to svc("route-service", 8092),
         "admin-users" to svc("user-service", 8082),
         "user-roles" to svc("user-service", 8082),
         "user-carriers" to svc("user-service", 8082),

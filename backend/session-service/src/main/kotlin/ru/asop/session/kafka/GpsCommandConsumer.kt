@@ -7,6 +7,7 @@ import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
 import org.springframework.r2dbc.core.DatabaseClient
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Component
 import reactor.core.publisher.Mono
 import ru.asop.common.kafka.KafkaTopic
@@ -14,16 +15,21 @@ import ru.asop.common.watermark.WatermarkProcessor
 import ru.asop.common.watermark.impl.WatermarkProcessorImpl
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.gps.GpsPositionReported
+import ru.asop.session.gps.GpsPositionFilterRegistry
 import java.util.UUID
 
 @Component
 class GpsCommandConsumer(
     private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
-    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
+    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>,
+    private val filterRegistry: GpsPositionFilterRegistry
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val watermark: WatermarkProcessor = WatermarkProcessorImpl(db, objectMapper)
+
+    @Scheduled(fixedDelay = 30 * 60 * 1000) // cleanup every 30 min
+    fun cleanupExpiredFilters() { filterRegistry.cleanup() }
 
     @KafkaListener(topics = ["\${asop.kafka.topics.gps-commands}"])
     fun handleCommand(
@@ -57,7 +63,15 @@ class GpsCommandConsumer(
         log.debug("Processing GpsPositionReported: positionId={} seq={}", event.positionId, seq)
 
         val positionId = event.positionId ?: UUID.randomUUID()
-        val wkt = "POINT(${event.longitude} ${event.latitude})"
+
+        // Apply Kalman filter (per-terminal state)
+        val filterKey = terminalId?.toString() ?: "default"
+        val gpsFilter = filterRegistry.getFilter(filterKey)
+        val rawLat = event.latitude.toDouble()
+        val rawLon = event.longitude.toDouble()
+        val (smoothedLat, smoothedLon) = gpsFilter.filter(rawLat, rawLon)
+
+        val wkt = "POINT($smoothedLon $smoothedLat)"
 
         val sql = """INSERT INTO ASOP_GPS_TRACKING
             (POSITION_ID, VEHICLE_ID, PATH_ID, SESSION_ID, GPS_COORD, RECORDED_AT, SPEED_KMH, STATUS)

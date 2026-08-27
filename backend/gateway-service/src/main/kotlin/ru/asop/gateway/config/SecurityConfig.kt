@@ -20,6 +20,19 @@ import java.security.cert.X509Certificate
 class SecurityConfig {
 
     @Bean
+    @Order(0)
+    fun publicPassengerFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+        // Public passenger endpoints: API key auth via ApiKeyHmacFilter (WebFilter bean)
+        return http
+            .securityMatcher(ServerWebExchangeMatchers.pathMatchers("/api/v1/public/**"))
+            .csrf { it.disable() }
+            .authorizeExchange { exchanges ->
+                exchanges.anyExchange().permitAll()
+            }
+            .build()
+    }
+
+    @Bean
     @Order(1)
     fun syncSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
         // Командные sync-endpoint'ы терминала — ТОЛЬКО mTLS (x509), JWT не принимается.

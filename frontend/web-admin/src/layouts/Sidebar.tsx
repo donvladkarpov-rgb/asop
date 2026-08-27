@@ -10,6 +10,10 @@ const navItems = [
   { to: '/sessions', label: 'Смены', icon: '🔐' },
 ];
 
+const monitoringItems = [
+  { to: '/live-map', label: 'Карта ТС', icon: '🗺️' },
+];
+
 const contractorItems = [
   { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
   { to: '/tids', label: 'TID (пулы)', icon: '🔑' },
@@ -63,6 +67,7 @@ const routeItems = [
   { to: '/transport-stops', label: 'Остановки', icon: '🚏' },
   { to: '/routes', label: 'Маршруты', icon: '🚌' },
   { to: '/paths', label: 'Пути', icon: '➡️' },
+  { to: '/route-editor', label: 'Редактор маршрута', icon: '📐' },
   { to: '/path-transport-stops', label: 'Остановки на пути', icon: '📍' },
   { to: '/schedule', label: 'Расписание', icon: '🕐' },
   { to: '/path-services', label: 'Услуги на пути', icon: '⚙️' },
@@ -111,6 +116,22 @@ export function Sidebar() {
             </NavLink>
           ))}
         </nav>
+        <CollapsibleSection label="Мониторинг" defaultOpen={true}>
+          <nav className="sidebar-nav">
+            {monitoringItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
         <CollapsibleSection label="Пользователи и Безопасность">
           <nav className="sidebar-nav">
             {securityItems.map((item) => (

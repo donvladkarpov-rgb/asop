@@ -212,3 +212,15 @@ h1 {
   font-size: 13px;
   margin-bottom: 16px;
 }
+
+/* Leaflet vehicle markers */
+.vehicle-marker {
+  background: transparent !important;
+  border: none !important;
+}
+.leaflet-popup-content {
+  font-family: inherit;
+}
+.leaflet-container {
+  font-family: inherit;
+}

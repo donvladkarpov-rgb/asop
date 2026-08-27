@@ -54,10 +54,12 @@ class CommandEventConsumer(
                 append("\"}")
             }
 
-            if (errorMessage != null) {
-                eventService.fail(eventId, errorMessage).subscribe()
+            val status = node.get("status")?.asText() ?: "UNKNOWN"
+            if (status == "FAILED" || errorMessage != null && errorMessage != "null") {
+                val error = if (errorMessage == "null") "Unknown error" else (errorMessage ?: "Unknown error")
+                eventService.fail(eventId, error).subscribe()
                 log.warn("CommandEvent {} -> EventService FAILED: eventId={}, topic={}, error={}",
-                    eventType, eventId, record.topic(), errorMessage)
+                    eventType, eventId, record.topic(), error)
             } else {
                 eventService.complete(eventId, resultData).subscribe()
                 log.debug("CommandEvent {} -> EventService COMPLETED: eventId={}, topic={}",
