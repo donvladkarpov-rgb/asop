@@ -202,6 +202,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **терминал: mock GPS** — `MockRoutePlayer` (`ROUTE_FILE="mock_route_301.json"`, 356 точек, `% points.size` цикл), `assets/mock_route_301.json`, `isDebugGps` (dev default true). GpsTrackingService `LOCATION_INTERVAL_MS=5_000`/fastest 3 c, требует открытый SHIFT+TRIP с ТС/путём, `SESSION_ID=shift.id`, batch≥10.
 - [x] **DB/seed** — `ASOP_GPS_TRACKING` (GEOGRAPHY, индексы vehicle_time + GIST, партиционирование по RECORDED_AT); геометрия маршрута 301 (`...006700`, 356 точек) в `seed-data.sql` (`UPDATE ASOP_PATHS SET ROUTE_OBJECT`).
 - [x] **E2E проверка** — on F20 debug-мок движется по 301 за ~5 с; `tracking/live` возвращает «ММ100777» с snap `(44.9441, 34.1255)`; web-admin LiveMap и пассажирское приложение показывают ТС по обеим точкам входа (count: 1, snapped).
+- [x] **Баг-фикс live-API (live-карта пустая)** — `GpsRouteSnapper.snap()` использует `mapNotNull` и возвращал `Mono.empty()` при отсутствии геометрии пути/точки >300 м; `TrackingService.getLiveVehicles` через `flatMap` **терял ТС из ответа** (live API возвращал `[]` для путей без `ROUTE_OBJECT`). Фикс: `.defaultIfEmpty(dto(null))` после `findSnapped` — ТС всегда присутствует с raw-координатами, `snapped` null при отсутствии снапа. Также заполнена геометрия обратного пути `...6800` (реверс прямого `...6700`, 356 точек) — пассажирское приложение (фильтр `snapped != null`) показывает ТС по обеим точкам входа.
 
 ## 14. Оставшиеся GPS-доработки (планы)
 

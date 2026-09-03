@@ -37,6 +37,7 @@ class TerminalController(
     override fun getTerminal(id: UUID): Mono<ResponseEntity<TerminalResponse>> {
         return terminalService.getById(id)
             .map { ResponseEntity.ok(it) }
+            .defaultIfEmpty(ResponseEntity.notFound().build())
     }
 
     override fun changeTerminalStatus(

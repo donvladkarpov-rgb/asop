@@ -79,6 +79,11 @@ Android GpsTrackingService (foreground, mock/FusedLocation) → POST /api/v1/syn
   `CARRIER_ID IN (SELECT CARRIER_ID FROM ASOP_CARRIERS WHERE REGION_ID = :regionId)`.
 - `flatMap` → `findSnapped(pathId, lat, lon)` → `LiveVehicleDto` с
   `snappedLatitude/snappedLongitude` (null если нет геометрии или >300 м).
+- **Важно (баг-фикс live-tracking)**: `GpsRouteSnapper.snap()` использует `mapNotNull` и возвращает
+  `Mono.empty()` когда геометрия отсутствует либо точка > maxDistance. В `TrackingService.getLiveVehicles`
+  это компенсируется `.defaultIfEmpty(dto(null))` — иначе `flatMap` **полностью пропадал ТС из ответа**
+  (live API возвращал `[]` при пустой геометрии пути). Vehicle всегда включается в ответ с raw-координатами
+  и `snapped=null`; snap лишь дополняет `snappedLatitude/snappedLongitude`.
 
 `LiveVehicleDto`: `vehicleId, vehicleNumber, vehicleName, vehicleType, latitude, longitude,
 snappedLatitude?, snappedLongitude?, speedKmh?, recordedAt, pathId?, pathName?, routeId?, sessionId?`.

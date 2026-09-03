@@ -32,7 +32,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -75,13 +79,6 @@ fun TerminalNavHost() {
         val certReady = terminalViewModel.isCertificateReady()
         if (certReady && tid != null) {
             terminalViewModel.loadTerminal(tid)
-            navController.navigate("main") {
-                popUpTo(0) { inclusive = true }
-            }
-        } else if (certReady) {
-            navController.navigate("registration") {
-                popUpTo("provisioning") { inclusive = true }
-            }
         }
     }
 
@@ -272,9 +269,25 @@ fun TerminalNavHost() {
         ) { paddingValues ->
             NavHost(
                 navController = navController,
-                startDestination = "provisioning",
+                startDestination = "welcome",
                 modifier = Modifier.padding(paddingValues)
             ) {
+                composable("welcome") {
+                    val isRegistered = terminalId != null
+                    WelcomeScreen(
+                        terminalRegistered = isRegistered,
+                        onNavigateToMain = {
+                            navController.navigate("main") {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        },
+                        onNavigateToCertificate = {
+                            navController.navigate("provisioning") {
+                                popUpTo("welcome") { inclusive = true }
+                            }
+                        }
+                    )
+                }
                 composable("provisioning") {
                     ProvisioningScreen(
                         onProvisioned = { navController.navigate("registration") }
@@ -294,18 +307,64 @@ fun TerminalNavHost() {
                     )
                 }
                 composable("card-activation") {
-                    CardActivationScreen(
-                        onBack = { navController.popBackStack() }
-                    )
+                    RequireTerminalRegistration(
+                        isRegistered = terminalId != null,
+                        onNavigateToCertificate = {
+                            navController.navigate("provisioning") {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    ) {
+                        CardActivationScreen(
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
                 }
                 composable("top-up") {
-                    TopUpScreen(
-                        onBack = { navController.popBackStack() }
-                    )
+                    RequireTerminalRegistration(
+                        isRegistered = terminalId != null,
+                        onNavigateToCertificate = {
+                            navController.navigate("provisioning") {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    ) {
+                        TopUpScreen(
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
                 }
-                // Промпт 011: 4 сессионных экрана
+                // Промпт 011: сессионные экрана
                 composable("open-shift") {
-                    OpenShiftScreen(onConfirmed = { navController.popBackStack() })
+                    val context = LocalContext.current
+                    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    val activeNetwork = cm.activeNetwork
+                    val caps = activeNetwork?.let { cm.getNetworkCapabilities(it) }
+                    val isOnline = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                    if (terminalId == null) {
+                        RequireTerminalRegistration(
+                            isRegistered = false,
+                            onNavigateToCertificate = {
+                                navController.navigate("provisioning") {
+                                    popUpTo(0) { inclusive = true }
+                                }
+                            },
+                            title = "Терминал не зарегистрирован",
+                            message = "Для открытия смены необходимо зарегистрировать терминал.\n\nНажмите кнопку ниже, чтобы перейти к настройке сертификата и пройти регистрацию."
+                        ) {
+                            OpenShiftScreen(onConfirmed = { navController.popBackStack() })
+                        }
+                    } else if (!isOnline) {
+                        RequireTerminalRegistration(
+                            isRegistered = false,
+                            title = "Нет подключения к интернету",
+                            message = "Для открытия смены необходимо подключение к интернету.\n\nПроверьте сетевое соединение и повторите попытку."
+                        ) {
+                            OpenShiftScreen(onConfirmed = { navController.popBackStack() })
+                        }
+                    } else {
+                        OpenShiftScreen(onConfirmed = { navController.popBackStack() })
+                    }
                 }
                 composable("close-shift") {
                     CloseShiftScreen(onConfirmed = { navController.popBackStack() })

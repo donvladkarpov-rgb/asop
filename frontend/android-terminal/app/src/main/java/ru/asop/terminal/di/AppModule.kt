@@ -14,6 +14,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import ru.asop.terminal.network.CertSignHmacInterceptor
 import ru.asop.terminal.network.SeqHeaderInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -65,6 +66,7 @@ object AppModule {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .writeTimeout(15, TimeUnit.SECONDS)
+            .addInterceptor(CertSignHmacInterceptor(BuildConfig.CERT_SIGN_API_KEY, BuildConfig.CERT_SIGN_HMAC_SECRET))
             .addInterceptor(SeqHeaderInterceptor())
             .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC })
             .build()

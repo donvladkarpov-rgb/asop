@@ -76,25 +76,27 @@ class TrackingService(
             }
             .all()
             .flatMap { v ->
+                val dto = { snapped: GpsRouteSnapper.SnappedPoint? ->
+                    LiveVehicleDto(
+                        vehicleId = v.vehicleId,
+                        vehicleNumber = v.vehicleNumber,
+                        vehicleName = v.vehicleName,
+                        vehicleType = v.vehicleType,
+                        latitude = v.latitude,
+                        longitude = v.longitude,
+                        snappedLatitude = snapped?.latitude,
+                        snappedLongitude = snapped?.longitude,
+                        speedKmh = v.speedKmh,
+                        recordedAt = v.recordedAt,
+                        pathId = v.pathId,
+                        pathName = v.pathName,
+                        routeId = v.routeId,
+                        sessionId = v.sessionId
+                    )
+                }
                 findSnapped(v.pathId, v.latitude, v.longitude)
-                    .map { snapped ->
-                        LiveVehicleDto(
-                            vehicleId = v.vehicleId,
-                            vehicleNumber = v.vehicleNumber,
-                            vehicleName = v.vehicleName,
-                            vehicleType = v.vehicleType,
-                            latitude = v.latitude,
-                            longitude = v.longitude,
-                            snappedLatitude = snapped?.latitude,
-                            snappedLongitude = snapped?.longitude,
-                            speedKmh = v.speedKmh,
-                            recordedAt = v.recordedAt,
-                            pathId = v.pathId,
-                            pathName = v.pathName,
-                            routeId = v.routeId,
-                            sessionId = v.sessionId
-                        )
-                    }
+                    .map { snapped -> dto(snapped) }
+                    .defaultIfEmpty(dto(null))
             }
     }
 

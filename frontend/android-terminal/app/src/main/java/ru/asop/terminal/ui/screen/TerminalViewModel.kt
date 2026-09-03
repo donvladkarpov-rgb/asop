@@ -154,8 +154,19 @@ class TerminalViewModel @Inject constructor(
                 val response = gatewayApi.getTerminal(id)
                 _terminalInfo.value = response
                 _state.value = UiState.Registered(response)
+            } catch (e: retrofit2.HttpException) {
+                if (e.code() == 404) {
+                    syncPreferences.clearTerminalId()
+                    _terminalInfo.value = null
+                    _state.value = UiState.Idle
+                } else {
+                    _state.value = UiState.Error(e.message ?: "Ошибка загрузки данных")
+                }
             } catch (e: Exception) {
-                _state.value = UiState.Error(e.message ?: "Ошибка загрузки данных")
+                // End of input / JsonDataException — пустой ответ от сервера
+                syncPreferences.clearTerminalId()
+                _terminalInfo.value = null
+                _state.value = UiState.Idle
             }
         }
     }

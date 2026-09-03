@@ -236,6 +236,7 @@ services:
       SPRING_REDIS_PORT: 6379
       ASOP_ENV: docker
       ASOP_PORTAL_INJECT_TOKEN: ${ASOP_PORTAL_INJECT_TOKEN:-dev-allow}
+      ASOP_CERT_SIGN_API_KEYS: ${ASOP_CERT_SIGN_API_KEYS:-asop-terminal-cert-key:9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210:10}
     volumes:
       - ./certs/provision.sh:/provision.sh:ro
     depends_on:

@@ -146,6 +146,12 @@ class SyncPreferences(private val context: Context) {
         }
     }
 
+    suspend fun clearTerminalId() {
+        context.syncDataStore.edit { prefs ->
+            prefs.remove(KEY_TERMINAL_ID)
+        }
+    }
+
     suspend fun setCarrierId(id: String?) {
         context.syncDataStore.edit { prefs ->
             if (id != null) prefs[KEY_CARRIER_ID] = id

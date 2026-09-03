@@ -79,6 +79,8 @@ spring:
 asop:
   # API keys for public endpoints (format: key:hmac_secret:rate_limit, comma-separated)
   api-keys: ${ASOP_API_KEYS:asop-passenger-prod-key-2026:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2:60}
+  # API keys for cert-sign endpoint (format: key:hmac_secret:rate_limit, comma-separated)
+  cert-sign-api-keys: ${ASOP_CERT_SIGN_API_KEYS:asop-terminal-cert-key:9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210:10}
   kafka:
     topics:
       terminal-cert-events: asop.terminal.cert.events

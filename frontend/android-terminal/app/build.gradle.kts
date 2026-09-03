@@ -32,6 +32,8 @@ android {
 
         buildConfigField("String", "GATEWAY_BASE_URL", "\"https://$gatewayHost:8080\"")
         buildConfigField("String", "CRYPTO_BASE_URL", "\"https://$cryptoHost:8081\"")
+        buildConfigField("String", "CERT_SIGN_API_KEY", "\"${localProps.getProperty("cert.sign.api.key", "asop-terminal-cert-key")}\"")
+        buildConfigField("String", "CERT_SIGN_HMAC_SECRET", "\"${localProps.getProperty("cert.sign.hmac.secret", "9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210")}\"")
     }
 
     buildTypes {

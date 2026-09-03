@@ -47,7 +47,8 @@ object RouteTableRegistry {
             tableName = "ASOP_PATHS",
             pkColumn = "PATH_ID",
             idSnake = "path_id",
-            columnExprs = mapOf("route_object" to "CAST(:route_object AS jsonb)")
+            columnExprs = mapOf("route_object" to "CAST(:route_object AS jsonb)"),
+            selectColumns = "path_id, route_id, path_name, start_stop_id, end_stop_id, CAST(route_object AS text) AS route_object, benefit_policy, path_start_date, path_end_date, description, region_id, created_at, updated_at, deleted_at, version"
         ),
         "path-transport-stops" to ResourceInfo(
             resource = "path-transport-stops",

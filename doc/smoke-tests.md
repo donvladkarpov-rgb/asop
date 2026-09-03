@@ -36,9 +36,15 @@ curl -k https://localhost:8080/actuator/health
 ### Expected HTTP trace
 
 ```bash
-# Step 1: POST /cert-sign (plain HTTPS, no mTLS)
+# Step 1: POST /cert-sign (plain HTTPS, no mTLS, HMAC-protected)
+# HMAC: X-API-Key + X-Timestamp(epochSec) + X-Signature = HmacSHA256(timestamp, secret).hex
+TS=$(date +%s)
+SIG=$(printf '%s' "$TS" | openssl dgst -sha256 -hmac '9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210' -hex | awk '{print $2}')
 curl -k -X POST https://localhost:8080/api/v1/terminals/cert-sign \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: asop-terminal-cert-key" \
+  -H "X-Timestamp: $TS" \
+  -H "X-Signature: $SIG" \
   -d '{
     "terminalSerial": "test-terminal-001",
     "terminalNumber": "T-001",
@@ -548,8 +554,13 @@ openssl ecparam -name prime256v1 -genkey -noout -out terminal-key.pem
 openssl req -new -key terminal-key.pem -subj "/CN=E2E-SMOKE-001" -out terminal.csr
 PUB_B64="$(openssl ec -in terminal-key.pem -pubout -outform DER | base64 -w0)"
 
+TS="$(date +%s)"
+SIG="$(printf '%s' "$TS" | openssl dgst -sha256 -hmac '9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210' -hex | awk '{print $2}')"
 RESP="$(curl -sk -X POST "$BASE/api/v1/terminals/cert-sign" \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: asop-terminal-cert-key" \
+  -H "X-Timestamp: $TS" \
+  -H "X-Signature: $SIG" \
   -d "{\"terminalSerial\":\"E2E-SMOKE-001\",\"publicKeyBase64\":\"$PUB_B64\"}")"
 EVENT_ID="$(echo "$RESP" | jq -r '.eventId')"
 echo "202 Accepted, X-Event-Id=$EVENT_ID"

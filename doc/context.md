@@ -169,13 +169,13 @@ backend/shared/api/{name}-api/
 - Для cert-sign saga (`asop.terminal.cert.events`) Gateway-consumer обновляет EventService (`COMPLETED`/`FAILED`). Доменные сервисы публикуют `CommandResult` (COMPLETED/FAILED/PENDING_WATERMARK) в `{domain}.events`; gateway `CommandEventConsumer` обновляет EventService.
 
 #### 4. Cert signing saga (choreographed, 4 hops)
-Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg):
+Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg). Доступ ограничен **HMAC-SHA256** (см. ниже):
 
 ```
-Android → POST /api/v1/terminals/cert-sign (HTTPS plain)
+Android → POST /api/v1/terminals/cert-sign (HTTPS plain, headers X-API-Key/X-Timestamp/X-Signature)
        → 202 + X-Event-Id
        ↓
-Gateway → Kafka asop.terminal.cert.commands (X-Event-Id header)
+Gateway CertSignHmacFilter → валидация HMAC → Kafka asop.terminal.cert.commands (X-Event-Id header)
        ↓
 crypto-service @KafkaListener → выпускает X.509 через Intermediate CA
                             → Kafka asop.terminal.cert.issued (X-Event-Id пробрасывается)
@@ -193,6 +193,8 @@ Gateway CertEventConsumer → EventService.complete(eventId, resultData=CertStor
 Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManager.storeCertificateChain()
 ```
 
+**HMAC на cert-sign:** `config/CertSignHmacFilter.kt` (gateway) — WebFilter на `POST /api/v1/terminals/cert-sign` валидирует `X-API-Key` + `X-Timestamp` + `X-Signature` (HMAC-SHA256(hex) по timestamp; body не подписывается из-за WebFlux body consumption в WebFilter). Ключи/секреты/rate-limit из `asop.cert-sign-api-keys` (env `ASOP_CERT_SIGN_API_KEYS`, формат `key:hmac_secret:rate_limit`, default `asop-terminal-cert-key:9f8e...3210:10`). `|now-ts|>300с` → 401, неверный key → 403, sliding-window rate-limit (60с) → 429. Android: `network/CertSignHmacInterceptor.kt` на plain OkHttpClient добавляет заголовки; ключи из `CERT_SIGN_API_KEY`/`CERT_SIGN_HMAC_SECRET` BuildConfig (`local.properties` `cert.sign.api.key`/`cert.sign.hmac.secret`).
+
 **XA-гарантии через UNIQUE partial index:** `CREATE UNIQUE INDEX uq_tc_current_per_terminal ON ASOP_TERMINAL_CERTS (TERMINAL_ID) WHERE IS_CURRENT = true` — ловит гонку при параллельной ротации сертификатов. `TransactionalOperator` обеспечивает атомарность mark+insert в terminal-service.
 
 ### Gateway files
@@ -207,6 +209,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 | `controller/EventController.kt` | GET /api/v1/events/{eventId} |
 | `controller/CarrierController.kt` | POST /api/v1/carriers (async) |
 | `controller/CertCommandController.kt` | POST /api/v1/terminals/cert-sign (open HTTPS, async через Kafka) |
+| `config/CertSignHmacFilter.kt` | WebFilter на POST /api/v1/terminals/cert-sign: HMAC (X-API-Key/X-Timestamp/X-Signature) + rate-limit, ключи из `asop.cert-sign-api-keys` |
 | `ru.asop.common.event.EventService` (asop-common) | Redis-backed event store (key `asop:event:{eventId}`, TTL 24 ч, reactive); bean через `EventServiceConfig` (gateway + orchestrator) |
 | `service/CarrierCommandService.kt` | Kafka producer с X-Keycloak-Id header |
 | `service/CertCommandService.kt` | CertSignRequested producer в asop.terminal.cert.commands |
@@ -758,7 +761,9 @@ Liquibase запускается **отдельным Docker-контейнер�
 - **"Привязать перевозчика"** — переход на `AssignCarrierScreen`: dropdown регион → dropdown перевозчик (фильтр по `regionId`) → кнопка "Сохранить" → `PUT /api/v1/terminals/{id}/carrier` с `TerminalCarrierAssignRequest { carrierId }`. Текущий перевозчик пред-выбран, отображается на экране. Требует предварительно сохранённый `terminalId` в DataStore.
 - **Stub-пункты** (placeholder, TODO, `onClick` только закрывает drawer): "Загрузить справочники", "Зарегистрировать карту водителя", "Открыть смену", "Закрыть смену", "Открыть рейс", "Закрыть рейс". Оставлены как «заглушки» до реализации.
 
-**Navhost skip-логика (`TerminalNavHost.kt`):** при старте приложения, если `certificateReady && terminalId != null` → `loadTerminal(id)` и сразу экран `main`; если только `certificateReady` → экран `registration`. Смена `ANDROID_ID` (factory reset / смена signing-key) даёт новый serial → cert-sign saga через `findByTerminalSerial` создаст новый терминал → регистрация сохранит новый `terminalId`.
+**Navhost skip-логика (`TerminalNavHost.kt`):** `startDestination = "welcome"` — при старте приложения всегда сначала показывается `WelcomeScreen` (без auto-навигации). Если `terminalId != null` → кнопка «Войти» → `main`; иначе → «Настроить сертификат» → `provisioning`. `LaunchedEffect` молча вызывает `loadTerminal(tid)` (если `certificateReady && tid != null`), но НЕ навигирует сам. Смена `ANDROID_ID` (factory reset / смена signing-key) даёт новый serial → cert-sign saga через `findByTerminalSerial` создаст новый терминал → регистрация сохранит новый `terminalId`.
+
+**Registration guard (`ui/TerminalRegistrationGuard.kt` — `RequireTerminalRegistration`):** full-screen warning с кнопкой (без auto-навигации), если `isRegistered=false`; иначе рендерит `content`. Применяется к `open-shift` (два branch: `terminalId==null` → warning+кнопка к сертификату; зарегистрирован но нет интернета по `ConnectivityManager` → warning без кнопки), `card-activation`, `top-up`. НЕ применяется к `open-trip`/`close-shift`/`close-trip` (offline OK). `TerminalViewModel.loadTerminal` при 404/пустом ответе сервера делает `clearTerminalId()` — WelcomeScreen показывает «Терминал не зарегистрирован».
 
 **Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED (теперь статус живёт в Redis, TTL 24 ч).
 

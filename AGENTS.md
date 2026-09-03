@@ -64,13 +64,13 @@ Gateway обрабатывает запросы двумя способами:
 
 ### Cert signing saga (choreographed, 4 hops)
 
-Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg). Поток:
+Первая регистрация терминала — **открытый HTTPS endpoint без JWT/mTLS** (chicken-and-egg). Доступ ограничен **HMAC-SHA256** (см. ниже). Поток:
 
 ```
-Android → POST /api/v1/terminals/cert-sign (HTTPS plain)
+Android → POST /api/v1/terminals/cert-sign (HTTPS plain, headers X-API-Key/X-Timestamp/X-Signature)
        → 202 + X-Event-Id
        ↓
-Gateway → Kafka asop.terminal.cert.commands (X-Event-Id header)
+Gateway CertSignHmacFilter → валидация HMAC → Kafka asop.terminal.cert.commands (X-Event-Id header)
        ↓
 crypto-service @KafkaListener → выпускает X.509 через Intermediate CA
                             → Kafka asop.terminal.cert.issued (X-Event-Id пробрасывается)
@@ -87,6 +87,8 @@ Gateway CertEventConsumer → EventService.complete(eventId, resultData=CertStor
 Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManager.storeCertificateChain()
 ```
 
+**HMAC на cert-sign** (`config/CertSignHmacFilter.kt` gateway + `network/CertSignHmacInterceptor.kt` Android): WebFilter на `POST /api/v1/terminals/cert-sign` валидирует `X-API-Key` + `X-Timestamp` + `X-Signature`. Подпись — **HMAC-SHA256(hex) только по timestamp** (бади не подписывается из-за WebFlux body consumption в WebFilter). Ключи/секреты/rate-limit из `asop.cert-sign-api-keys` (env `ASOP_CERT_SIGN_API_KEYS`), формат `key:hmac_secret:rate_limit`, default `asop-terminal-cert-key:9f8e...3210:10`. `|now-ts|>300с` → 401, неверный key → 403, rate-limit (sliding window 60с) → 429. Android-ключи — `CERT_SIGN_API_KEY`/`CERT_SIGN_HMAC_SECRET` BuildConfig (из `local.properties` `cert.sign.api.key`/`cert.sign.hmac.secret`).
+
 Подробности — `doc/context.md` раздел 9.
 
 ### Gateway files
@@ -96,6 +98,7 @@ Android polling GET /api/v1/events/{eventId} → 200 + resultData → MtlsManage
 - `controller/ProxyController.kt` — catch-all `/api/v1/{resource}/**` для GET + необработанных запросов
 - `controller/EventController.kt` — `GET /api/v1/events/{eventId}`
 - `controller/CertCommandController.kt` — `POST /api/v1/terminals/cert-sign` (open HTTPS, async)
+- `config/CertSignHmacFilter.kt` — WebFilter на `POST /api/v1/terminals/cert-sign`: валидация HMAC (X-API-Key/X-Timestamp/X-Signature) + rate-limit, ключи из `asop.cert-sign-api-keys`
 - `service/CertCommandService.kt` — producer `CertSignRequested` в `asop.terminal.cert.commands`
 - `kafka/CertEventConsumer.kt` — consumer `asop.terminal.cert.events` → `EventService.complete/fail`
 - `kafka/CommandEventConsumer.kt` — consumer всех 7 domain event topics → `EventService.complete/fail`
@@ -265,7 +268,9 @@ API → asop-common dependency via `api(platform(...))` pattern.
   - `SignatureVerifier` (`@Singleton`): верификация RSA-PSS-SHA256 подписи cardIdentity. Загружает публичный ключ из SyncPreferences, парсит proto CardIdentity из File 0, строит canonical JSON (тот же порядок ключей, что у сервера), верифицирует подпись из File 1. Используется в CardReadScreen для операций чтения карты. Не вызывается при активации новых карт.
   - `SyncViewModel` + обновлённый `MainScreen`: sync status card, pending badge, GPS toggle, manual sync button
   - **Экран ожидания пассажиров (TAP_PASSENGER, OpenTripScreen)**: шапка с контекстом рейса — «Маршрут: №X Имя» (`resolveTripContext`: path→route JOIN по reference_rows, fallback pathLabel) и «Водитель: ФИО» (openedByUserId → asop_users); деталь льготной карты включает остаток: «Льгота: X. Поездок на карте: N» (даже когда списания не было). Возврат на экран пассажирских тапов после drawer-навигации: drawer → «Открыть рейс» — auto-switch при открытом рейсе (не закрывает его повторно)
-  - `TerminalNavHost`: при старте, если `certificateReady && terminalId != null` → экран `main` (`loadTerminal(id)`); если только `certificateReady` → экран `registration`. Иначе — `provisioning`.
+  - `TerminalNavHost`: `startDestination = "welcome"` — всегда сначала показывается `WelcomeScreen` (без auto-навигации). Если `terminalId != null` → кнопка «Войти» → `main`; иначе → «Настроить сертификат» → `provisioning`. `LaunchedEffect` при старте молча вызывает `loadTerminal(tid)` (если `certificateReady && tid != null`), но НЕ навигирует — пользователь сам шлaп на «Войти». При `certificateReady && terminalId == null` → экран `registration`.
+  - **Registration guard (`ui/TerminalRegistrationGuard.kt`)**: `RequireTerminalRegistration(isRegistered, onNavigateToCertificate?, title, message, buttonLabel) { content }` — если не зарегистрирован, показывает full-screen warning с кнопкой (без auto-навигации), иначе рендерит `content`. Применяется к `open-shift`, `card-activation`, `top-up`. **open-shift** — два branch: `terminalId == null` → warning+кнопка (к сертификату); терминал зарегистрирован но нет интернета (`ConnectivityManager` NET_CAPABILITY_INTERNET) → warning без кнопки. **НЕ** применяется к `open-trip`/`close-shift`/`close-trip` (offline OK, см. промпт 011).
+  - `WelcomeScreen` (`ui/WelcomeScreen.kt`): full-screen старт, «Добро пожаловать»/«Терминал не зарегистрирован», кнопка «Войти»/«Настроить сертификат».
   - `RegistrationScreen`: серийный номер (`ANDROID_ID`) — read-only; пользователь вводит регион (dropdown), перевозчика (dropdown), часовой пояс (device default), модель (опц.), инвентарный номер (обяз.). После успешной регистрации `TerminalViewModel.registerTerminal` сохраняет `response.terminal.id` через `SyncPreferences.setTerminalId(...)`. В запросе передаются `carrierId`, `timezone`, `terminalId`.
 
   **Permissions:** `INTERNET`, `ACCESS_FINE_LOCATION`, `ACCESS_BACKGROUND_LOCATION`, `POST_NOTIFICATIONS`, `FOREGROUND_SERVICE_DATA_SYNC`, `FOREGROUND_SERVICE_LOCATION`, `NFC`
@@ -728,6 +733,7 @@ Android GpsTrackingService (foreground, mock/FusedLocation) → POST /sync/gps/p
 - `snap(pathId, lat, lon, maxDistanceMeters=300.0): Mono<SnappedPoint>` — проекция точки на полилинию `ASOP_PATHS.ROUTE_OBJECT` (jsonb GeoJSON `LineString`, `[lon,lat]`).
 - Кэш геометрии `ConcurrentHashMap<UUID, CachedGeometry>` **TTL 5 мин** + re-entrancy guard (in-flight расшарен).
 - `parseLineString` → `[lat,lon]`; `projectPointToSegment` — локальная equirectangular аппроксимация (`DEG_TO_M_LAT=111_320`, `DEG_TO_M_LON=78_800`); `haversineMeters` (`EARTH_RADIUS_M=6_371_000`). Если лучшая дистанция > maxDistanceMeters → null (без снапа).
+- `snap()` возвращает `Mono.empty()` при `pathId == null` или пустой геометрии (`mapNotNull`). **`TrackingService.getLiveVehicles` компенсирует это `.defaultIfEmpty(dto(null))`** — иначе `flatMap` терял ТС из ответа (live API возвращал `[]` для путей без геометрии). Vehicle всегда присутствует с raw-координатами, `snapped` null при отсутствии снапа.
 
 ### Live-API (session-service `controller/TrackingController.kt`, `service/TrackingService.kt`)
 
