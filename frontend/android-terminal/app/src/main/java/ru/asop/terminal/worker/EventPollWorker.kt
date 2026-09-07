@@ -15,7 +15,9 @@ class EventPollWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val pendingEventDao: PendingEventDao,
-    private val gatewayApi: GatewayApi
+    private val gatewayApi: GatewayApi,
+    private val workScheduler: WorkScheduler,
+    private val terminalProfileProvider: TerminalProfileProvider
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -23,80 +25,91 @@ class EventPollWorker @AssistedInject constructor(
         private const val MAX_POLL_RETRIES = 20
     }
 
+    /**
+     * Промпт 019: self-rescheduling one-shot цепочка (интервал из профиля).
+     * Поллит только SENDING-события; при их отсутствии — переустанавливает следующий цикл.
+     */
     override suspend fun doWork(): Result {
-        val sending = pendingEventDao.getSending()
-        if (sending.isEmpty()) return Result.success()
+        val params = terminalProfileProvider.params()
+        return try {
+            val sending = pendingEventDao.getSending()
 
-        for (event in sending) {
-            val eventId = event.gatewayEventId ?: continue
+            for (event in sending) {
+                val eventId = event.gatewayEventId ?: continue
 
-            if (event.retryCount >= MAX_POLL_RETRIES) {
-                pendingEventDao.markFailed(
-                    event.id,
-                    "Poll timeout after $MAX_POLL_RETRIES attempts"
-                )
-                Log.w(TAG, "Poll timeout for event $eventId")
-                continue
-            }
-
-            try {
-                val response = gatewayApi.getEventStatus(eventId)
-
-                if (response.code() == 404) {
+                if (event.retryCount >= MAX_POLL_RETRIES) {
                     pendingEventDao.markFailed(
                         event.id,
-                        "Event not found (gateway restarted, EventService TTL expired)"
+                        "Poll timeout after $MAX_POLL_RETRIES attempts"
                     )
-                    Log.w(TAG, "Event $eventId not found on gateway")
+                    Log.w(TAG, "Poll timeout for event $eventId")
                     continue
                 }
 
-                if (response.code() == 422) {
-                    val errorBody = response.errorBody()?.string()
-                    val errorMessage = if (errorBody != null) {
-                        try {
-                            val moshi = com.squareup.moshi.Moshi.Builder().build()
-                            val adapter = moshi.adapter(ru.asop.terminal.network.models.EventStatusResponse::class.java)
-                            adapter.fromJson(errorBody)?.errorMessage ?: "Event failed (no error message)"
-                        } catch (_: Exception) {
-                            "Event failed (422): $errorBody"
-                        }
-                    } else {
-                        "Event failed (422, empty body)"
-                    }
-                    pendingEventDao.markFailed(event.id, errorMessage)
-                    Log.w(TAG, "Event $eventId failed: $errorMessage")
-                    continue
-                }
+                try {
+                    val response = gatewayApi.getEventStatus(eventId)
 
-                if (!response.isSuccessful) {
-                    pendingEventDao.incrementPollRetry(event.id)
-                    Log.w(TAG, "Poll failed for $eventId: HTTP ${response.code()}")
-                    continue
-                }
-
-                val status = response.body() ?: continue
-                when (status.state) {
-                    "COMPLETED" -> {
-                        pendingEventDao.markSent(event.id)
-                        Log.d(TAG, "Event $eventId completed")
-                    }
-                    "FAILED" -> {
+                    if (response.code() == 404) {
                         pendingEventDao.markFailed(
                             event.id,
-                            status.errorMessage ?: "Event failed"
+                            "Event not found (gateway restarted, EventService TTL expired)"
                         )
-                        Log.w(TAG, "Event $eventId failed: ${status.errorMessage}")
+                        Log.w(TAG, "Event $eventId not found on gateway")
+                        continue
                     }
-                    "PENDING" -> {
+
+                    if (response.code() == 422) {
+                        val errorBody = response.errorBody()?.string()
+                        val errorMessage = if (errorBody != null) {
+                            try {
+                                val moshi = com.squareup.moshi.Moshi.Builder().build()
+                                val adapter = moshi.adapter(ru.asop.terminal.network.models.EventStatusResponse::class.java)
+                                adapter.fromJson(errorBody)?.errorMessage ?: "Event failed (no error message)"
+                            } catch (_: Exception) {
+                                "Event failed (422): $errorBody"
+                            }
+                        } else {
+                            "Event failed (422, empty body)"
+                        }
+                        pendingEventDao.markFailed(event.id, errorMessage)
+                        Log.w(TAG, "Event $eventId failed: $errorMessage")
+                        continue
+                    }
+
+                    if (!response.isSuccessful) {
                         pendingEventDao.incrementPollRetry(event.id)
+                        Log.w(TAG, "Poll failed for $eventId: HTTP ${response.code()}")
+                        continue
                     }
+
+                    val status = response.body() ?: continue
+                    when (status.state) {
+                        "COMPLETED" -> {
+                            pendingEventDao.markSent(event.id)
+                            Log.d(TAG, "Event $eventId completed")
+                        }
+                        "FAILED" -> {
+                            pendingEventDao.markFailed(
+                                event.id,
+                                status.errorMessage ?: "Event failed"
+                            )
+                            Log.w(TAG, "Event $eventId failed: ${status.errorMessage}")
+                        }
+                        "PENDING" -> {
+                            pendingEventDao.incrementPollRetry(event.id)
+                        }
+                    }
+                } catch (e: Exception) {
+                    pendingEventDao.incrementPollRetry(event.id)
+                    Log.e(TAG, "Error polling event $eventId", e)
                 }
-            } catch (e: Exception) {
-                pendingEventDao.incrementPollRetry(event.id)
-                Log.e(TAG, "Error polling event $eventId", e)
             }
+            Result.success()
+        } catch (e: Exception) {
+            Log.w(TAG, "EventPollWorker error: ${e.message}")
+            Result.success()
+        } finally {
+            workScheduler.reschedulePoll(params.eventPollIntervalMs)
         }
-        return Result.success()
     }
 }

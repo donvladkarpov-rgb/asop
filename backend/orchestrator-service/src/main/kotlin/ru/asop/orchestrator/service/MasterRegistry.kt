@@ -74,7 +74,9 @@ class MasterRegistry {
             // Глобальный пул ротируемых ключей карт (админка генерирует через crypto-service)
             "asop_keys" to admin("asop-keys"),
             // Справочник КРС (audit-service)
-            "asop_audit_services" to audit("audit-services")
+            "asop_audit_services" to audit("audit-services"),
+            // Профили настроек терминалов (админка редактирует, синкаются терминалам)
+            "asop_terminal_profiles" to admin("terminal-profiles")
         )
 
         // Пользовательские таблицы (user-service): фильтр по carrierId/regionId каскадом

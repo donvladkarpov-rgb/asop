@@ -1011,13 +1011,20 @@ COMMENT ON VIEW V_ACTIVE_CARD_DEBTS IS 'Представление для отч
 -- ========================
 CREATE TABLE ASOP_TERMINAL_PROFILES
 (
-    PROFILE_ID     UUID         NOT NULL,  -- UUIDv7
-    PROFILE_NAME   VARCHAR(100) NOT NULL,
+    PROFILE_ID     UUID          NOT NULL,  -- UUIDv7
+    PROFILE_NAME   VARCHAR(100)  NOT NULL,
     PROFILE_PARAMS JSONB,
+    IS_BASE        BOOLEAN       NOT NULL DEFAULT FALSE,  -- признак базового профиля (назначается терминалам по умолчанию)
+    CREATED_AT     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    UPDATED_AT     TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    DELETED_AT     TIMESTAMPTZ,
+    VERSION        BIGINT,
     CONSTRAINT pk_terminal_profiles PRIMARY KEY (PROFILE_ID),
     CONSTRAINT uq_terminal_profiles_name UNIQUE (PROFILE_NAME)
 );
-COMMENT ON TABLE ASOP_TERMINAL_PROFILES IS 'Справочник профилей настроек терминалов.';
+COMMENT ON TABLE ASOP_TERMINAL_PROFILES IS 'Справочник профилей настроек терминалов. IS_BASE=TRUE — профиль по умолчанию для новых/непривязанных терминалов (ровно один).';
+COMMENT ON COLUMN ASOP_TERMINAL_PROFILES.IS_BASE IS 'TRUE — базовый профиль (назначается при регистрации, если PROFILE_ID не передан). На один момент времени может быть только один IS_BASE=TRUE профиль.';
+COMMENT ON COLUMN ASOP_TERMINAL_PROFILES.PROFILE_PARAMS IS 'JSONB параметров профиля (например интервалы воркеров терминала: {syncIntervalMs, eventPollIntervalMs, deltaSyncIntervalMs, deltaPollIntervalMs, watermarkIntervalMs}).';
 
 CREATE TABLE ASOP_TERMINAL_SOFTWARE
 (
@@ -1895,6 +1902,22 @@ INSERT INTO ASOP_CARD_TYPES (CARD_TYPE_ID, CARD_TYPE_NAME) VALUES
 ON CONFLICT (CARD_TYPE_ID) DO NOTHING;
 
 -- ============================================================
+-- Seed: базовый профиль терминала (ASOP_TERMINAL_PROFILES)
+-- ============================================================
+-- IS_BASE=TRUE — профиль, назначаемый терминалам при регистрации, если PROFILE_ID не передан.
+-- PROFILE_PARAMS — интервалы (ms) фоновых воркеров Android-терминала:
+--   syncIntervalMs        — SyncWorker (отправка PENDING-событий)
+--   eventPollIntervalMs   — EventPollWorker (опрос статуса SENDING-событий)
+--   deltaSyncIntervalMs   — DeltaSyncWorker (запрос дельты справочников)
+--   deltaPollIntervalMs   — DeltaChunkPollWorker (выкачка чанков дельты)
+--   watermarkIntervalMs   — WatermarkSyncWorker (репорт event-watermark)
+INSERT INTO ASOP_TERMINAL_PROFILES (PROFILE_ID, PROFILE_NAME, PROFILE_PARAMS, IS_BASE) VALUES
+    ('00000000-0000-0000-0000-000000000501', 'Базовый профиль терминала',
+     '{"syncIntervalMs": 10000, "eventPollIntervalMs": 5000, "deltaSyncIntervalMs": 10000, "deltaPollIntervalMs": 5000, "watermarkIntervalMs": 30000}'::jsonb,
+     TRUE)
+ON CONFLICT (PROFILE_ID) DO NOTHING;
+
+-- ============================================================
 -- 11. DELTA SYNC SUPPORT (soft-delete, updated_at, indexes)
 --     Справочники для дельта-синхронизации: UPDATED_AT/DELETED_AT
 --     управляются приложением + триггерами. DELETE превращается
@@ -2062,6 +2085,10 @@ CREATE INDEX IF NOT EXISTS ix_asop_user_regions_updated_deleted ON asop_user_reg
 CREATE INDEX IF NOT EXISTS ix_asop_user_regions_deleted ON asop_user_regions (DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_keys_updated_deleted ON asop_keys (UPDATED_AT, DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_keys_deleted ON asop_keys (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_terminal_profiles_updated_deleted ON asop_terminal_profiles (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_terminal_profiles_deleted ON asop_terminal_profiles (DELETED_AT);
+-- Не более одного активного базового профиля (IS_BASE=TRUE, не soft-deleted)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_asop_terminal_profiles_single_base ON asop_terminal_profiles (IS_BASE) WHERE IS_BASE AND DELETED_AT IS NULL;
 
 -- Soft-delete триггеры (одинарный PK)
 CREATE TRIGGER trg_soft_delete_asop_regions BEFORE DELETE ON asop_regions FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('region_id', 'uuid');
@@ -2242,6 +2269,11 @@ CREATE TRIGGER trg_delta_version_asop_user_krs BEFORE INSERT OR UPDATE ON asop_u
 
 CREATE TRIGGER trg_delta_version_asop_keys BEFORE INSERT OR UPDATE ON asop_keys FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 CREATE TRIGGER trg_delta_version_asop_config_params BEFORE INSERT OR UPDATE ON asop_config_params FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+-- ASOP_TERMINAL_PROFILES — справочник, участвует в дельта-синхронизации
+CREATE TRIGGER trg_soft_delete_asop_terminal_profiles BEFORE DELETE ON asop_terminal_profiles FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('profile_id', 'uuid');
+CREATE TRIGGER trg_touch_updated_asop_terminal_profiles BEFORE INSERT OR UPDATE ON asop_terminal_profiles FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_delta_version_asop_terminal_profiles BEFORE INSERT OR UPDATE ON asop_terminal_profiles FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 
 -- КРС (audit-services) — справочник, участвует в дельта-синхронизации.
 CREATE TRIGGER trg_soft_delete_asop_audit_services BEFORE DELETE ON asop_audit_services FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('audit_service_id', 'uuid');

@@ -45,8 +45,9 @@ import javax.inject.Inject
  * Insert в Room + PendingEvent.SESSION_OPEN → SyncWorker → gateway → Kafka →
  * session-service → ON CONFLICT (SESSION_ID) DO NOTHING → безопасно от дублей при retry.
  *
- * cardAuth() ждёт NFC tap → read VCM1 (sector 1, 48 bytes) → проверяет роль DRIVER
- * и наличие user_carriers в локальном справочнике (asop_user_carriers).
+ * cardAuth() ждёт NFC tap → read VCM1 (sector 1, 48 bytes) → проверяет роль
+ * (водитель/диспетчер или админ-карта) и наличие user_carriers в локальном
+ * справочнике (asop_user_carriers) — для админ-карт привязка не требуется.
  */
 @HiltViewModel
 class SessionFlowViewModel @Inject constructor(
@@ -67,13 +68,35 @@ class SessionFlowViewModel @Inject constructor(
     enum class CardStep {
         WAITING_TAP,      // экран ждёт tap
         PROCESSING,        // tag detected, читаем VCM1 (UI показывает UID)
-        AUTH_OK,           // // успешно прочитана VCM1 + DRIVER/CARRIER_DISPATCHER-роль
+        AUTH_OK,           // // успешно прочитана VCM1 + роль на смены/рейсы
         AUTH_DENIED,       // // auth не прошёл / ключ не тот / карта не активирована
-        NOT_DRIVER,        // // карта ОК, но роль не подходит (не DRIVER)
+        NOT_DRIVER,        // // карта ОК, но роль не подходит (не водитель/диспетчер/админ)
         NFC_ERROR,         // // quick-vcm1-reader упал / не MifareClassic / auth error и т. п.
         IDLE               // // дефолт до setKind
     }
     enum class SubmitState { IDLE, SUBMITTING, ACCEPTED, FAILED }
+
+    companion object {
+        /**
+         * Роли, которым разрешено открывать/закрывать смены и рейсы:
+         * водители/диспетчеры (промпт 011) + админ-карты по правилам оператора:
+         *  - root (SUPER_ADMIN) — любая смена
+         *  - REGION_ADMIN — в пределах региона
+         *  - ORGANIZER_ADMIN — в пределах перевозчиков организатора
+         *  - CARRIER_ADMIN — в пределах перевозчика
+         * Scope-проверку выполняет сервер (SessionService.canClose) по
+         * ASOP_USER_CARRIERS / ASOP_USER_REGIONS + ASOP_USER_ROLES.
+         */
+        private val SHIFT_OPERATOR_ROLES = setOf(
+            "DRIVER", "CARRIER_DISPATCHER", "KRS_DISPATCHER",
+            "SUPER_ADMIN", "REGION_ADMIN", "ORGANIZER_ADMIN", "CARRIER_ADMIN"
+        )
+
+        /** Админские роли — не требуют локальной привязки пользователя к перевозчику. */
+        private val SHIFT_ADMIN_ROLES = setOf(
+            "SUPER_ADMIN", "REGION_ADMIN", "ORGANIZER_ADMIN", "CARRIER_ADMIN"
+        )
+    }
 
     data class CardTapInfo(
         val cardId: String,
@@ -386,12 +409,10 @@ class SessionFlowViewModel @Inject constructor(
             }
 
             val roles = AsopCardType.allRolesForBitmask(identity.bitmask)
-            val hasDriverRole = roles.any {
-                it == AsopCardType.DRIVER ||
-                    it == AsopCardType.CARRIER_DISPATCHER ||
-                    it == AsopCardType.KRS_DISPATCHER
-            }
-            if (!hasDriverRole) {
+            val roleNames = roles.map { it.role }
+            // Водители/диспетчеры + админ-карты (root/регион/организатор/перевозчик).
+            val isAdminCard = roleNames.any { it in SHIFT_ADMIN_ROLES }
+            if (roleNames.none { it in SHIFT_OPERATOR_ROLES }) {
                 _state.update {
                     it.copy(
                         cardStep = CardStep.NOT_DRIVER,
@@ -403,7 +424,29 @@ class SessionFlowViewModel @Inject constructor(
             }
 
             viewModelScope.launch {
-                val carrierId = lookupUserCarrier(userId, carrierFilter)
+                // Карта должна быть ЗАРЕГИСТРИРОВАНА/АКТИВИРОВАНА на сервере и доехать до
+                // локального справочника терминала (asop_cards в reference_rows, только
+                // персональные). Иначе открытие смены/рейса упадёт на сервере по FK
+                // (fk_sessions_card_id) — лучше отклонить сразу на клиенте.
+                val registered = referenceRowDao.findUserIdByCardId(cardId)
+                if (registered == null) {
+                    _state.update {
+                        it.copy(
+                            cardStep = CardStep.AUTH_DENIED,
+                            errorMessage = "Карта не зарегистрирована или не активирована"
+                        )
+                    }
+                    ru.asop.terminal.nfc.TonePlayer.errorBeep()
+                    return@launch
+                }
+                // Админ-карты не обязаны быть привязаны к перевозчику терминала (scope
+                // проверяет серверная canClose по user_carriers/user_regions + роли).
+                // На локальную карту для смены/рейса берём перевозчик самого терминала.
+                val carrierId = if (isAdminCard) {
+                    syncPreferences.carrierId.first() ?: carrierFilter
+                } else {
+                    lookupUserCarrier(userId, carrierFilter)
+                }
                 if (carrierId == null) {
                     _state.update {
                         it.copy(

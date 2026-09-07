@@ -22,6 +22,7 @@ class SecurityConfig {
                     .pathMatchers("/actuator/health", "/actuator/info").permitAll()
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .pathMatchers("/api/v1/terminals/**").permitAll()
+                    .pathMatchers("/api/v1/distributor-terminals/**").permitAll()
                     .anyExchange().authenticated()
             }
             .build()

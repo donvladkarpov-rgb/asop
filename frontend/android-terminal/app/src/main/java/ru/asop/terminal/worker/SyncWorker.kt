@@ -26,7 +26,9 @@ class SyncWorker @AssistedInject constructor(
     private val sessionDao: SessionDao,
     private val syncApi: SyncApi,
     private val moshi: Moshi,
-    private val syncPreferences: SyncPreferences
+    private val syncPreferences: SyncPreferences,
+    private val workScheduler: WorkScheduler,
+    private val terminalProfileProvider: TerminalProfileProvider
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -34,38 +36,41 @@ class SyncWorker @AssistedInject constructor(
         private const val MAX_RETRIES = 5
     }
 
+    /**
+     * Промпт 019: self-rescheduling one-shot цепочка. Интервал из профиля терминала.
+     * Каждый цикл ставит следующий OneTimeWorkRequest (REPLACE) и возвращает success —
+     * без Result.retry(), иначе дублируются цепочки. Работает только если есть PENDING.
+     * Мгновенную отправку при появлении PENDING обеспечивает PendingEventPoller (500мс).
+     */
     override suspend fun doWork(): Result {
-        // Промпт 014: если есть PENDING, повторяем через 30 сек, не дожидаясь 15 мин.
-        val pendingCount = pendingEventDao.countPending()
-        if (pendingCount > 0) {
-            android.util.Log.d(TAG, "doWork: $pendingCount pending, scheduling follow-up in 30s")
-            val followUp = androidx.work.OneTimeWorkRequestBuilder<SyncWorker>()
-                .setInitialDelay(3L, java.util.concurrent.TimeUnit.SECONDS)
-                .setConstraints(androidx.work.Constraints.Builder()
-                    .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
-                .build()
-            androidx.work.WorkManager.getInstance(applicationContext).enqueue(followUp)
-        }
-        val pending = pendingEventDao.getPending()
-        if (pending.isEmpty()) return Result.success()
-
-        for (event in pending) {
-            if (event.retryCount >= MAX_RETRIES) {
-                pendingEventDao.markFailed(event.id, "Max retries ($MAX_RETRIES) exceeded")
-                Log.w(TAG, "Max retries for ${event.eventType}: ${event.id}")
-                continue
+        val params = terminalProfileProvider.params()
+        return try {
+            val pending = pendingEventDao.getPending()
+            if (pending.isNotEmpty()) {
+                for (event in pending) {
+                    if (event.retryCount >= MAX_RETRIES) {
+                        pendingEventDao.markFailed(event.id, "Max retries ($MAX_RETRIES) exceeded")
+                        Log.w(TAG, "Max retries for ${event.eventType}: ${event.id}")
+                        continue
+                    }
+                    try {
+                        val gatewayEventId = sendEvent(event)
+                        pendingEventDao.markSending(event.id, gatewayEventId)
+                        Log.d(TAG, "Sent ${event.eventType} -> eventId=$gatewayEventId")
+                    } catch (e: Exception) {
+                        pendingEventDao.incrementPollRetry(event.id)
+                        Log.w(TAG, "Transient error sending ${event.eventType}: ${e.message}, will retry next cycle")
+                        break
+                    }
+                }
             }
-            try {
-                val gatewayEventId = sendEvent(event)
-                pendingEventDao.markSending(event.id, gatewayEventId)
-                Log.d(TAG, "Sent ${event.eventType} -> eventId=$gatewayEventId")
-            } catch (e: Exception) {
-                pendingEventDao.incrementPollRetry(event.id)
-                Log.w(TAG, "Transient error sending ${event.eventType}: ${e.message}, will retry")
-                return Result.retry()
-            }
+            Result.success()
+        } catch (e: Exception) {
+            Log.w(TAG, "SyncWorker error: ${e.message}")
+            Result.success()
+        } finally {
+            workScheduler.rescheduleSync(params.syncIntervalMs)
         }
-        return Result.success()
     }
 
     private suspend fun sendEvent(event: PendingEventEntity): String {

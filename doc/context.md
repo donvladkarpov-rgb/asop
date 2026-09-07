@@ -635,8 +635,13 @@ Root CA (self-signed, ECC P-256, 10 лет)
 5. REGION_ADMIN → OK cascade на всех организаторов → carriers региона.
 6. `ADMIN` / `SUPER_ADMIN` → OK всегда.
 
-Реализуется единым SQL-window через `requestor_scope` CTE (UNION `ASOP_USER_CARRIERS` × `ASOP_USER_REGIONS`)
-+ EXISTS на role_code ∈ `(...DISPATCHER, ...ADMIN, ROOT)`. Детальная формула — см. AGENTS.md раздел
+Реализация — два запроса (промпт-фикс E2E):
+- **Root**: отдельный `SELECT 1 … ASOP_USER_ROLES JOIN ASOP_ROLES WHERE role_name IN ('ADMIN','SUPER_ADMIN')`
+  — НЕ зависит от `requester_scope`/линков. Роль читается из **`ASOP_ROLES.ROLE_NAME`** (колонки `role_code` в
+  схеме нет — с ней SQL падал `column r.role_code does not exist`).
+- **Скоуп** (только для non-root): `requester_scope` CTE (UNION `ASOP_USER_CARRIERS` × `ASOP_USER_REGIONS`) +
+  EXISTS на роль из carrier/region-множества. Root-админ без линков давал бы пустой CTE → «not authorized»,
+  поэтому root ветка выделена в отдельный запрос. Детальная формула — см. AGENTS.md раздел
 `Сессии водителя (промпт 011)`.
 
 **Race condition guard** (server, трехуровневый):

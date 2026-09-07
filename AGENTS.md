@@ -670,6 +670,8 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 **Backend** (`backend/session-service/...`):
 - `SessionEntity` теперь содержит `tidId, openedByUserId, closedByUserId, cardId, attributes` (column `ATTRIBUTES JSONB` хранит `carrierId/regionId/timezone`).
 - `SessionService.canClose(sessionId, requesterUserId)` — матрица авторизации промпт 011 §4: DRIVER + CARRIER_DISPATCHER + ORGANIZER_ADMIN + REGION_ADMIN + ADMIN/SUPER_ADMIN с cascade через `asop_user_carriers` / `asop_user_regions`.
+  - **Роль — колонка `ASOP_ROLES.ROLE_NAME`** (НЕ `role_code` — такой колонки нет, SQL падал `column r.role_code does not exist`). Также в таблице НЕТ роли `ADMIN` — только `SUPER_ADMIN` (root).
+  - **Root-проверка отдельным запросом и НЕ зависит от линков**: в `isRequesterInSessionScope` сначала проверяется role `ADMIN`/`SUPER_ADMIN` независимо от `requester_scope`. Иначе root-админ без `asop_user_carriers`/`asop_user_regions` давал пустой CTE → 0 строк → «Requester is not authorized» (реальный E2E-баг: закрытие смены админ-картой падало именно так). Carrier/region scope — второй запрос через `requester_scope` CTE (только для non-root).
 - `SessionCommandConsumer.handleSessionOpened(event, eventId)`:
   - ON CONFLICT (SESSION_ID) DO NOTHING → client-generated UUIDv7 = idempotency при retry offline.
   - 409 Conflict guard на `(parent_session_id, status=IN_PROGRESS)` — один TRIP на смену.
@@ -707,6 +709,24 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 **Известные ограничения MVP**:
 - TID/Vehicle/Route/Path pickers в `OpenTripScreen.kt` оставлены как hint-card, финальный каскад-picker вынесен в отдельный flow (Phase 4.2.b).
 - Trip payments идут в `transaction-service` отдельным session=TRIP.id, не в `ASOP_CARD_REGISTER` — не нужно регистрировать пассажирскую карту как Driver card.
+
+## Терминальные профили (промпт 021)
+
+Конфигурируемые интервалы Android-воркеров через справочник `ASOP_TERMINAL_PROFILES`, доставляемый дельтой/полной выкачкой (как `asop_keys`/`audit_services`).
+
+- **DB** (`ASOP_TERMINAL_PROFILES`): `PROFILE_ID UUIDv7 PK`, `PROFILE_NAME TEXT`, `PROFILE_PARAMS JSONB` (в модели String, сериализуется ObjectMapper), `IS_BASE BOOLEAN`, `VERSION` (nextval `asop_delta_version_seq`), soft-delete. Базовый профиль — **ровно один активный** (уникальный частичный индекс `uq_asop_terminal_profiles_single_base`). Seed базового профиля: `00000000-0000-0000-0000-000000000501`, `ON CONFLICT DO NOTHING`.
+- **admin-service** `TerminalProfileController` (`/api/v1/terminal-profiles`): CRUD + `/delta` (DeltaSupport). При сохранении с `IS_BASE=TRUE` — `clearOtherBases()` (raw SQL: `UPDATE … SET IS_BASE=FALSE, VERSION=nextval('asop_delta_version_seq') WHERE IS_BASE=TRUE AND DELETED_AT IS NULL AND PROFILE_ID <> :id`). Удаление базового → `IllegalArgumentException` → 400. `TerminalProfileResponse.profileParams` — JSON map.
+- **gateway** `ServiceRegistry`: `terminal-profiles` → admin:8091; `distributor-terminals` → terminal-service:8084.
+- **terminal-service**: `TerminalRegisterRequest/TerminalResponse/TerminalEntity` получили `profileId`. При регистрации без явного `profileId` резолвится базовый активный профиль (`resolveProfileId`: `Mono<Optional<UUID>>` — `defaultIfEmpty(Optional.empty())` работает, `defaultIfEmpty(null)`/`collectList` в Kotlin не компилируются из-за nullability-инференса). Опциональный профиль привязки через `ASOP_DISTRIBUTOR_TERMINALS` (`DistributorTerminalController` CRUD, status fallback WAREHOUSE).
+- **Proto** (`schema.proto`, backend + Android идентичны): `DeltaChunk.asop_terminal_profiles = 45`, `TerminalProfilesRow { profile_id, profile_name, profile_params(string), is_base, version, created_at/deleted_at/updated_at(int64) }`, `TerminalProfilesFile`. Генерация строк/файлов — автогенерик `ProtoRowMapper`/`FullSyncService` (camel-имя), спец-кода синка нет — профили попадают в generic `reference_rows`/ZIP как обычный справочник.
+- **Android** (`worker/TerminalProfileProvider.kt`): читает строку `asop_terminal_profiles` с rowId=profile_id из `reference_rows`; `params()` каждый цикл парсит `payload_json -> profileParams` (вложенная строка JSON), фолбэк — `TerminalProfileParams.DEFAULTS`. Ключи интервалов (мс): `syncIntervalMs`=10000, `eventPollIntervalMs`=5000, `deltaSyncIntervalMs`=10000, `deltaPollIntervalMs`=5000, `watermarkIntervalMs`=30000.
+- **WorkScheduler** — self-rescheduling one-shot цепочки вместо PeriodicWorkRequest (min-interval 15 мин не подходит): воркер в конце `doWork()` ставит себе следующий `OneTimeWorkRequest` через `enqueueUniqueWork(name, ExistingWorkPolicy.REPLACE, next)` + `setInitialDelay(interval)` и возвращает `Result.success()`. **KEEP внутри `doWork()` не работает** (текущий RUNNING-инстанс считается existing) — только REPLACE. `OneTimeWorkRequestBuilder<T>` reified — generic-хелпер не компилируется, нужны инлайновые билдеры (syncRequest/pollRequest/deltaRequest/deltaPollRequest/watermarkRequest).
+  - Цепочки: `sync_pending_events`, `poll_pending_events`, `delta_sync`, `delta_chunk_poll`, `watermark_sync` (constraints `NetworkType.CONNECTED`).
+  - `startWorkers()` (аналог прежнего `schedulePeriodicSync`) — immediate REPLACE всех 5 цепочек + не-unique one-shot sync/poll; вызывается из `AsopTerminalApp.onCreate`.
+  - Сохранены: `enqueueOneShotSync()/delay`, `enqueueOneShotPoll()`, `enqueueOneShotDelta()`, `enqueueForcedDeltaChunkPoll()`, `enqueueFullDump()`, `stopDeltaJobs()/startDeltaJobs()`, `WATERMARK_WORK_NAME = "watermark_sync"` (публичная константа).
+  - Дельта-цепочки: при `deltaJobsEnabled=false` воркер в начале `doWork` **не резолудит себя** (цепочка умирает) — иначе `stopDeltaJobs()` не работает; forced runs сохраняют `Result.retry()`.
+  - `PendingEventPoller` (500 мс, в памяти) по-прежнему шлёт не-unique one-shot SyncWorker при PENDING — мгновенный отклик; цепочка обеспечивает ритм.
+- **web-admin** `pages/Terminals.tsx` — вкладки: «Перевозчики» (список терминалов + колонка «Профиль»), «Дистрибьюторы» (CRUD `distributor-terminals`, фильтр по дистрибьютору), «Профили» (CRUD `terminal-profiles`: JSON-редактор params + чекбокс «Базовый профиль», удаление базового заблокировано). API: `api/terminalProfiles.ts`, `api/distributorTerminals.ts`; типы `TerminalProfile`/`DistributorTerminal` в `types/reference.ts`, `Terminal.profileId` в `types/index.ts`.
 
 ## GPS-трекинг, live-карта и пассажирское приложение (промпт 014/015+)
 

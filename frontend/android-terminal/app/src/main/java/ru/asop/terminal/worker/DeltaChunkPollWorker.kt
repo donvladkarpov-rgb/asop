@@ -29,7 +29,9 @@ class DeltaChunkPollWorker @AssistedInject constructor(
     private val referenceSyncStore: ReferenceSyncStore,
     private val gatewayApi: GatewayApi,
     private val syncPreferences: SyncPreferences,
-    private val deltaProgressTracker: DeltaProgressTracker
+    private val deltaProgressTracker: DeltaProgressTracker,
+    private val workScheduler: WorkScheduler,
+    private val terminalProfileProvider: TerminalProfileProvider
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -41,38 +43,48 @@ class DeltaChunkPollWorker @AssistedInject constructor(
         fun buildForcedData(): Data = Data.Builder().putBoolean(KEY_FORCED, true).build()
     }
 
+    /**
+     * Промпт 019: self-rescheduling one-shot цепочка (интервал из профиля).
+     * Non-forced: переустанавливает себя каждый цикл, при выключенных автоджобах — dying.
+     * Forced (one-shot): сохраняет Result.retry() пока не закончатся PENDING-задания.
+     */
     override suspend fun doWork(): Result {
         val forced = inputData.getBoolean(KEY_FORCED, false)
+        val params = terminalProfileProvider.params()
         if (!forced && !syncPreferences.deltaJobsEnabled.first()) return Result.success()
         val pending = deltaSyncJobDao.getPending()
         if (pending.isEmpty()) return Result.success()
 
         var anyStillPending = false
-        for (job in pending) {
-            val eventId = job.eventId
-            if (System.currentTimeMillis() - job.requestedAt > JOB_TTL_MS) {
-                deltaSyncJobDao.delete(eventId)
-                Log.w(TAG, "Delta job expired: $eventId")
-                continue
-            }
-            try {
-                if (!process(job.eventId)) {
-                    // событие ещё в полёте / не готово — оставляем, дождёмся следующего цикла
-                    anyStillPending = true
+        try {
+            for (job in pending) {
+                val eventId = job.eventId
+                if (System.currentTimeMillis() - job.requestedAt > JOB_TTL_MS) {
+                    deltaSyncJobDao.delete(eventId)
+                    Log.w(TAG, "Delta job expired: $eventId")
                     continue
                 }
-            } catch (e: Exception) {
-                // Локальная ошибка (чанк не пришёл, таймаут) — НЕ удаляем задание:
-                // скачанные чанки уже накатаны идемпотентно (upsert по PK), поэтому
-                // следующий цикл просто продолжит с того же места и докачает остальные.
-                Log.w(TAG, "Delta chunk error for $eventId, will retry: ${e.message}")
-                anyStillPending = true
+                try {
+                    if (!process(job.eventId)) {
+                        // событие ещё в полёте / не готово — оставляем, дождёмся следующего цикла
+                        anyStillPending = true
+                        continue
+                    }
+                } catch (e: Exception) {
+                    // Локальная ошибка (чанк не пришёл, таймаут) — НЕ удаляем задание:
+                    // скачанные чанки уже накатаны идемпотентно (upsert по PK), поэтому
+                    // следующий цикл просто продолжит с того же места и докачает остальные.
+                    Log.w(TAG, "Delta chunk error for $eventId, will retry: ${e.message}")
+                    anyStillPending = true
+                }
             }
+            // Принудительный поллер: если остались незавершённые PENDING-задачи — повторить
+            // (оркестратор может ещё собирать чанки), иначе задача замрёт навсегда.
+            if (forced && anyStillPending) return Result.retry()
+            return Result.success()
+        } finally {
+            if (!forced) workScheduler.rescheduleDeltaPoll(params.deltaPollIntervalMs)
         }
-        // Принудительный поллер: если остались незавершённые PENDING-задачи — повторить
-        // (оркестратор может ещё собирать чанки), иначе задача замрёт навсегда.
-        if (forced && anyStillPending) return Result.retry()
-        return Result.success()
     }
 
     /** @return true если событие обработано до конца (или забыто), false если ещё PENDING. */

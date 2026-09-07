@@ -25,14 +25,16 @@ import ru.asop.terminal.network.models.TerminalEventWatermark
  *
  * Run conditions:
  *   - terminalId has been registered (saved in SyncPreferences)
- *   - Periodic 1 час + on network restore (FutureWorkScheduler integration).
+ *   - self-rescheduling цепочка (интервал из профиля) + старт при старте приложения.
  */
 @HiltWorker
 class WatermarkSyncWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val syncApi: SyncApi,
-    private val syncPreferences: SyncPreferences
+    private val syncPreferences: SyncPreferences,
+    private val workScheduler: WorkScheduler,
+    private val terminalProfileProvider: TerminalProfileProvider
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -40,27 +42,38 @@ class WatermarkSyncWorker @AssistedInject constructor(
         const val WORK_NAME = "watermark_sync"
     }
 
+    /**
+     * Промпт 019: self-rescheduling one-shot (интервал из профиля).
+     * Возвращает success и переустанавливает следующий цикл — Result.retry()
+     * не используется (нельзя задваивать цепочку).
+     */
     override suspend fun doWork(): Result {
-        val terminalId = syncPreferences.terminalId.first()
-            ?: return Result.success().also {
+        val params = terminalProfileProvider.params()
+        return try {
+            val terminalId = syncPreferences.terminalId.first()
+            if (terminalId.isNullOrBlank()) {
                 Log.d(TAG, "No terminalId registered, skipping watermark sync")
+                return Result.success()
             }
 
-        return try {
             val response: Response<TerminalEventWatermark> = syncApi.getEventWatermark(terminalId)
             if (!response.isSuccessful) {
                 Log.w(TAG, "Watermark GET HTTP ${response.code()} for terminalId=$terminalId")
-                return Result.retry()
+                return Result.success()
             }
-            val wm = response.body() ?: return Result.success().also {
+            val wm = response.body()
+            if (wm == null) {
                 Log.w(TAG, "Watermark body null for terminalId=$terminalId")
+                return Result.success()
             }
             syncPreferences.setServerWatermark(wm.lastSeq)
             Log.i(TAG, "Watermark synced: serverLastSeq=${wm.lastSeq} pending=${wm.pendingSeqCount} terminalId=$terminalId")
             Result.success()
         } catch (e: Exception) {
-            Log.w(TAG, "Watermark sync failed: ${e.message}, will retry")
-            Result.retry()
+            Log.w(TAG, "Watermark sync failed: ${e.message}, will retry next cycle")
+            Result.success()
+        } finally {
+            workScheduler.rescheduleWatermark(params.watermarkIntervalMs)
         }
     }
 }

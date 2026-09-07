@@ -11,7 +11,8 @@ data class TerminalRegisterRequest(
     @Json(name = "carrierId") val carrierId: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "timezone") val timezone: String? = null,
-    @Json(name = "terminalId") val terminalId: String? = null
+    @Json(name = "terminalId") val terminalId: String? = null,
+    @Json(name = "profileId") val profileId: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -36,6 +37,7 @@ data class TerminalResponse(
     @Json(name = "carrierId") val carrierId: String?,
     @Json(name = "timezone") val timezone: String?,
     @Json(name = "status") val status: String,
+    @Json(name = "profileId") val profileId: String? = null,
     @Json(name = "createdAt") val createdAt: String,
     @Json(name = "updatedAt") val updatedAt: String
 )

@@ -29,7 +29,7 @@ class AsopTerminalApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
-        workScheduler.schedulePeriodicSync()
+        workScheduler.startWorkers()
         networkMonitor.register()
         triggerInitialDeltaIfReady()
     }

@@ -571,6 +571,19 @@ message AuditServicesRow {
   bool   is_active = 10;         // статус активности
 }
 
+// Профиль настроек терминала (ASOP_TERMINAL_PROFILES).
+// PROFILE_PARAMS — JSON-строка параметров (напр. интервалы воркеров терминала).
+message TerminalProfilesRow {
+  string profile_id = 1;      // UUIDv7
+  string profile_name = 2;
+  string profile_params = 3;  // JSON-строка (пустая, если параметры не заданы)
+  bool   is_base = 4;         // признак базового профиля (назначается по умолчанию)
+  string created_at = 5;      // RFC3339 timestamp
+  string updated_at = 6;      // RFC3339 timestamp
+  string deleted_at = 7;      // RFC3339 или пусто
+  int64  version = 8;         // delta watermark
+}
+
 // Один дельта-чанк: записи из разных таблиц + метаданные чанка.
 message DeltaChunk {
   repeated RegionsRow asop_regions = 1;
@@ -617,6 +630,7 @@ message DeltaChunk {
   repeated CardsDistributorsRow asop_cards_distributors = 42;
   repeated AsopKeysRow asop_keys = 43;
   repeated AuditServicesRow asop_audit_services = 44;
+  repeated TerminalProfilesRow asop_terminal_profiles = 45;
   int32 chunk_index = 90;
   int32 total_chunks = 91;
   string event_id = 92;
@@ -667,4 +681,5 @@ message TariffRatesFile { repeated TariffRatesRow rows = 1; }
 message TidsFile { repeated TidsRow rows = 1; }
 message AsopKeysFile { repeated AsopKeysRow rows = 1; }
 message AuditServicesFile { repeated AuditServicesRow rows = 1; }
+message TerminalProfilesFile { repeated TerminalProfilesRow rows = 1; }
 

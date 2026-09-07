@@ -7,6 +7,18 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/**
+ * Промпт 019: воркеры терминала — self-rescheduling one-shot циклы.
+ *
+ * PeriodicWorkRequest минимум 15 мин — не подходит для интервалов профиля (5–30 с).
+ * Поэтому каждый воркер в конце doWork() ставит себе следующий OneTimeWorkRequest
+ * с setInitialDelay(interval) через enqueueUniqueWork(name, REPLACE) и возвращает
+ * Result.success() (без Result.retry() — иначе дублируются цепочки).
+ * Интервалы из профиля терминала (ASOP_TERMINAL_PROFILES), фолбэк — TerminalProfileParams.DEFAULTS.
+ *
+ * При старте приложения у каждой цепочки ставится немедленный запуск (startWorkers),
+ * плюс не-unique one-shot sync/poll для мгновенного ответа на сети.
+ */
 @Singleton
 class WorkScheduler @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -14,137 +26,123 @@ class WorkScheduler @Inject constructor(
 ) {
     init { pendingEventPoller.start() }
     companion object {
-        private const val SYNC_WORK_NAME = "sync_pending_events"
-        private const val POLL_WORK_NAME = "poll_pending_events"
-        private const val DELTA_WORK_NAME = "delta_sync"
-        private const val DELTA_POLL_WORK_NAME = "delta_chunk_poll"
-        private const val FULL_DUMP_WORK_NAME = "full_dump_download"
+        const val SYNC_WORK_NAME = "sync_pending_events"
+        const val POLL_WORK_NAME = "poll_pending_events"
+        const val DELTA_WORK_NAME = "delta_sync"
+        const val DELTA_POLL_WORK_NAME = "delta_chunk_poll"
+        const val FULL_DUMP_WORK_NAME = "full_dump_download"
+        const val WATERMARK_WORK_NAME = "watermark_sync"
     }
 
-    fun schedulePeriodicSync() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+    private fun connectedConstraints(): Constraints =
+        Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+
+    private fun syncRequest(delayMs: Long, inputData: Data = Data.EMPTY): OneTimeWorkRequest =
+        OneTimeWorkRequestBuilder<SyncWorker>()
+            .setConstraints(connectedConstraints())
+            .setInputData(inputData)
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .build()
 
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(
-            15, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
+    private fun pollRequest(delayMs: Long): OneTimeWorkRequest =
+        OneTimeWorkRequestBuilder<EventPollWorker>()
+            .setConstraints(connectedConstraints())
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .build()
 
-        val pollRequest = PeriodicWorkRequestBuilder<EventPollWorker>(
-            5, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+    private fun deltaRequest(delayMs: Long, inputData: Data = Data.EMPTY): OneTimeWorkRequest =
+        OneTimeWorkRequestBuilder<DeltaSyncWorker>()
+            .setConstraints(connectedConstraints())
+            .setInputData(inputData)
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .build()
 
-        val deltaRequest = PeriodicWorkRequestBuilder<DeltaSyncWorker>(
-            60, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
+    private fun deltaPollRequest(delayMs: Long, inputData: Data = Data.EMPTY): OneTimeWorkRequest =
+        OneTimeWorkRequestBuilder<DeltaChunkPollWorker>()
+            .setConstraints(connectedConstraints())
+            .setInputData(inputData)
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .build()
 
-        val deltaPollRequest = PeriodicWorkRequestBuilder<DeltaChunkPollWorker>(
-            5, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+    private fun watermarkRequest(delayMs: Long): OneTimeWorkRequest =
+        OneTimeWorkRequestBuilder<WatermarkSyncWorker>()
+            .setConstraints(connectedConstraints())
+            .setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             .build()
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            SYNC_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            syncRequest
-        )
+    /**
+     * Старт всех цепочек с немедленными запусками (self-rescheduling).
+     * REPLACE — гарантирует запуск прямо сейчас при каждом старте процесса
+     * (заменяет отложенный next-run на мгновенный).
+     */
+    fun startWorkers() {
+        val wm = WorkManager.getInstance(context)
+        wm.enqueueUniqueWork(SYNC_WORK_NAME, ExistingWorkPolicy.REPLACE, syncRequest(0L))
+        wm.enqueueUniqueWork(POLL_WORK_NAME, ExistingWorkPolicy.REPLACE, pollRequest(0L))
+        wm.enqueueUniqueWork(WATERMARK_WORK_NAME, ExistingWorkPolicy.REPLACE, watermarkRequest(0L))
+        enqueueDeltaChains()
+        // Мгновенные не-unique one-shot — на случай старта с уже накопленным пендингом.
+        enqueueOneShotSync()
+        enqueueOneShotPoll()
+    }
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            POLL_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            pollRequest
-        )
+    private fun enqueueDeltaChains() {
+        val wm = WorkManager.getInstance(context)
+        wm.enqueueUniqueWork(DELTA_WORK_NAME, ExistingWorkPolicy.REPLACE, deltaRequest(0L))
+        wm.enqueueUniqueWork(DELTA_POLL_WORK_NAME, ExistingWorkPolicy.REPLACE, deltaPollRequest(0L))
+    }
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            DELTA_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            deltaRequest
-        )
+    // ---- self-rescheduling (вызываются самими воркерами в конце doWork) ----
 
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            DELTA_POLL_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            deltaPollRequest
-        )
-
-        // Промпт 012: per-terminal watermark sync (1 час) — sync Preferences.KEY_WATERMARK_FROM_SERVER
-        val watermarkRequest = PeriodicWorkRequestBuilder<WatermarkSyncWorker>(
-            60, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
-            .build()
-
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            "watermark_sync",
-            ExistingPeriodicWorkPolicy.KEEP,
-            watermarkRequest
+    fun rescheduleSync(intervalMs: Long) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            SYNC_WORK_NAME, ExistingWorkPolicy.REPLACE, syncRequest(intervalMs)
         )
     }
 
-    /** Отменяет периодические delta-джобы. Текущее in-flight задание завершится, новые не начнутся. */
+    fun reschedulePoll(intervalMs: Long) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            POLL_WORK_NAME, ExistingWorkPolicy.REPLACE, pollRequest(intervalMs)
+        )
+    }
+
+    fun rescheduleDelta(intervalMs: Long) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            DELTA_WORK_NAME, ExistingWorkPolicy.REPLACE, deltaRequest(intervalMs)
+        )
+    }
+
+    fun rescheduleDeltaPoll(intervalMs: Long) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            DELTA_POLL_WORK_NAME, ExistingWorkPolicy.REPLACE, deltaPollRequest(intervalMs)
+        )
+    }
+
+    fun rescheduleWatermark(intervalMs: Long) {
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            WATERMARK_WORK_NAME, ExistingWorkPolicy.REPLACE, watermarkRequest(intervalMs)
+        )
+    }
+
+    /** Отменяет дельта-цепочки. In-flight задание завершится, новые не начнутся (воркер НЕ ре-шедулится при выключенном deltaJobsEnabled). */
     fun stopDeltaJobs() {
         val wm = WorkManager.getInstance(context)
         wm.cancelUniqueWork(DELTA_WORK_NAME)
         wm.cancelUniqueWork(DELTA_POLL_WORK_NAME)
     }
 
-    /** Перезапускает периодические delta-джобы после stopDeltaJobs(). */
-    fun startDeltaJobs() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        val deltaRequest = PeriodicWorkRequestBuilder<DeltaSyncWorker>(
-            60, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.MINUTES)
-            .build()
-
-        val deltaPollRequest = PeriodicWorkRequestBuilder<DeltaChunkPollWorker>(
-            5, TimeUnit.MINUTES
-        )
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .build()
-
-        val wm = WorkManager.getInstance(context)
-        wm.enqueueUniquePeriodicWork(
-            DELTA_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            deltaRequest
-        )
-        wm.enqueueUniquePeriodicWork(
-            DELTA_POLL_WORK_NAME,
-            ExistingPeriodicWorkPolicy.KEEP,
-            deltaPollRequest
-        )
-    }
+    /** Перезапускает дельта-цепочки сразу (немедленный запуск) после stopDeltaJobs(). */
+    fun startDeltaJobs() = enqueueDeltaChains()
 
     fun enqueueOneShotSync() = enqueueOneShotSync(0L)
 
     fun enqueueOneShotSync(delayMs: Long) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
+        val request = syncRequest(delayMs)
+        WorkManager.getInstance(context).enqueue(request)
+    }
 
-        val request = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setConstraints(constraints)
-            .setInitialDelay(delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-            .build()
-
+    fun enqueueOneShotPoll() {
+        val request = pollRequest(0L)
         WorkManager.getInstance(context).enqueue(request)
     }
 
@@ -155,10 +153,6 @@ class WorkScheduler @Inject constructor(
         regionId: String? = null,
         lastVersion: Long? = null
     ) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
         val data = DeltaSyncWorker.buildForcedData(
             terminalId = terminalId ?: "",
             carrierId = carrierId,
@@ -166,22 +160,14 @@ class WorkScheduler @Inject constructor(
             lastVersion = lastVersion
         )
 
-        val request = OneTimeWorkRequestBuilder<DeltaSyncWorker>()
-            .setConstraints(constraints)
-            .setInputData(data)
-            .build()
-
+        val request = deltaRequest(0L, data)
         WorkManager.getInstance(context).enqueue(request)
     }
 
     /** Принудительный чанк-поллить (после «Дельта сейчас»), независим от deltaJobsEnabled. */
     fun enqueueForcedDeltaChunkPoll() {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
         val request = OneTimeWorkRequestBuilder<DeltaChunkPollWorker>()
-            .setConstraints(constraints)
+            .setConstraints(connectedConstraints())
             .setInputData(DeltaChunkPollWorker.buildForcedData())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 5, TimeUnit.SECONDS)
             .build()
@@ -195,12 +181,8 @@ class WorkScheduler @Inject constructor(
 
     /** Полная выкачка: запрос + download worker. */
     fun enqueueFullDump(eventId: String) {
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
         val request = OneTimeWorkRequestBuilder<FullDumpDownloadWorker>()
-            .setConstraints(constraints)
+            .setConstraints(connectedConstraints())
             .setInputData(FullDumpDownloadWorker.buildData(eventId))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 1, TimeUnit.MINUTES)
             .build()

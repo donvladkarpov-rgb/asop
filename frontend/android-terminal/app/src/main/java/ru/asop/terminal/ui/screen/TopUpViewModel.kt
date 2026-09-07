@@ -44,6 +44,7 @@ class TopUpViewModel @Inject constructor(
     val nfcAdapter: NfcAdapter?,
     private val terminalKeyDao: TerminalKeyDao,
     private val terminalKeyCryptor: TerminalKeyCryptor,
+    private val referenceRowDao: ru.asop.terminal.db.dao.ReferenceRowDao,
     private val pendingEventDao: ru.asop.terminal.db.dao.PendingEventDao,
     private val syncPreferences: ru.asop.terminal.db.SyncPreferences,
     private val workScheduler: ru.asop.terminal.worker.WorkScheduler
@@ -194,6 +195,20 @@ class TopUpViewModel @Inject constructor(
                         Log.i(TAG, "auth OK: bitmask=0x${outcome.identity.bitmask.toString(16)} roles=$roles allowed=$allowedRoles")
                         val allowed = roles.any { it in allowedRoles }
                         if (allowed) {
+                            // Операторская карта-ключ должна быть зарегистрирована/активирована
+                            // на сервере и доехать до локального asop_cards — иначе не даём
+                            // проводить авторизацию.
+                            val cardRef = outcome.identity.cardId?.toString()
+                            if (cardRef != null && referenceRowDao.findUserIdByCardId(cardRef) == null) {
+                                _state.update {
+                                    it.copy(
+                                        busy = false,
+                                        step = Step.ERROR,
+                                        error = "Карта не зарегистрирована или не активирована"
+                                    )
+                                }
+                                return@launch
+                            }
                             // Ревью-фикс: пока карта-ключ в поле, Feitian повторно шлёт
                             // callback'и (~250мс) уже по step=TARGET_CARD. UID-guard в
                             // onTagDiscovered блокирует её как цель пополнения.

@@ -721,6 +721,10 @@ $PSQL "SELECT status FROM asop_sessions WHERE session_id='$NEW_SHIFT_ID';"   # �
 `REGADMIN_E` (REGION_ADMIN @103), `ROOT` (SUPER_ADMIN) и повторите закрытие свежей смены
 с каждым `closedByUserId`: C/D/E/R → COMPLETED (смена CLOSED); пользователь вне scope → FAILED.
 
+**Root-регрессия (промпт-фикс):** `ROOT` (SUPER_ADMIN) обязан закрывать смену даже при
+ПУСТЫХ `asop_user_carriers`/`asop_user_regions` (root-проверка отдельным запросом, не зависит
+от линков). Роль матчится по `ASOP_ROLES.ROLE_NAME` (колонки `role_code` в схеме нет).
+
 ### Шаг 7. Финальное состояние
 
 ```bash

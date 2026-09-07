@@ -366,20 +366,30 @@ session-service @KafkaListener (X-Event-Id в headers)
 - `TRANSACTION` (session_id=trip.id) — валидации пассажирских карт
 
 **Авторизация закрытия чужой смены** (промпт 011 §4, `SessionService.canClose`):
+Двухшаговый SQL (root-проверка НЕ зависит от линков — иначе root-админ без
+`asop_user_carriers`/`asop_user_regions` давал пустой `requester_scope` → 0 строк → «not authorized»):
 ```
-SELECT 1 FROM requester_scope rs
-WHERE ((:sessionCarrierId IS NOT NULL AND rs.cid = :sessionCarrierId)
-    OR (:sessionRegionId  IS NOT NULL AND rs.rid = :sessionRegionId))
-   OR EXISTS (SELECT 1 FROM ASOP_USER_ROLES ur
-              JOIN ASOP_ROLES r ON r.role_id = ur.role_id
-              WHERE ur.user_id = :requesterId
-                AND r.role_code IN ('ADMIN','SUPER_ADMIN','REGION_ADMIN',
-                                    'ORGANIZER_ADMIN','CARRIER_ADMIN',
-                                    'CARRIER_DISPATCHER','KRS_DISPATCHER'))
-LIMIT 1
+root:  SELECT 1 FROM ASOP_USER_ROLES ur
+             JOIN ASOP_ROLES r ON r.role_id = ur.role_id
+       WHERE ur.user_id = :requesterId AND r.role_name IN ('ADMIN','SUPER_ADMIN')  -- role_name, НЕ role_code
+       LIMIT 1
+scope (если не root):
+       WITH requester_scope AS (
+         SELECT uc.carrier_id AS cid, NULL::uuid AS rid FROM ASOP_USER_CARRIERS uc WHERE uc.user_id=:requesterId
+         UNION ALL
+         SELECT NULL::uuid AS cid, ur.region_id AS rid FROM ASOP_USER_REGIONS ur WHERE ur.user_id=:requesterId
+       )
+       SELECT 1 FROM requester_scope rs
+       WHERE (:sessionCarrierId IS NOT NULL AND rs.cid = :sessionCarrierId
+              AND EXISTS (роль ∈ DRIVER/CARRIER_DISPATCHER/KRS_DISPATCHER/CARRIER_ADMIN/ORGANIZER_ADMIN))
+          OR (:sessionRegionId  IS NOT NULL AND rs.rid = :sessionRegionId
+              AND EXISTS (роль ∈ REGION_ADMIN/ORGANIZER_ADMIN/KRS_ADMIN))
+       LIMIT 1
 ```
 
-Минимальный SQL путь: `ASOP_USER_CARRIERS` / `ASOP_USER_REGIONS` UNION + role-code EXISTS. Кэшбэк для cascade-резидентов: ORGANIZER_ADMIN/RGN_ADMIN получают доступ ко всем carrier-сессиям своего организатора / региона.
+Минимальный SQL путь: `ASOP_USER_CARRIERS` / `ASOP_USER_REGIONS` UNION (для non-root) + role-name EXISTS.
+Кэшбэк для cascade-резидентов: ORGANIZER_ADMIN/RGN_ADMIN получают доступ ко всем carrier-сессиям своего организатора / региона.
+Роль читается из `ASOP_ROLES.ROLE_NAME` (колонки `role_code` в схеме нет).
 
 ### Заголовки
 - `X-Keycloak-Id`: keycloakId аутентифицированного пользователя (трассировка)

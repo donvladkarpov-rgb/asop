@@ -11,6 +11,7 @@ data class TerminalResponse(
     val carrierId: UUID?,
     val timezone: String?,
     val status: String,
+    val profileId: UUID?,
     val createdAt: Instant,
     val updatedAt: Instant
 )

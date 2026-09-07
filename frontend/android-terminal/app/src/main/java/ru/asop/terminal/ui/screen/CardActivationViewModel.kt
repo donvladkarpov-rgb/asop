@@ -32,6 +32,7 @@ import ru.asop.terminal.db.CardIdentityCodec
 import ru.asop.terminal.db.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.TerminalKeyDao
+import ru.asop.terminal.db.entity.ReferenceRowEntity
 import ru.asop.terminal.nfc.DesfireCardReader
 import ru.asop.terminal.nfc.DesfireCardWriter
 import ru.asop.terminal.nfc.MifareClassicCardWriter
@@ -61,7 +62,9 @@ class CardActivationViewModel @Inject constructor(
     private val terminalKeyDao: TerminalKeyDao,
     private val terminalKeyCryptor: TerminalKeyCryptor,
     private val referenceRowDao: ReferenceRowDao,
-    private val syncPreferences: ru.asop.terminal.db.SyncPreferences
+    private val syncPreferences: ru.asop.terminal.db.SyncPreferences,
+    private val syncMetaDao: ru.asop.terminal.db.dao.SyncMetaDao,
+    private val workScheduler: ru.asop.terminal.worker.WorkScheduler
 ) : ViewModel() {
 
     companion object {
@@ -299,9 +302,27 @@ class CardActivationViewModel @Inject constructor(
                 _state.update { it.copy(message = "Не удалось открыть IsoDep авторизующей карты") }
                 return@launch
             }
-            val roles = try { identifyCardRoles(iso) } finally { writer.close(iso) }
-            if (roles == null) {
+            val identified = try {
+                identifyCard(iso)
+            } finally {
+                writer.close(iso)
+            }
+            val identity = identified?.identity
+            val roles = identity?.optJSONArray("roles")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i -> arr.optString(i).takeIf { it.isNotBlank() } }
+            }.orEmpty()
+            if (roles.isEmpty()) {
                 _state.update { it.copy(message = "Не удалось прочитать карту авторизации (ключ/identity)") }
+                return@launch
+            }
+            // Операторская карта-ключ тоже должна быть зарегистрирована/активирована на
+            // сервере и доехать до локального справочника asop_cards — иначе отклоняем.
+            val cardId = identity?.optString("cardId", "")?.takeIf { it.isNotBlank() }
+            if (cardId != null && referenceRowDao.findUserIdByCardId(cardId) == null) {
+                _state.update {
+                    it.copy(message = "Оператор: карта не зарегистрирована или не активирована")
+                }
+                TonePlayer.errorBeep()
                 return@launch
             }
             val target = _state.value.cardType ?: return@launch
@@ -365,6 +386,15 @@ class CardActivationViewModel @Inject constructor(
                             val roles = ru.asop.terminal.activation.AsopCardType
                                 .allRolesForBitmask(identity.bitmask).map { it.role }
                             if (roles.isNotEmpty()) {
+                                // Операторская карта-ключ тоже должна быть в локальном asop_cards.
+                                val cardRef = identity.cardId.toString()
+                                if (referenceRowDao.findUserIdByCardId(cardRef) == null) {
+                                    _state.update {
+                                        it.copy(message = "Оператор: карта не зарегистрирована или не активирована")
+                                    }
+                                    TonePlayer.errorBeep()
+                                    return@launch
+                                }
                                 finalizeAuth(roles, keyA, keyB, "Classic VCM1 (fast)")
                                 return@launch
                             }
@@ -995,6 +1025,21 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Активация карты требует доступного интернета: сначала сервер подтверждает
+                // активацию, и только потом данные доезжают в локальную базу терминала (дельта).
+                if (!hasNetwork()) {
+                    _state.update {
+                        it.copy(
+                            step = Step.Error,
+                            busy = false,
+                            finalOk = false,
+                            finalResult = "Нет интернета. Активация карты недоступна"
+                        )
+                    }
+                    addReceipt("Нет интернета — активация отклонена")
+                    TonePlayer.errorBeep()
+                    return@launch
+                }
                 val s1 = _state.value
                 val isClassic = (s1.pendingWriteTech == CardTech.CLASSIC)
                 _state.update { it.copy(busy = true,
@@ -1058,6 +1103,13 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     }
                     TonePlayer.readyBeep() // подсказка "приложите для прошивки"
                     addReceipt("Подсказка: приложите карту повторно для записи VCM1 на физический чип")
+                    // Сервер подтвердил активацию без ошибок — только теперь запрашиваем
+                    // немедленную дельту, чтобы карта появилась в локальной базе терминала.
+                    triggerLocalDelta()
+                    // Вариант 2 (промпт 015): локальный upsert в asop_cards сразу после
+                    // серверного подтверждения — только что активированная карта пригодна
+                    // как операторская немедленно, без ожидания дельты.
+                    persistActivatedCardLocally(body.cardId, entityId)
                     val entityRef = entityId?.let {
                         ru.asop.terminal.activation.EntityRef(
                             type = ru.asop.terminal.activation.EntityType.fromFieldName(entityType)!!,
@@ -1128,6 +1180,16 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     }
                     _state.update { it.copy(serverRegistered = true, busy = false,
                         message = "Карта зарегистрирована. Приложите карту повторно для прошивки.") }
+                    // Сервер подтвердил активацию без ошибок — только теперь запрашиваем
+                    // немедленную дельту, чтобы карта появилась в локальной базе терминала.
+                    triggerLocalDelta()
+                    // Вариант 2 (промпт 015): локальный upsert в asop_cards сразу после
+                    // серверного подтверждения — только что активированная карта пригодна
+                    // как операторская немедленно, без ожидания дельты.
+                    persistActivatedCardLocally(
+                        finalIdentity.optString("cardId").takeIf { it.isNotBlank() },
+                        finalIdentity.optString("userId").takeIf { it.isNotBlank() }
+                    )
 
                     val identityJson = JSONObject(finalCanonical)
                     val identityProto = CardIdentityCodec.fromJson(identityJson)
@@ -1146,6 +1208,61 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                 addReceipt("Ошибка активации на сервере: ${e.message}")
                 TonePlayer.errorBeep()
             }
+        }
+    }
+
+    /**
+     * После успешной серверной активации (как только сервер вернул ответ без ошибок)
+     * запускает немедленную дельту справочников, чтобы карта появилась в локальной базе
+     * терминала (reference_rows.asop_cards) из источника истины-сервера. Сервер-первым,
+     * локальная база — только после подтверждения сервера.
+     */
+    private suspend fun triggerLocalDelta() {
+        runCatching {
+            val terminalId = syncPreferences.terminalId.first() ?: return
+            val carrierId = syncPreferences.carrierId.first()
+            val regionId = syncPreferences.regionId.first()
+            val lastVersion = syncMetaDao.get()?.lastVersion
+            workScheduler.enqueueOneShotDelta(terminalId, carrierId, regionId, lastVersion)
+            addReceipt("Запущена синхронизация справочников (дельта), карта появится в локальной базе")
+        }
+    }
+
+    /**
+     * Локальный upsert активированной карты в reference_rows.asop_cards сразу после
+     * серверного подтверждения (вариант 2, промпт 015). Не ждём дельту: только что
+     * активированную карту можно прикладывать как операторскую немедленно.
+     * Payload строится в proto-JSON-формате (JsonFormat.printer(): "key": "value" со
+     * пробелом после двоеточия) — это требуется LIKE-поиском в findUserIdByCardId.
+     * version=null, чтобы НЕ двигать глобальный watermark справочников.
+     */
+    private suspend fun persistActivatedCardLocally(cardId: String?, userId: String?) {
+        if (cardId.isNullOrBlank()) return
+        runCatching {
+            val now = java.time.OffsetDateTime.now().toString()
+            val payload = buildString {
+                append("{")
+                append("\"cardId\": \"$cardId\", ")
+                append("\"userId\": \"${userId.orEmpty()}\", ")
+                append("\"isPrimary\": true, ")
+                append("\"registeredAt\": \"$now\", ")
+                append("\"createdAt\": \"$now\", ")
+                append("\"updatedAt\": \"$now\"")
+                append("}")
+            }
+            referenceRowDao.upsertAll(
+                listOf(
+                    ReferenceRowEntity(
+                        tableName = "asop_cards",
+                        rowId = cardId,
+                        payloadJson = payload,
+                        updatedAt = now,
+                        deletedAt = null,
+                        version = null
+                    )
+                )
+            )
+            addReceipt("Карта добавлена в локальный справочник: cardId=${cardId.take(8)}…")
         }
     }
 

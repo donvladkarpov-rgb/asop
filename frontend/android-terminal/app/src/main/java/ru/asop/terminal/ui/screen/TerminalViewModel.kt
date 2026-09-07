@@ -125,6 +125,7 @@ class TerminalViewModel @Inject constructor(
                     certificateService.provision(androidId)
                 }
                 val savedTerminalId = terminalId.value
+                val savedProfileId = syncPreferences.terminalProfileIdSync()
                 val registerResponse = gatewayApi.registerTerminal(
                     TerminalRegisterRequest(
                         terminalSerial = androidId,
@@ -132,7 +133,8 @@ class TerminalViewModel @Inject constructor(
                         terminalModel = model,
                         carrierId = carrierId,
                         timezone = timezone,
-                        terminalId = savedTerminalId
+                        terminalId = savedTerminalId,
+                        profileId = savedProfileId
                     )
                 )
                 val terminal = registerResponse.terminal
@@ -140,6 +142,7 @@ class TerminalViewModel @Inject constructor(
                 syncPreferences.setCarrierId(carrierId)
                 syncPreferences.setRegionId(regionId)
                 syncPreferences.setTimezone(timezone)
+                syncPreferences.setTerminalProfileId(terminal.profileId)
                 _terminalInfo.value = terminal
                 _state.value = UiState.Registered(terminal)
             } catch (e: Exception) {

@@ -14,6 +14,8 @@ export interface Terminal {
   terminalNumber?: string;
   terminalModel?: string;
   carrierId?: string;
+  /** Профиль настроек терминала (ASOP_TERMINAL_PROFILES.PROFILE_ID), промпт 019. */
+  profileId?: string;
   timezone?: string;
   status: string;
   createdAt: string;

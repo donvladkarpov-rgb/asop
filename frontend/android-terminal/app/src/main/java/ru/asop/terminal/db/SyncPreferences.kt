@@ -22,6 +22,7 @@ class SyncPreferences(private val context: Context) {
         private val KEY_CARRIER_ID = stringPreferencesKey("carrier_id")
         private val KEY_REGION_ID = stringPreferencesKey("region_id")
         private val KEY_TIMEZONE = stringPreferencesKey("timezone")
+        private val KEY_TERMINAL_PROFILE_ID = stringPreferencesKey("terminal_profile_id")
         private val KEY_DELTA_JOBS_ENABLED = booleanPreferencesKey("delta_jobs_enabled")
         private val KEY_SERVER_PUBLIC_KEY = stringPreferencesKey("server_public_key")
 
@@ -78,6 +79,23 @@ class SyncPreferences(private val context: Context) {
 
     val timezone: Flow<String?> = context.syncDataStore.data.map { prefs ->
         prefs[KEY_TIMEZONE]
+    }
+
+    /** Профиль настроек терминала (ASOP_TERMINAL_PROFILES) — интервалы воркеров. */
+    val terminalProfileId: Flow<String?> = context.syncDataStore.data.map { prefs ->
+        prefs[KEY_TERMINAL_PROFILE_ID]
+    }
+
+    /** Блокирующее чтение (non-suspend контексты). */
+    fun terminalProfileIdSync(): String? = kotlinx.coroutines.runBlocking {
+        context.syncDataStore.data.first()[KEY_TERMINAL_PROFILE_ID]
+    }
+
+    suspend fun setTerminalProfileId(id: String?) {
+        context.syncDataStore.edit { prefs ->
+            if (id != null) prefs[KEY_TERMINAL_PROFILE_ID] = id
+            else prefs.remove(KEY_TERMINAL_PROFILE_ID)
+        }
     }
 
     val serverPublicKey: Flow<String?> = context.syncDataStore.data.map { prefs ->

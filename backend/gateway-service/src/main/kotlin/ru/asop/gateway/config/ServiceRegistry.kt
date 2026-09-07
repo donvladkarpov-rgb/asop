@@ -49,6 +49,8 @@ class ServiceRegistry {
         "benefit-steps" to svc("admin-service", 8091),
         "asop-keys" to svc("admin-service", 8091),
         "config-params" to svc("admin-service", 8091),
+        "terminal-profiles" to svc("admin-service", 8091),
+        "distributor-terminals" to svc("terminal-service", 8084),
         // Routes & Paths (route-service)
         "fare-zones" to svc("route-service", 8092),
         "transport-stops" to svc("route-service", 8092),

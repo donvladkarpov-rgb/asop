@@ -15,6 +15,7 @@ data class TerminalEntity(
     val terminalModel: String? = null,
     val status: String = "WAREHOUSE",
     val timezone: String? = null,
+    val profileId: UUID? = null,
     val createdAt: Instant = Instant.now(),
     val updatedAt: Instant = Instant.now()
 )

@@ -267,14 +267,20 @@ class TerminalPrincipalExtractor : X509PrincipalExtractor {
 1. **Карта-ключ** на NFC tap → Android `SessionFlowViewModel.onCardTappedForAuth()`:
    - VCM1 card identity (`file 0`) даёт `cardId, userId, bitmask`.
    - Из `bitmask` через `CardActivationMatrix.rolesFromBitmask(...)` — список ordinal.
-   - Нужен `DRIVER` или `CARRIER_DISPATCHER`/`KRS_DISPATCHER` — иначе `CardStep.NOT_DRIVER`.
-   - Lookup `carrier` через `reference_rows` (`asop_user_carriers` payload) — `firstUserCarrierRow(userId)`.
+   - **Водительские операции (SHIFT/TRIP)** принимают `SHIFT_OPERATOR_ROLES` = DRIVER, CARRIER_DISPATCHER,
+     KRS_DISPATCHER + админ-роли (SUPER_ADMIN, REGION_ADMIN, ORGANIZER_ADMIN, CARRIER_ADMIN); для водительских
+     ролей carrier резолвится через `reference_rows` (`asop_user_carriers`), для админ-ролей линк не обязателен —
+     используется `SyncPreferences.carrierId` (иначе NOT_DRIVER); root/SUPER_ADMIN — глобально.
+   - Остальные роли → `CardStep.NOT_DRIVER`.
 2. **Server `canClose(sessionId, requesterId)`** (matrix из промпт 011 §4, см. AGENTS.md/SQL там) — cascade scope:
    - DRIVER (открыватель ИЛИ другой_водитель_того_же_carrier_id) → OK.
    - CARRIER_DISPATCHER/KRS_DISPATCHER/CARRIER_ADMIN → OK если carrier_id matches.
    - ORGANIZER_ADMIN → OK cascade на all carriers организатора (JOIN ASOP_ORGANIZER_TERRITORIES).
    - KRS_ADMIN → OK cascade по auditServiceId.
    - REGION_ADMIN/ADMIN/SUPER_ADMIN → OK всегда (с фильтром scope для REGION).
+   - **Реализация**: root (ADMIN/SUPER_ADMIN) — отдельным запросом по `ASOP_ROLES.ROLE_NAME` (колонки `role_code`
+     нет), НЕ зависит от линков; carrier/region scope — вторым запросом через `requester_scope`
+     (ASOP_USER_CARRIERS × ASOP_USER_REGIONS). Root-админ без линков иначе получал 0 строк → «not authorized».
 
 **Race guards**:
 - 1 shift per terminal max (UI client-side check + server-side).

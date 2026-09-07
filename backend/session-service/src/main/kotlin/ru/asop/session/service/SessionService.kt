@@ -150,7 +150,9 @@ class SessionService(
 
     /**
      * Реализация промпт 011 §4 assert без scope-escape.
-     * Root (ADMIN/SUPER_ADMIN) — глобальный доступ (задумано).
+     * Root (ADMIN/SUPER_ADMIN) — глобальный доступ (задумано), НЕ зависит от линков
+     * (root-админ может не иметь asop_user_carriers/asop_user_regions — иначе
+     * `requester_scope` пуст и запрос ниже вернул бы 0 строк).
      * Для всех остальных ролей requester обязан быть привязан к scope сессии:
      *   - carrier-scope роли (DRIVER, CARRIER_DISPATCHER, KRS_DISPATCHER, CARRIER_ADMIN, ORGANIZER_ADMIN):
      *     requester ∈ asop_user_carriers.carrier_id == session.carrier_id
@@ -160,6 +162,22 @@ class SessionService(
      * мог закрыть чужую смену (scope-escape). Теперь роль проверяется ТОЛЬКО внутри линка.
      */
     private fun isRequesterInSessionScope(requesterId: UUID, sessionCarrierId: UUID?, sessionRegionId: UUID?): Mono<Boolean> {
+        // Root first: глобальный доступ независимо от линков/scope сессии.
+        val rootSql = """
+            SELECT 1 FROM ASOP_USER_ROLES ur
+            JOIN ASOP_ROLES r ON r.role_id = ur.role_id
+            WHERE ur.user_id = :requesterId AND r.role_name IN ('ADMIN','SUPER_ADMIN')
+            LIMIT 1
+        """
+        return db.sql(rootSql).bind("requesterId", requesterId).fetch().one().map { true }
+            .switchIfEmpty(scopeCheck(requesterId, sessionCarrierId, sessionRegionId))
+            .defaultIfEmpty(false)
+    }
+
+    private fun scopeCheck(requesterId: UUID, sessionCarrierId: UUID?, sessionRegionId: UUID?): Mono<Boolean> {
+        if (sessionCarrierId == null && sessionRegionId == null) {
+            return Mono.just(false)
+        }
         val sql = """
             WITH requester_scope AS (
               SELECT uc.carrier_id AS cid, NULL::uuid AS rid
@@ -171,13 +189,6 @@ class SessionService(
             SELECT 1
             FROM requester_scope rs
             WHERE
-              -- Root: глобальный доступ (только ADMIN/SUPER_ADMIN).
-              EXISTS (
-                SELECT 1 FROM ASOP_USER_ROLES ur
-                JOIN ASOP_ROLES r ON r.role_id = ur.role_id
-                WHERE ur.user_id = :requesterId AND r.role_code IN ('ADMIN','SUPER_ADMIN')
-              )
-              OR
               -- Carrier-scope: линк на перевозчика сессии + роль из carrier-множества.
               (
                 :sessionCarrierId IS NOT NULL AND rs.cid = :sessionCarrierId
@@ -185,7 +196,7 @@ class SessionService(
                   SELECT 1 FROM ASOP_USER_ROLES ur
                   JOIN ASOP_ROLES r ON r.role_id = ur.role_id
                   WHERE ur.user_id = :requesterId
-                    AND r.role_code IN ('DRIVER','CARRIER_DISPATCHER','KRS_DISPATCHER','CARRIER_ADMIN','ORGANIZER_ADMIN')
+                    AND r.role_name IN ('DRIVER','CARRIER_DISPATCHER','KRS_DISPATCHER','CARRIER_ADMIN','ORGANIZER_ADMIN')
                 )
               )
               OR
@@ -196,7 +207,7 @@ class SessionService(
                   SELECT 1 FROM ASOP_USER_ROLES ur
                   JOIN ASOP_ROLES r ON r.role_id = ur.role_id
                   WHERE ur.user_id = :requesterId
-                    AND r.role_code IN ('REGION_ADMIN','ORGANIZER_ADMIN','KRS_ADMIN')
+                    AND r.role_name IN ('REGION_ADMIN','ORGANIZER_ADMIN','KRS_ADMIN')
                 )
               )
             LIMIT 1

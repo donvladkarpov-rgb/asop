@@ -175,3 +175,32 @@ export interface ConfigParam {
   deletedAt?: string | null;
   version?: number;
 }
+
+/** Профиль настроек терминала (ASOP_TERMINAL_PROFILES), промпт 019. */
+export interface TerminalProfile {
+  profileId: string;
+  profileName: string;
+  profileParams: Record<string, unknown>;
+  isBase: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  version?: number;
+}
+
+/** Платёжный терминал дистрибьютора (ASOP_DISTRIBUTOR_TERMINALS). */
+export interface DistributorTerminal {
+  distributorTerminalId: string;
+  cardsDistributorId: string;
+  contractId?: string | null;
+  terminalNumber: string;
+  terminalSerial: string;
+  terminalModel?: string | null;
+  paymentProviderId: string;
+  status: string;
+  molUserId?: string | null;
+  profileId?: string | null;
+  softwareVersionId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}

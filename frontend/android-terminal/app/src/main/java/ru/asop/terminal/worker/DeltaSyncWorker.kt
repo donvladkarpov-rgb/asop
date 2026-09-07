@@ -18,11 +18,12 @@ import ru.asop.terminal.network.models.DeltaSyncRequest
 import ru.asop.terminal.worker.WorkScheduler
 
 /**
- * Раз в час (или вручную): шлёт delta-запрос (202 + eventId) на gateway,
+ * Промпт 019: self-rescheduling one-shot цепочка (интервал deltaSyncIntervalMs из профиля)
+ * или ручной (forced) запрос: шлёт delta-запрос (202 + eventId) на gateway,
  * сохраняет задание в Room. Скачивание чанков делает DeltaChunkPollWorker.
  *
- * Для периодического запуска (КЕЕП, без флага forced) уважает
- * deltaJobsEnabled. Принудительный (forced, one-shot, «Дельта сейчас»)
+ * Non-forced цепочка уважает deltaJobsEnabled (при выключении — не переустанавливает
+ * себя, цепочка умирает). Принудительный (forced, one-shot, «Дельта сейчас»)
  * работает всегда, независимо от флага.
  */
 @HiltWorker
@@ -33,7 +34,8 @@ class DeltaSyncWorker @AssistedInject constructor(
     private val syncMetaDao: SyncMetaDao,
     private val deltaSyncJobDao: DeltaSyncJobDao,
     private val gatewayApi: GatewayApi,
-    private val workScheduler: WorkScheduler
+    private val workScheduler: WorkScheduler,
+    private val terminalProfileProvider: TerminalProfileProvider
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -61,20 +63,24 @@ class DeltaSyncWorker @AssistedInject constructor(
 
     override suspend fun doWork(): Result {
         val forced = inputData.getBoolean(KEY_FORCED, false)
-        val terminalId: String? = if (forced) {
-            inputData.getString(KEY_TERMINAL_ID)
-        } else {
-            syncPreferences.terminalId.first()
-        }
-        if (terminalId.isNullOrBlank()) return Result.failure()
-        val tid: String = terminalId
+        val params = terminalProfileProvider.params()
 
+        // Non-forced цепочка честно умирает при выключенных автоджобах
+        // (иначе заново переenqueue'ится и stopDeltaJobs не сработает).
         if (!forced && !syncPreferences.deltaJobsEnabled.first()) return Result.success()
 
-        // Одно in-flight задание за раз
-        if (deltaSyncJobDao.getPending().isNotEmpty()) return Result.success()
-
         try {
+            val terminalId: String? = if (forced) {
+                inputData.getString(KEY_TERMINAL_ID)
+            } else {
+                syncPreferences.terminalId.first()
+            }
+            if (terminalId.isNullOrBlank()) return Result.success()
+            val tid: String = terminalId
+
+            // Одно in-flight задание за раз
+            if (deltaSyncJobDao.getPending().isNotEmpty()) return Result.success()
+
             val lastVersion = if (forced) {
                 val v = inputData.getLong(KEY_LAST_VERSION, 0L)
                 if (v > 0L) v else null
@@ -98,9 +104,14 @@ class DeltaSyncWorker @AssistedInject constructor(
 
             if (!response.isSuccessful) {
                 Log.w(TAG, "DeltaSync rejected: HTTP ${response.code()}")
-                return Result.retry()
+                if (forced) return Result.retry()
+                return Result.success()
             }
-            val eventId = response.body()?.eventId ?: return Result.retry()
+            val eventId = response.body()?.eventId
+            if (eventId == null) {
+                if (forced) return Result.retry()
+                return Result.success()
+            }
             deltaSyncJobDao.insert(
                 DeltaSyncJobEntity(
                     eventId = eventId,
@@ -113,7 +124,11 @@ class DeltaSyncWorker @AssistedInject constructor(
             return Result.success()
         } catch (e: Exception) {
             Log.w(TAG, "Delta request failed: ${e.message}, forced=$forced")
-            return Result.retry()
+            if (forced) return Result.retry()
+            return Result.success()
+        } finally {
+            // только non-forced цепочка переустанавливает себя каждые deltaSyncIntervalMs
+            if (!forced) workScheduler.rescheduleDelta(params.deltaSyncIntervalMs)
         }
     }
 }
