@@ -4,6 +4,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import ru.asop.nfc.Vcm1CardAuth
 
 class Vcm1CardAuthTest {
     @Test fun outcome_kind_for_auth_failed_does_not_throw() {

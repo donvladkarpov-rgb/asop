@@ -10,6 +10,7 @@ import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.entity.ReferenceRowEntity
 import ru.asop.terminal.db.entity.SyncMetaEntity
 import ru.asop.terminal.db.entity.TerminalKeyEntity
+import ru.asop.nfc.TerminalKeyCryptor
 import ru.asop.proto.v1.AsopKeysFile
 import ru.asop.proto.v1.DeltaChunk
 import javax.inject.Inject

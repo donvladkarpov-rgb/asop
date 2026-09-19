@@ -51,3 +51,4 @@ asop:
     topics:
       fiscal-commands: asop.fiscal.commands
       fiscal-events: asop.fiscal.events
+      payment-events: asop.payment.events

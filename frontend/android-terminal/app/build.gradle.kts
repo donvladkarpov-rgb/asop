@@ -34,6 +34,7 @@ android {
         buildConfigField("String", "CRYPTO_BASE_URL", "\"https://$cryptoHost:8081\"")
         buildConfigField("String", "CERT_SIGN_API_KEY", "\"${localProps.getProperty("cert.sign.api.key", "asop-terminal-cert-key")}\"")
         buildConfigField("String", "CERT_SIGN_HMAC_SECRET", "\"${localProps.getProperty("cert.sign.hmac.secret", "9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210")}\"")
+        buildConfigField("String", "PAYMENT_HMAC_SECRET", "\"${localProps.getProperty("payment.hmac.secret", "asop-payment-pairing-dev-secret")}\"")
     }
 
     buildTypes {
@@ -113,6 +114,9 @@ dependencies {
 
     // Bouncy Castle (for PEM parsing on Android)
     implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
+
+    // Общая NFC/VCM1-библиотека (composite build, ../android-nfc)
+    implementation("ru.asop.nfc:asop-nfc-lib:0.1.0")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")

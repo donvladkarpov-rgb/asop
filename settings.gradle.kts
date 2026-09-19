@@ -29,7 +29,8 @@ include(
     ":backend:shared:api:audit-api",
     ":backend:shared:api:reference-api",
     ":backend:shared:api:route-api",
-    ":backend:shared:api:tid-api"
+    ":backend:shared:api:tid-api",
+    ":backend:shared:api:payment-api"
 )
 
 // ============ Backend services ============
@@ -46,8 +47,13 @@ include(
     ":backend:crypto-service",
     ":backend:admin-service",
     ":backend:route-service",
-    ":backend:orchestrator-service"
+    ":backend:orchestrator-service",
+    ":backend:payment-service"
 )
 
-// ============ Android terminal app ============
+// ============ Android apps + shared NFC/lib ============
+// android-nfc включается на уровне корня (sibling composite), а не из terminal/distributor:
+// вложенный includeBuild внутри включённого билда ломает типобезопасные accessors
+// (RootProjectAccessor.getAsopNfcLib() defined twice).
 includeBuild("frontend/android-terminal")
+includeBuild("frontend/android-nfc")

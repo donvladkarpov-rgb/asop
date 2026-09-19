@@ -6,6 +6,10 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import ru.asop.nfc.AsopCardType
+import ru.asop.nfc.CardIdentityVcm1
+import ru.asop.nfc.EntityRef
+import ru.asop.nfc.EntityType
 import java.util.UUID
 
 /**
@@ -94,15 +98,16 @@ class CardIdentityVcm1Test {
     @Test
     fun roundtrip_carrierId_dispatcherDriver_merge() {
         // Bits 6 + 9 = carrierId family → primary = CARRIER_DISPATCHER (lower ordinal), single entity
+        // Промпт 009 clean-break: entityType на карте только USER (routing по userId).
         val vcm1 = CardIdentityVcm1(
             cardId = UUID.randomUUID(),
             bitmask = 0x0240,  // bits 6 (DISPATCHER) + 9 (DRIVER) but NOT 0
-            entity = EntityRef(EntityType.CARRIER, UUID.randomUUID())
+            entity = EntityRef(EntityType.USER, UUID.randomUUID())
         )
         val decoded = CardIdentityVcm1.decodeFromBytes(vcm1.encodeAsBytes())
         assertEquals(0x0240, decoded!!.bitmask)
         assertEquals(2, decoded.bitmask.countOneBits())
-        assertEquals(EntityType.CARRIER, decoded.entity!!.type)
+        assertEquals(EntityType.USER, decoded.entity!!.type)
     }
 
     @Test
@@ -159,28 +164,37 @@ class CardIdentityVcm1Test {
 
     @Test
     fun primaryRoleForBitmask_picksLowestOrdinal() {
-        // bitmask = 0x0240 → bits 6 + 9 set, lowest set = 6 (CARRIER_DISPATCHER)
-        assertEquals(AsopCardType.CARRIER_DISPATCHER, AsopCardType.highestSetBitRole(0x0240))
-        // bitmask = 0x2010 → bits 4, 13, lowest = 4 (DISTRIBUTOR_ADMIN)
-        assertEquals(AsopCardType.DISTRIBUTOR_ADMIN, AsopCardType.highestSetBitRole(0x2010))
+        // lowest set bit (самый старший в иерархии) → primary role
+        val disp = AsopCardType.CARRIER_DISPATCHER   // ordinal 7
+        val driver = AsopCardType.DRIVER             // ordinal 10
+        val mask = AsopCardType.bitmaskForEntityRoles(listOf(driver, disp))
+        assertEquals(disp, AsopCardType.highestSetBitRole(mask))
+
+        val admin = AsopCardType.CARRIER_ADMIN       // ordinal 4
+        val anon = AsopCardType.PASSENGER_ANONYMOUS  // ordinal 13
+        val m2 = AsopCardType.bitmaskForEntityRoles(listOf(admin, anon))
+        assertEquals(admin, AsopCardType.highestSetBitRole(m2))
+
         // bitmask = 0 → null
         assertNull(AsopCardType.highestSetBitRole(0))
-        // bitmask = 0x2000 (only PASSENGER_ANONYMOUS) → ordinal 13
-        assertEquals(AsopCardType.PASSENGER_ANONYMOUS, AsopCardType.highestSetBitRole(0x2000))
+        // только PASSENGER_ANONYMOUS → ordinal 13
+        assertEquals(AsopCardType.PASSENGER_ANONYMOUS,
+            AsopCardType.highestSetBitRole(AsopCardType.bitmaskForEntityRoles(listOf(anon))))
     }
 
     @Test
     fun entityTypeForCardType_consistency() {
-        // Driver, Dispatcher → carrier
-        assertEquals(EntityType.CARRIER, EntityType.forAsopCardTypeOrdinal(AsopCardType.DRIVER.ordinal))
-        assertEquals(EntityType.CARRIER, EntityType.forAsopCardTypeOrdinal(AsopCardType.CARRIER_DISPATCHER.ordinal))
-        assertEquals(EntityType.CARRIER, EntityType.forAsopCardTypeOrdinal(AsopCardType.CARRIER_ADMIN.ordinal))
+        // Промпт 009 clean-break: все роли кроме PASSENGER_ANONYMOUS → USER.
+        // Раньше (pre-009) было CARRIER/AUDIT_SERVICE — теперь только USER/NONE.
+        assertEquals(EntityType.USER, EntityType.forAsopCardTypeOrdinal(AsopCardType.DRIVER.ordinal))
+        assertEquals(EntityType.USER, EntityType.forAsopCardTypeOrdinal(AsopCardType.CARRIER_DISPATCHER.ordinal))
+        assertEquals(EntityType.USER, EntityType.forAsopCardTypeOrdinal(AsopCardType.CARRIER_ADMIN.ordinal))
 
-        // KRS → auditServiceId
-        assertEquals(EntityType.AUDIT_SERVICE, EntityType.forAsopCardTypeOrdinal(AsopCardType.KRS_ADMIN.ordinal))
-        assertEquals(EntityType.AUDIT_SERVICE, EntityType.forAsopCardTypeOrdinal(AsopCardType.KRS_CONTROLLER.ordinal))
+        // KRS-роли также → USER (routing через ASOP_USER_KRS по userId)
+        assertEquals(EntityType.USER, EntityType.forAsopCardTypeOrdinal(AsopCardType.KRS_ADMIN.ordinal))
+        assertEquals(EntityType.USER, EntityType.forAsopCardTypeOrdinal(AsopCardType.KRS_CONTROLLER.ordinal))
 
-        // PASSENGER_ANONYMOUS → null (no entity)
-        assertNull(EntityType.forAsopCardTypeOrdinal(AsopCardType.PASSENGER_ANONYMOUS.ordinal))
+        // PASSENGER_ANONYMOUS → NONE (no entity)
+        assertEquals(EntityType.NONE, EntityType.forAsopCardTypeOrdinal(AsopCardType.PASSENGER_ANONYMOUS.ordinal))
     }
 }

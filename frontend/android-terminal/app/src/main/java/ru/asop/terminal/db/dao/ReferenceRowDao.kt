@@ -197,4 +197,35 @@ interface ReferenceRowDao {
         LIMIT 1
     """)
     suspend fun findBenefitById(benefitId: String): String?
+
+    // ===== Промпт 016: тариф для банковской оплаты проезда (fare-decision) =====
+
+    /**
+     * Тариф по пути следования открытого рейса. payload `asop_tariff_rates`:
+     * `{"tariffRateId":"...","tariffTypeId":"...","carrierId":"...","pathId":"...","price":53.00,"isActive":true}`.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_tariff_rates'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"pathId": "' || :pathId || '"%'
+          AND payload_json LIKE '%"isActive": true%'
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """)
+    suspend fun findTariffForPath(pathId: String): String?
+
+    /** Fallback: любой активный тариф перевозчика с ценой (если для пути не найден). */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_tariff_rates'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"isActive": true%'
+          AND payload_json LIKE '%"price":%'
+        ORDER BY updated_at DESC
+        LIMIT 1
+    """)
+    suspend fun findAnyActiveTariff(): String?
 }

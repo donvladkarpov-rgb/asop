@@ -91,6 +91,7 @@ asop:
       fiscal-events: asop.fiscal.events
       audit-events: asop.audit.events
       gps-events: asop.gps.events
+      payment-events: asop.payment.events
       carrier-events: asop.carrier.events
     send-timeout-ms: 5000
 

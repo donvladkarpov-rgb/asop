@@ -116,6 +116,44 @@ fun TripCascadePicker(
                             textAlign = TextAlign.Center
                         )
                     }
+                    // Промпт 016 §3.6: статус handoff'а банковской карты.
+                    state.bankPayment?.let { bp ->
+                        Spacer(Modifier.height(8.dp))
+                        val bankText: String
+                        val bankColor: Color
+                        when (bp.phase) {
+                            SessionFlowViewModel.BankPaymentPhase.REQUESTED,
+                            SessionFlowViewModel.BankPaymentPhase.PROCESSING -> {
+                                bankColor = MaterialTheme.colorScheme.primary
+                                bankText = "Оплата банковской картой… приложите карту к эквайеру повторно"
+                            }
+                            SessionFlowViewModel.BankPaymentPhase.SUCCESS -> {
+                                bankColor = Color(0xFF4CAF50)
+                                bankText = buildString {
+                                    append("Оплачено")
+                                    if (bp.amount > 0) append(": %.2f ₽".format(bp.amount))
+                                    bp.maskedPan?.let { append(" · карта $it") }
+                                    bp.acqReference?.let { append(" · $it") }
+                                }
+                            }
+                            SessionFlowViewModel.BankPaymentPhase.FAILED -> {
+                                bankColor = Color(0xFFF44336)
+                                bankText = bp.errorMessage ?: "Оплата не прошла"
+                            }
+                            SessionFlowViewModel.BankPaymentPhase.NONE -> {
+                                bankColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                bankText = ""
+                            }
+                        }
+                        if (bankText.isNotEmpty()) {
+                            Text(
+                                bankText,
+                                color = bankColor,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
                 }
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -170,14 +208,23 @@ fun TripCascadePicker(
                 Text("Параметры рейса", fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
 
-                // TID pool (опционально)
+                // TID банковского эквайринга (обязателен — промпт 016 §3.1.7: все платежи/льготы
+                // рейса вешаются на TID, введённый водителем; фискализация резолвит перевозчика по нему)
                 DropdownRow(
-                    label = "TID-пул (опц.)",
+                    label = "TID эквайринга *",
                     rows = tids,
                     payloadParser = ::parseTidPayload,
                     selectedId = state.tripTidId,
                     onPick = { id, label -> viewModel.setTripTid(id, label) }
                 )
+                if (tids.isEmpty()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Для перевозчика нет действующих TID. Обновите справочники (дельта/полная выкачка).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
                 // Vehicle (обязательно)
                 DropdownRow(

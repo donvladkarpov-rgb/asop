@@ -12,11 +12,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import ru.asop.terminal.activation.AsopCardType
-import ru.asop.terminal.db.TerminalKeyCryptor
+import ru.asop.nfc.AsopCardType
+import ru.asop.nfc.TerminalKeyCryptor
+import ru.asop.nfc.Vcm1CardAuth
 import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.entity.PendingEventEntity
-import ru.asop.terminal.nfc.Vcm1CardAuth
 import ru.asop.terminal.network.models.TransactionCompleteRequest
 import ru.asop.terminal.util.JsonUtil
 import ru.asop.terminal.worker.EventTypes

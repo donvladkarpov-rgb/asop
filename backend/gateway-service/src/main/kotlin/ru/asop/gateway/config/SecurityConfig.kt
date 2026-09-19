@@ -74,6 +74,24 @@ class SecurityConfig {
     }
 
     @Bean
+    @Order(2)
+    fun paymentSecurityFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+        // /api/v1/payment/** — контур банковских платежей (prompt_016 §3.1.8):
+        // authorize/report от app-distributor/app-payment — ТОЛЬКО mTLS (client certificate), JWT не принимается.
+        // Публичный callback эквайера идёт через /api/v1/public/** (chain Order(0), ApiKeyHmacFilter) — сюда не попадает.
+        return http
+            .securityMatcher(ServerWebExchangeMatchers.pathMatchers("/api/v1/payment/**"))
+            .csrf { it.disable() }
+            .authorizeExchange { exchanges ->
+                exchanges.anyExchange().authenticated()
+            }
+            .x509 { x509 ->
+                x509.principalExtractor(TerminalPrincipalExtractor())
+            }
+            .build()
+    }
+
+    @Bean
     fun terminalUserDetailsService(): ReactiveUserDetailsService {
         return ReactiveUserDetailsService { serialNumber ->
             val user = User.withUsername(serialNumber)

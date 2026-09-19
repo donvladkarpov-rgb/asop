@@ -7,4 +7,9 @@
             <certificates src="user" />
         </trust-anchors>
     </base-config>
+    <!-- Промпт 016 §3.6: локальный межприложный канал терминал ↔ app-payment
+         (warm-путь HTTP на 127.0.0.1, HMAC-SHA256). Наружу трафик не выходит. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
 </network-security-config>

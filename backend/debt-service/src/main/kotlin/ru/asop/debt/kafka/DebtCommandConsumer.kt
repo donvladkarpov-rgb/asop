@@ -12,16 +12,13 @@ import reactor.core.publisher.Mono
 import ru.asop.common.kafka.KafkaTopic
 import ru.asop.common.watermark.WatermarkProcessor
 import ru.asop.common.watermark.impl.WatermarkProcessorImpl
-import ru.asop.debt.repository.DebtRepository
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.debt.DebtCreatedEvent
 import ru.asop.kafka.events.debt.DebtRecoveredEvent
-import java.time.Instant
 import java.util.UUID
 
 @Component
 class DebtCommandConsumer(
-    private val debtRepository: DebtRepository,
     private val db: DatabaseClient,
     private val objectMapper: ObjectMapper,
     private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
@@ -64,32 +61,30 @@ class DebtCommandConsumer(
     private fun handleDebtCreated(event: DebtCreatedEvent, eventId: UUID, terminalId: UUID?, seq: Long, rawJson: String) {
         log.info("Processing DebtCreatedEvent: debtId={} seq={}", event.debtId, seq)
 
-        val sql = """INSERT INTO ASOP_CARD_DEBTS
-            (DEBT_ID, CARD_ID, SESSION_ID, TERMINAL_ID, CARRIER_ID, DEBT_AMOUNT, CURRENCY,
-             DEBT_STATUS, DEBT_OPENED_AT, DEBT_DUE_DATE, CREATED_AT, UPDATED_AT)
-            VALUES (:debtId, :cardId, :sessionId, :terminalId, :carrierId, :debtAmount, 'RUB',
-                    'OPEN', :debtOpenedAt, :debtDueDate, :createdAt, :updatedAt)"""
-
-        val now = Instant.now()
-        val sessionId = event.sessionId
-        val eventTerminalId = event.terminalId
-
-        var spec: DatabaseClient.GenericExecuteSpec = db.sql(sql)
+        // Промпт 016 §3.1.6: долг и стоп-лист создаёт продуктивная функция fn_create_card_debt
+        // (суммарный открытый долг >= порога blacklist.debtThreshold из base-конфига → NEGATIVE_BALANCE
+        // с AUTO_UNBLOCK_ON_RECOVERY). dueDate = NOW() + 30 суток (как раньше кодировалось в Kotlin).
+        var spec: DatabaseClient.GenericExecuteSpec = db.sql("""
+            SELECT fn_create_card_debt(
+                :debtId, :cardId, :transactionId, :sessionId, :terminalId, :carrierId, :debtAmount, 30
+            )
+        """.trimIndent())
             .bind("debtId", event.debtId)
             .bind("cardId", event.cardId)
             .bind("carrierId", event.carrierId)
             .bind("debtAmount", event.debtAmount)
-            .bind("debtOpenedAt", event.debtOpenedAt)
-            .bind("debtDueDate", event.debtDueDate)
-            .bind("createdAt", now)
-            .bind("updatedAt", now)
 
+        val sessionId = event.sessionId
+        val eventTerminalId = event.terminalId
+        val transactionId = event.transactionId
+        spec = if (transactionId != null) spec.bind("transactionId", transactionId)
+        else spec.bindNull("transactionId", UUID::class.java)
         spec = if (sessionId != null) spec.bind("sessionId", sessionId)
         else spec.bindNull("sessionId", UUID::class.java)
         spec = if (eventTerminalId != null) spec.bind("terminalId", eventTerminalId)
         else spec.bindNull("terminalId", UUID::class.java)
 
-        val applyMono: Mono<Void> = spec.fetch().rowsUpdated().then()
+        val applyMono: Mono<Void> = spec.fetch().first().then()
 
         if (terminalId == null) {
             applyMono
@@ -119,18 +114,16 @@ class DebtCommandConsumer(
     private fun handleDebtRecovered(event: DebtRecoveredEvent, eventId: UUID, terminalId: UUID?, seq: Long, rawJson: String) {
         log.info("Processing DebtRecoveredEvent: debtId={} seq={}", event.debtId, seq)
 
-        val applyMono: Mono<Void> = debtRepository.findById(event.debtId)
-            .switchIfEmpty(Mono.error(IllegalStateException("Debt not found: ${event.debtId}")))
-            .flatMap { existing ->
-                val sql = """UPDATE ASOP_CARD_DEBTS
-                    SET DEBT_STATUS = 'RECOVERED', RECOVERED_AT = :recoveredAt, UPDATED_AT = :updatedAt
-                    WHERE DEBT_ID = :debtId"""
-                db.sql(sql)
-                    .bind("recoveredAt", Instant.now())
-                    .bind("updatedAt", Instant.now())
-                    .bind("debtId", event.debtId)
-                    .fetch().rowsUpdated().then()
-            }
+        // Промпт 016 §3.1.6: fn_recover_card_debt помечает долг RECOVERED и, если остались
+        // открытые долги >= порога, пере-блокирует карту (иначе — авто-unblock).
+        val applyMono: Mono<Void> = db.sql("""
+            SELECT fn_recover_card_debt(:debtId, :recoveryTransactionId)
+        """.trimIndent())
+            .bind("debtId", event.debtId)
+            .bind("recoveryTransactionId", event.recoveryTransactionId)
+            .fetch()
+            .first()
+            .then()
 
         if (terminalId == null) {
             applyMono

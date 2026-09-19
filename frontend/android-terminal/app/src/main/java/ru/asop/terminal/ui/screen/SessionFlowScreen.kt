@@ -38,10 +38,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.text.font.FontWeight
-import ru.asop.terminal.nfc.Vcm1CardAuth
+import ru.asop.nfc.Vcm1CardAuth
 import ru.asop.terminal.nfc.NfcReaderRefCount
+import ru.asop.terminal.payment.PaymentHandoff
 
 /**
  * Промпт 011: shared layout для OpenShift/CloseShift/OpenTrip/CloseTrip.
@@ -62,6 +65,39 @@ fun SessionFlowScreen(
     val activity = remember { resolveActivity(context) }
     val nfcAdapter = remember { NfcAdapter.getDefaultAdapter(context) }
     var nfcEnabled by remember { mutableStateOf(false) }
+
+    // Промпт 016 §3.6: пока идёт handoff банковской карты (REQUESTED/PROCESSING),
+    // терминал гасит свой reader и НЕ арм'ит его — NFC нужен app-payment единолично.
+    val handingOff = state.bankPayment?.handingOff == true
+
+    val bankPaymentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_CANCELED && result.data == null) {
+            viewModel.onBankPaymentCancelled()
+        } else {
+            viewModel.onBankPaymentResult(PaymentHandoff.parseResult(result.resultCode, result.data))
+        }
+    }
+
+    // Запуск app-payment ровно один раз на requestId, когда VM перешёл в REQUESTED.
+    LaunchedEffect(state.bankPayment?.phase, state.bankPayment?.requestId) {
+        val bp = state.bankPayment
+        if (bp?.phase == SessionFlowViewModel.BankPaymentPhase.REQUESTED && bp.request != null) {
+            try {
+                bankPaymentLauncher.launch(PaymentHandoff.buildIntent(bp.request))
+            } catch (e: Exception) {
+                Log.w("SessionNFC", "launch app-payment failed: ${e.message}")
+                viewModel.onBankPaymentResult(
+                    PaymentHandoff.Result(
+                        success = false, amount = 0.0, maskedPan = null,
+                        acqReference = null, rrn = null,
+                        errorMessage = "Не удалось запустить приложение оплаты"
+                    )
+                )
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.setKind(initialKind)
@@ -88,7 +124,18 @@ fun SessionFlowScreen(
         }
     }
 
-    DisposableEffect(nfcAdapter, activity, nfcEnabled) {
+    // Видимость экрана — отдельный эффект (key=Unit), чтобы перезапуск reader'а на
+    // границах handoff'а НЕ дёргал onScreenEnter/onScreenExit и не снимал NfcTagBus.claim.
+    DisposableEffect(Unit) {
+        viewModel.onScreenEnter()
+        onDispose { viewModel.onScreenExit() }
+    }
+
+    // handingOff в ключах: при старте/окончании handoff эффект перезапускается и
+    // симметрично disarm'ит/re-arm'ит reader (экран при этом НЕ размонтируется, поэтому
+    // onDispose экрана тут не сработал бы). После возврата из app-payment handingOff=false →
+    // reader снова заармлен, NfcTagBus остаётся под claim'ом до release в VM.
+    DisposableEffect(nfcAdapter, activity, nfcEnabled, handingOff) {
         // Промпт 013: НЕ кейаться на state.cardStep! Раньше при переходе в
         // PROCESSING DisposableEffect перезапускался: disabled → re-enabled
         // ReaderMode/ForegroundDispatch ПРЯМО посреди read (между Room-запросом
@@ -106,10 +153,7 @@ fun SessionFlowScreen(
         // и убивал читалку нового экрана → tap после повторного входа «ничего не делал».
         // Решение: общий NfcReaderRefCount (SessionFlow + CardActivation + CardRead) —
         // disable только когда НИКТО больше не держит reader.
-        val needsActiveReader = nfcEnabled
-        // Ревью-фикс: шину NfcTagBus потребляет только ВИДИМЫЙ экран — dormant-VM
-        // в backstack больше не перехватывает таги (см. SessionFlowViewModel.onScreenEnter).
-        viewModel.onScreenEnter()
+        val needsActiveReader = nfcEnabled && !handingOff
         // Ревью-фикс: acquire/release СИММЕТРИЧНО в рамках ЭТОГО инстанса эффекта.
         // Эффект перезапускается при флипе nfcEnabled false→true: первый инстанс
         // не приобретал, но его onDispose делал release → рефкаунт андерфлоу →
@@ -161,7 +205,6 @@ fun SessionFlowScreen(
             acquired = true
         }
         onDispose {
-            viewModel.onScreenExit()
             // Промпт 013b/014: не вызываем disable без рефкаунта — иначе late onDispose
             // старого экрана убивает reader активного. Дизейблим только если refcount==0.
             if (acquired && nfcAdapter != null && activity != null && NfcReaderRefCount.releaseAndShouldDisable()) {

@@ -116,3 +116,4 @@ frontend/android-test/app/src/main/assets/expected-all.json
 # прямо в CWD репозитория вместо app/build/... (которые покрыты **/build/ выше).
 /classes*.dex
 /frontend/**/classes*.dex
+/doc/soft/

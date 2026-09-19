@@ -176,3 +176,44 @@ payment-service (новый модуль, порт ~809x)
 - [x] Контакты Feitian для запроса SDK: `info@ftsafe.com`, `sales-support1@ftsafe.com`
 - [x] Определена архитектура: F20 → V8 SDK → ASOP → Gateway → payment-service → VIP → ВТБ
 - [x] Определён гибрид online/offline режим
+
+## Статус Фазы 3 (android-payment) — e2e PoC на F20 (2026-09-18)
+
+**Сделано и проверено на реальном устройстве Feitian F20:**
+- [x] `frontend/android-payment/` — отдельная Gradle-сборка (namespace `ru.asop.payment`, AGP 8.7.0/Kotlin 2.0.21), APK установлен.
+- [x] Локальный HTTP-сервер `0.0.0.0:8790` + HMAC-SHA256 (по timestamp, `X-API-Key`/`X-Timestamp`/`X-Signature`, секрет `asop-payment-pairing-dev-secret`); `/capabilities`, `/pay`, `/status/{requestId}`, `/status`, `/void`. Идемпотентность `/pay` по `requestId`; float-фикс `round(amount*100)%100` (100.01→10001, не 10000).
+- [x] Mock-эквайер по копейкам: `.01`→DECLINED, `.02`→TIMEOUT, `.03`→DEFERRED (74), `.04`→PENDING (REAUTH), `.05`→DUPLICATE, иначе APPROVED. `errorCode:null`-фикс (JSONObject.NULL/отсутствие/`"null"` → null).
+- [x] **Handoff e2e**: `am start -a ru.asop.payment.ACTION_PAY --es request <PayRequest JSON>` → `PaymentMain` → `payResult` APPTOVED с `acqReference=MOCK-<requestId>`; результат поллится `/status/{requestId}`.
+- [x] **FTSDK**: `NfcReader.getInstance(context)` null ДО `ServiceManager.bindPosServer(context, callback)` (async-bind, CountDownLatch). `checkNFCCardreader=0` (NFC доступен), `isExist=false` (нет карты на поле). Прогрев при старте (PaymentApp.onCreate) — bind ~3 c; ретрай 2×.
+- [x] **Offline-очередь отчётов**: Room `pending_payments` (`PendingPaymentEntity`: requestId/paymentId/payloadJson/paymentType/reportStatus PENDING|SENT, version 2 destructive). `ReportWorker` (WorkManager, 15 мин, CONNECTED) → `ReportPayload.build` (PayResponse → PaymentReportRequest JSON, `AUTHORIZED/DECLINED/FAILED/DEFERRED/REVERSED`) → `AcquirerReportClient` (store-and-forward, seam под mTLS после pairing). Проверено содержимое `pending_payments` (row PENDING, type FARE).
+
+**Осталось (блокировано):**
+- Pairing/provisioning: mTLS client-cert via cert-sign + `DistributionConfig.setPaired` — участок вклчён (seam), транспорт по сертификату написать после ВТБ.
+- Реальный EMV-контур (FTSDK EMV + key-инжекция) — ждёт SDK/ключей от ВТБ (`VtbSirposAdapter` — заглушка, интерфейс TBD).
+- UI-доработка (список последних платежей, настройка) — косметика.
+- End-to-end handoff терминал→app-payment на физическом карте (тап банковской карты) — терминал пересобран (`PaymentHandoff` под контракт `ACTION_PAY`/`EXTRA_REQUEST`=`PayRequest`/`EXTRA_RESULT`=`PayResponse`), требуется тап карты.
+
+## Статус Фазы 4 — asop-nfc-lib + android-distributor (scaffold, 2026-09-19)
+
+**Общее NFC/VCM1-ядро вынесено в standalone lib (composite build), дистрибьютор — рабочий scaffold.**
+Решение по объёму (подтверждено): либа + scaffold БЕЗ серверного delta-sync (ключи/тарифы пока static/injected).
+
+- [x] `frontend/android-nfc/` — lib `asop-nfc-lib` (group `ru.asop.nfc`, v0.1.0, AGP 8.7.0/Kotlin 2.0.21, minSdk 26, compose не нужен).
+  Классы: `AsopCardType` (+`allRolesForBitmask`/`CardActivationMatrix`), `EntityType`, `CardIdentityVcm1` (VCM1 encode/decode, magic, tripsLeft), `Vcm1CardAuth` (read/readWithSession + `Session.updateTrips` в той же mfc-сессии — F20 требованием), `MifareClassicVcm1` (detectState/write/writeTripsLeft, multiPassWrite, factory-keys), `TerminalKeyCryptor` (AES-GCM Keystore, без Hilt). `./gradlew :asop-nfc-lib:assembleDebug` — зелёное.
+- [x] `frontend/android-distributor/` — `settings.gradle.kts` c `includeBuild("../android-nfc")`; app-build (namespace `ru.asop.distributor`, dependency `ru.asop.nfc:asop-nfc-lib:0.1.0`, Compose + uuid-creator). `./gradlew :app:assembleDebug` — зелёное, APK установлен на F20, activity стартует без краша (NFC `state=on`).
+- [x] Флоу `TopUpViewModel`: оператор-карта (auth, роль `DISTRIBUTOR_ADMIN/DISTRIBUTOR_DISPATCHER/SUPER_ADMIN`) → карта пассажира (`readWithSession`, живёт в сессии) → сумма пополнения → `PaymentClient.pay(...)` (HMAC, `127.0.0.1:8790`, cleartext разрешён только для `127.0.0.1` в `network_security_config`) → APPROVED → `Session.updateTrips` (local VCM1-write) → статус. Фолбэк «Наличные» (`cashIndex`).
+- [x] Контракт distributor→app-payment подтверждён e2e на устройстве: POST `/pay` (`paymentType=TOPUP`, capture, message, секрет `asop-payment-pairing-dev-secret`) на живой `LocalPaymentServer` F20 → `APPROVED`, `paymentId`, `acqReference=MOCK-...` (получен curl'ом ровно тем же HMAC/SHA-телом, что шлёт `PaymentClient`).
+
+**Осталось (Phase 4+, по шагам):**
+- Тап физических карт на F20: операторская VCM1 → пассажирская VCM1 → запись tripsLeft + `/pay` в одном прогоне (нужен доступ к устройству с картами).
+- Серверный контур для distributor: идентичность (cert-sign), онбординг `distributor_terminals`, delta-sync `asop_keys`/`asop_tariff_rates` (заменить static `KeyProvider`/`TariffProvider`).
+- [x] Миграция `android-terminal` на `asop-nfc-lib` — выполнена (см. ниже).
+
+## Статус Phase 4 миграции — android-terminal → asop-nfc-lib (2026-09-19)
+
+- [x] Подключение композита: `frontend/android-terminal/settings.gradle.kts` — `includeBuild("../android-nfc")`; `app/build.gradle.kts` — `implementation("ru.asop.nfc:asop-nfc-lib:0.1.0")`.
+- [x] Удалены дубли терминала: `activation/AsopCardType.kt`, `activation/EntityType.kt`, `activation/CardIdentityVcm1.kt`, `nfc/Vcm1CardAuth.kt`, `db/TerminalKeyCryptor.kt` (переходим на `ru.asop.nfc.*`).
+- [x] Usage переключен на `ru.asop.nfc.*`: `CardReadViewModel`, `CardActivationScreen`, `SessionFlowScreen`, `TopUpViewModel`, `SessionFlowViewModel` (import+FQ), `CardActivationViewModel` (import+FQ), `MifareClassicReader`, `MifareClassicCardWriter`, `DesfireCardReader`, `ReferenceSyncStore` (import `ru.asop.nfc.TerminalKeyCryptor` — раньше resolve по пакету `db`).
+- [x] Hilt: `AppModule.provideTerminalKeyCryptor()` (`@Provides @Singleton`) для lib-версии без `@Inject`.
+- [x] В терминале остались терминал-специфичные: `nfc/MifareClassicCardWriter` (SAC1-легаси, `readVcm1`, `DetectResult`/matchedKey), `nfc/MifareClassicReader`, `nfc/DesfireCardReader`, `cardIdentity` UI/VMs. В lib НЕ выносилось.
+- [x] Тесты: `CardIdentityVcm1Test` приведён к актуальной clean-break семантике (биты/роли под текущий порядок enum `AsopCardType`, `EntityType` только USER/NONE, `forAsopCardTypeOrdinal(13)=NONE`; часть ожиданий была латентно сломана pre-009 — вскрыта clean-сборкой). `./gradlew :app:clean :app:assembleDebug :app:testDebugUnitTest` — BUILD SUCCESSFUL, 11 тестов зелёные.

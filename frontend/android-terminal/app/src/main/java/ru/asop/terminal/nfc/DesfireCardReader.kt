@@ -123,7 +123,7 @@ object DesfireCardReader {
          */
         @Deprecated("Use vcm1Identity — SAC1 is no longer used for Classic cards (промпт 008)")
         val sac1Identity: AsopIdentity? = null,
-        val vcm1Identity: ru.asop.terminal.activation.CardIdentityVcm1? = null
+        val vcm1Identity: ru.asop.nfc.CardIdentityVcm1? = null
     )
 
     data class ReadResult(
