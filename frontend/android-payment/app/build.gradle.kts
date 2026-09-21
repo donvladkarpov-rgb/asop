@@ -27,6 +27,10 @@ android {
 
         buildConfigField("String", "GATEWAY_BASE_URL", "\"https://$gatewayHost:8080\"")
         buildConfigField("String", "PAYMENT_HMAC_SECRET", "\"${localProps.getProperty("payment.hmac.secret", "asop-payment-pairing-dev-secret")}\"")
+        buildConfigField("String", "CERT_SIGN_API_KEY", "\"${localProps.getProperty("cert.sign.api.key", "asop-terminal-cert-key")}\"")
+        buildConfigField("String", "CERT_SIGN_HMAC_SECRET", "\"${localProps.getProperty("cert.sign.hmac.secret", "9f8e7d6c5b4a3210fedcba9876543210fedcba9876543210fedcba9876543210")}\"")
+        buildConfigField("String", "DISTRIBUTOR_CARDS_DISTRIBUTOR_ID", "\"${localProps.getProperty("distributor.cards.distributor.id", "00000000-0000-0000-0000-112000000300")}\"")
+        buildConfigField("String", "PAYMENT_PROVIDER_ID", "\"${localProps.getProperty("distributor.payment.provider", "MOCK-PAY")}\"")
         buildConfigField("boolean", "PO_C_MOCK_EMV", "true")
     }
 
@@ -96,6 +100,9 @@ dependencies {
 
     // DataStore (pairing-секрет)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // OkHttp (mTLS provider-контур: cert-sign + report поверх client-cert)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     // UUIDv7
     implementation("com.github.f4b6a3:uuid-creator:6.0.0")

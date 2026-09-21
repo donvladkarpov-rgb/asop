@@ -7,8 +7,11 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import kotlinx.coroutines.runBlocking
+import ru.asop.payment.cert.CertManager
 import ru.asop.payment.core.CardProbe
 import ru.asop.payment.core.LocalPaymentServer
+import ru.asop.payment.network.ProvisioningManager
 import ru.asop.payment.worker.ReportWorker
 import java.util.concurrent.TimeUnit
 
@@ -23,6 +26,13 @@ class PaymentApp : Application() {
         // Прогрев FTSDK ServiceManager при старте: первый handoff не ждёт bind (25 c).
         Thread({ CardProbe.get(this).checkNfc() }, "ftsdk-warmup").start()
         scheduleReportWorker(this)
+        startProvisioning(this)
+    }
+
+    /** mTLS provisioning (cert-sign по образцу distributor) — в фоне, не блокирует старт. */
+    private fun startProvisioning(context: Context) {
+        val provisioning = ProvisioningManager(context, CertManager(context))
+        Thread({ runBlocking { provisioning.provision() } }, "payment-provisioning").start()
     }
 
     /** Периодическая доставка отчётов о платежах (офлайн-очередь §4.3). */

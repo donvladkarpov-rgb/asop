@@ -116,6 +116,7 @@ class SecurityConfig {
                     .pathMatchers(HttpMethod.GET, "/api/v1/events/**").permitAll()
                     .pathMatchers(HttpMethod.GET, "/api/v1/regions/**", "/api/v1/carriers/**").permitAll()
                     .pathMatchers(HttpMethod.GET, "/api/v1/keys/public").permitAll()
+                    .pathMatchers(HttpMethod.POST, "/api/v1/distributor-terminals/cert-sign").permitAll()
                     .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                     .anyExchange().authenticated()
             }

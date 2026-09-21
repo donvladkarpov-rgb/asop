@@ -11,8 +11,10 @@ import reactor.core.publisher.Mono
 import ru.asop.common.util.UuidUtils
 import ru.asop.kafka.events.terminal.CertIssued
 import ru.asop.kafka.events.terminal.CertStored
+import ru.asop.terminal.model.DistributorTerminalEntity
 import ru.asop.terminal.model.TerminalCertEntity
 import ru.asop.terminal.model.TerminalEntity
+import ru.asop.terminal.repository.DistributorTerminalRepository
 import ru.asop.terminal.repository.TerminalRepository
 import java.time.Instant
 import java.util.UUID
@@ -31,6 +33,7 @@ import java.util.UUID
 @Service
 class CertCommandService(
     private val terminalRepository: TerminalRepository,
+    private val distributorTerminalRepository: DistributorTerminalRepository,
     private val r2dbcTemplate: R2dbcEntityTemplate,
     private val transactionalOperator: TransactionalOperator,
     private val certEventPublisher: CertEventPublisher
@@ -47,11 +50,15 @@ class CertCommandService(
     ) {
         val eventId = parseEventId(eventIdHeader, event.correlationId)
         log.info(
-            "CertIssued received: eventId={}, terminalId={}, serial={}, certSerial={}",
-            eventId, event.terminalId, event.terminalSerial, event.certSerialNumber
+            "CertIssued received: eventId={}, terminalId={}, serial={}, certSerial={}, distributor={}",
+            eventId, event.terminalId, event.terminalSerial, event.certSerialNumber, event.distributor
         )
 
         try {
+            if (event.distributor) {
+                handleDistributor(event, eventId)
+                return
+            }
             val newCert = buildNewCert(event)
             val savedCert = transactionalOperator.transactional(
                 ensureTerminal(event)
@@ -93,6 +100,73 @@ class CertCommandService(
                 reason = e.message ?: e::class.simpleName ?: "Unknown error"
             ).subscribe()
         }
+    }
+
+    /**
+     * Ветка дистрибьютора: сохраняем ASOP_DISTRIBUTOR_TERMINALS (НЕ ASOP_TERMINALS),
+     * сертификат на сервере не храним (mTLS валидируется через CA-цепочку truststore).
+     */
+    private fun handleDistributor(event: CertIssued, eventId: UUID) {
+        val cardsId = event.cardsDistributorId
+        val provider = event.paymentProviderId
+        if (cardsId == null || provider.isNullOrBlank()) {
+            throw IllegalArgumentException(
+                "distributor cert-sign requires cardsDistributorId + paymentProviderId"
+            )
+        }
+        val savedTerminalId = transactionalOperator.transactional(
+            distributorTerminalRepository.findByTerminalSerial(event.terminalSerial)
+                .next()
+                .flatMap { existing ->
+                    val updated = existing.copy(
+                        cardsDistributorId = cardsId,
+                        paymentProviderId = provider,
+                        terminalNumber = event.terminalNumber ?: existing.terminalNumber,
+                        terminalModel = event.terminalModel ?: existing.terminalModel,
+                        updatedAt = Instant.now()
+                    )
+                    distributorTerminalRepository.save(updated).map { it.distributorTerminalId }
+                }
+                .switchIfEmpty(
+                    Mono.defer {
+                        val now = Instant.now()
+                        val entity = DistributorTerminalEntity(
+                            distributorTerminalId = event.terminalId,
+                            cardsDistributorId = cardsId,
+                            contractId = null,
+                            terminalNumber = event.terminalNumber ?: event.terminalSerial,
+                            terminalSerial = event.terminalSerial,
+                            terminalModel = event.terminalModel,
+                            paymentProviderId = provider,
+                            status = "WAREHOUSE",
+                            molUserId = null,
+                            profileId = null,
+                            softwareVersionId = null,
+                            createdAt = now,
+                            updatedAt = now
+                        )
+                        r2dbcTemplate.insert(entity).map { it.distributorTerminalId }
+                    }
+                )
+        ).block() ?: error("Empty result after distributor terminal upsert")
+
+        val stored = CertStored(
+            certId = UuidUtils.newId(),
+            terminalId = savedTerminalId,
+            terminalNumber = event.terminalNumber,
+            certSerial = event.certSerialNumber,
+            certificateBase64 = event.certificateBase64,
+            validFrom = event.validFrom,
+            validUntil = event.validUntil,
+            caChain = event.caChain,
+            correlationId = eventId
+        )
+        certEventPublisher.publishStored(stored).subscribe()
+
+        log.info(
+            "CertStored (distributor): eventId={}, distributorTerminalId={}",
+            eventId, savedTerminalId
+        )
     }
 
     private fun ensureTerminal(event: CertIssued): Mono<UUID> {

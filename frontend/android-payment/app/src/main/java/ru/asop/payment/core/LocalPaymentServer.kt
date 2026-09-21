@@ -23,6 +23,7 @@ import kotlin.concurrent.thread
 class LocalPaymentServer private constructor(context: Context) {
 
     private val tag = "LocalPaymentServer"
+    private val appContext = context.applicationContext
     private val processor = PayProcessor(context)
     private val store = PendingPaymentStore.get(context)
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -84,6 +85,9 @@ class LocalPaymentServer private constructor(context: Context) {
         val path = req.path
         return when {
             path == METHOD_CAPABILITIES && req.method == "GET" -> respondJson(200, capabilitiesJson())
+            path == "/probe/card" && req.method == "GET" -> handleProbeCard()
+            path == "/probe/emv" && req.method == "GET" -> handleProbeEmv()
+            path == "/probe/startemv" && req.method == "GET" -> handleProbeStartEmv()
             path.startsWith(METHOD_PAY) && req.method == "POST" -> handlePay(req)
             path.startsWith("/status/") && req.method == "GET" -> handleStatus(req, path.removePrefix("/status/"))
             path.startsWith("/void/") && req.method == "POST" -> handleVoid(req, path.removePrefix("/void/"))
@@ -140,6 +144,28 @@ class LocalPaymentServer private constructor(context: Context) {
 
     private fun capabilitiesJson(): String =
         """{"appVersion":"${BuildConfig.VERSION_NAME}","emv":{"gac":true,"contact":false,"contactless":true,"online":true,"offlineFloorLimit":true},"devices":["F20"],"maxAmount":600000.00}"""
+
+    /** Диагностика: real READ карты через FTSDK NfcReader (ATR + SELECT PPSE), без ключей. */
+    private fun handleProbeCard(): HttpResponse {
+        // Блокирует до детекта карты (timeout 15с) — держать карту на антенне.
+        val result = BankCardProbe.get(appContext).probe()
+        Log.i(tag, "probe/card -> ${result.toJson()}")
+        return respondJson(200, result.toJson())
+    }
+
+    /** Диагностика: real READ через лицензионное EMV-ядро FTSDK (searchCardWithoutEMV → Track2/PAN). */
+    private fun handleProbeEmv(): HttpResponse {
+        val result = EmvProbe.get(appContext).probe()
+        Log.i(tag, "probe/emv -> ${result.toJson()}")
+        return respondJson(200, result.toJson())
+    }
+
+    /** Диагностика: полная EMV-транзакция startEMV (здесь карта отдаёт PAN). */
+    private fun handleProbeStartEmv(): HttpResponse {
+        val result = EmvProbe.get(appContext).startEmvProbe()
+        Log.i(tag, "probe/startemv -> $result")
+        return respondJson(200, result)
+    }
 
     private data class HttpResponse(val code: Int, val reason: String, val body: String?)
     private fun respondJson(code: Int, body: String): HttpResponse =

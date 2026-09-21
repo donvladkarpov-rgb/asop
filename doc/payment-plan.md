@@ -217,3 +217,82 @@ payment-service (новый модуль, порт ~809x)
 - [x] Hilt: `AppModule.provideTerminalKeyCryptor()` (`@Provides @Singleton`) для lib-версии без `@Inject`.
 - [x] В терминале остались терминал-специфичные: `nfc/MifareClassicCardWriter` (SAC1-легаси, `readVcm1`, `DetectResult`/matchedKey), `nfc/MifareClassicReader`, `nfc/DesfireCardReader`, `cardIdentity` UI/VMs. В lib НЕ выносилось.
 - [x] Тесты: `CardIdentityVcm1Test` приведён к актуальной clean-break семантике (биты/роли под текущий порядок enum `AsopCardType`, `EntityType` только USER/NONE, `forAsopCardTypeOrdinal(13)=NONE`; часть ожиданий была латентно сломана pre-009 — вскрыта clean-сборкой). `./gradlew :app:clean :app:assembleDebug :app:testDebugUnitTest` — BUILD SUCCESSFUL, 11 тестов зелёные.
+
+## Статус Фазы 5 — серверный контур android-distributor (prompt_017, 2026-09-19)
+
+**Задача**: серверный контур для `android-distributor`: mTLS-идентичность (cert-sign), идемпотентный онбординг `ASOP_DISTRIBUTOR_TERMINALS`, delta-sync `asop_keys`/`asop_tariff_rates` — заменить static `KeyProvider`/`TariffProvider` на данные с сервера.
+
+**Решение по объёму**: НЕ orchestrator/proto (полный Docker+proto-контур ради distributor не оправдан). Вместо этого новые mTLS-эндпоинты gateway `/api/v1/sync/distributor/**` (chain Order 1) — прямой JSON-`/delta` pull с мастеров:
+- `POST /api/v1/sync/distributor/register` → terminal-service `POST /api/v1/distributor-terminals/register` (upsert по `terminalSerial`, идемпотентно);
+- `GET /api/v1/sync/distributor/keys/delta?versionSince&includeDeleted` → admin `GET /api/v1/asop-keys/delta`;
+- `GET /api/v1/sync/distributor/tariffs/delta?versionSince&includeDeleted` → card `GET /api/v1/tariff-rates/delta`.
+
+`asop_keys` и `asop_tariff_rates` — GLOBAL_TABLES (`MasterRegistry`), поэтому специф-scope (TerminalResolver → carrierId/regionId), как у терминала, для distributor не нужен — тянет глобальные справочники целиком. `ASOP_DISTRIBUTOR_TERMINALS` не имеет VERSION/DELETED_AT — только CRUD-онбординг (не delta-синкается).
+
+**Backend** (`./gradlew clean :backend:terminal-service:build :backend:gateway-service:build -x test` → BUILD SUCCESSFUL):
+- [x] `terminal-service` `DistributorTerminalRepository.findByTerminalSerial`; `DistributorTerminalController.register`: новый serial → insert 201, существующий → update 200, новый без `cardsDistributorId`/`paymentProviderId` → 400, `terminalNumber` default = `terminalSerial`.
+- [x] `gateway-service` `DistributorSyncController` (register / keys-delta / tariffs-delta, query passthrough, ошибка мастера → 502 BAD_GATEWAY). Покрыт mTLS chain `/api/v1/sync/**` (SecurityConfig Order 1).
+
+**Distributor app** (`./gradlew :app:assembleDebug` → BUILD SUCCESSFUL):
+- [x] `cert/CertManager.kt` (ECC P-256, AndroidKeyStore, alias `asop_distributor_cert`, prefs `asop_distributor_cert`), `cert/AsopKeyManager.kt` (mTLS OkHttp, legacy trust-all TrustManager).
+- [x] `network/CertSignHmacInterceptor.kt` (X-API-Key/X-Timestamp/X-Signature, HMAC-SHA256 по timestamp, секреты из BuildConfig), `network/CertSignApi.kt` (cert-sign + poll `/api/v1/events/{id}`), `network/DistributorSyncApi.kt` (register/keys/tariffs, mTLS).
+- [x] `sync/SyncStore.kt` (DataStore: serial, distributor_terminal_id, last_keys_version, last_tariffs_version, keys_json, tariffs_json, synced_at_ms), `sync/ProvisionSyncManager.kt` (certify → poll 4-hop саги → register → keys/tariffs delta → merge).
+- [x] `core/KeyProvider.kt` переписан: кэш из `sync_store.keys()`; каждый цикл `decrypt(keyMaterial)` через `TerminalKeyCryptor`; soft-deleted выбрасываются; кандидаты без KDF-fallback, zero-ключ обязателен в конце; dev-fallback `ByteArray(24){it}` пока ключей нет. `core/TariffProvider.kt`: `defaultFare` = `min(price)` среди active записей с `carrierId/zoneId/pathId` = null → fallback min(active price) → 30.0.
+- [x] `AppGraph.kt` (ручной DI без Hilt: moshi, cryptor, certManager, syncStore, plain/mTLS OkHttp, api-клиенты, syncManager, keyProvider, tariffProvider, paymentClient), `DistributorApp.kt` (держит graph), `MainActivity` (карточка синка + auto-bootstrap при старте, операторская карта из `sync_store`).
+- [x] Moshi: рефлексия (`KotlinJsonAdapterFactory`), без kapt/codegen — DTO без `@JsonClass(generateAdapter=true)`. BuildConfig: `GATEWAY_BASE_URL` (default `10.0.2.2`), `CERT_SIGN_API_KEY`/`CERT_SIGN_HMAC_SECRET` (dev-дефолты = gateway `asop.cert-sign-api-keys`), `DISTRIBUTOR_CARDS_DISTRIBUTOR_ID`, `PAYMENT_PROVIDER_ID`.
+
+**Заметки:**
+- ~~Distributor переиспользует терминальный cert-sign flow~~ → **заменено** (2026-09-20): отдельный distributor cert-sign, без `ASOP_TERMINALS`-артефакта — см. «Статус Фазы 5++» ниже. Сага: gateway (HMAC) → crypto (`CertIssued`) → terminal-service (`CertStored`) → gateway `EventService.complete` → терминал хранит цепочку PEM.
+- mTLS-клиент `AsopKeyManager` без валидации hostname/issuer — MVP (как legacy TrustManager в gateway WebClient).
+- `includeBuild("../android-nfc")` внутри distributor standalone-сборки — ок (вложенный includeBuild ломает только у композит-членов корня, терминал — композит, distributor — нет).
+- Kotlin-нюанс: `/**` внутри KDoc (путь `/distributor/**`) открывает вложенный блок-коммент → «Unclosed comment». В doc-комментариях пути `/distributor/**` нельзя писать с `**` — только `/distributor/...` или экранировать.
+
+**Осталось (Phase 5+ / blocked):**
+- E2E на устройстве: cert-sign → register → keys/tariffs delta (нужен поднятый Docker + `gateway.host` реального шлюза в `frontend/android-distributor/local.properties`; сейчас там только `sdk.dir`).
+- Тап физических карт на F20 (операторская VCM1 → пассажирская VCM1 → tripsLeft + `/pay`) — нужен доступ к устройству с картами.
+- Реальный EMV-контур (FTSDK EMV + ключи ВТБ) — ждёт SDK от ВТБ (`VtbSirposAdapter` — заглушка).
+
+## Статус Фазы 5++ — отдельный distributor cert-sign + app-payment mTLS (2026-09-20)
+
+**Причина**: distributor переиспользовал терминальный `POST /api/v1/terminals/cert-sign`, который через `ensureTerminal` создавал строку в `ASOP_TERMINALS` (и `ASOP_TERMINAL_CERTS`) — артефакт «фейкового терминала». Решено (пользователь): **отдельный distributor cert-sign**.
+
+**Отдельный distributor cert-sign** (backend, `./gradlew clean :backend:gateway-service:build :backend:crypto-service:build :backend:terminal-service:build -x test` — BUILD SUCCESSFUL):
+- `asop-kafka-contracts` `CertEvents.kt`: `CertSignRequested`/`CertIssued` получили `distributor: Boolean`, `cardsDistributorId: UUID?`, `paymentProviderId: String?`, `terminalModel: String?`.
+- `terminal-api` `CertSignRequest`: те же флаги (default `false`/`null`).
+- crypto-service: `CertCommandConsumer`/`CertIssuedPublisher.publishIssued` пробрасывают флаги (passthrough).
+- terminal-service `CertCommandService`: ветка `handleDistributor` (при `distributor=true`) — валидация `cardsDistributorId`+`paymentProviderId`, tx-upsert `ASOP_DISTRIBUTOR_TERMINALS` (НЕ `ASOP_TERMINALS`, НЕ `ASOP_TERMINAL_CERTS`), `CertStored.certId = UuidUtils.newId()` (сервер-side сертификат не хранится).
+- gateway: `CertCommandService.publishDistributor` (+ рефактор `publishEvent`), `CertCommandController` `POST /api/v1/distributor-terminals/cert-sign` (400 при `distributor=false`), `CertSignHmacFilter` допускает оба пути, `SecurityConfig` Order(3) `permitAll(POST …/distributor-terminals/cert-sign)`.
+
+**app-payment mTLS** (переиспользует distributor cert-sign — кросс-решение, без новых серверных правок):
+- `frontend/android-payment`: + OkHttp 4.12.0, BuildConfig `CERT_SIGN_API_KEY`/`CERT_SIGN_HMAC_SECRET`/`DISTRIBUTOR_CARDS_DISTRIBUTOR_ID`/`PAYMENT_PROVIDER_ID`(default `MOCK-PAY`).
+- `cert/CertManager.kt` (ECC P-256, alias `asop_payment_cert`), `cert/AsopKeyManager.kt`, `network/CertSignHmacInterceptor.kt`, `network/ProvisioningManager.kt` (cert-sign → poll → store PEM → `DistributionConfig.setPaired(true)`), `AcquirerReportClient` теперь реально постит `POST /api/v1/payment/report` по mTLS (до pairing — `DEFERRED`).
+- **Ключевой нюанс**: distributor и app-payment на том же F20 имеют **одинаковый `ANDROID_ID`** (один debug-ключ подписи), а cert-sign upsert'ит по `terminalSerial` → без префикса слили бы в одну строку. app-payment использует serial `PAY-<ANDROID_ID>` → вторая строка `ASOP_DISTRIBUTOR_TERMINALS`. Плюс `uq_distributor_terminals_provider_id` (UNIQUE `PAYMENT_PROVIDER_ID`) требует уникального provider на строку (distributor `MOCK`, app-payment `MOCK-PAY`).
+
+**E2E (F20 `of8e6020`, gateway `192.168.1.6:8080`)**:
+- distributor: cert-sign → register (200) → keys(1)/tariffs(250) — строка `3bbdeaa683b76147`, provider `MOCK`.
+- app-payment: cert-sign → цепочка PEM сохранена, `paired=true` — строка `PAY-3bbdeaa683b76147`, provider `MOCK-PAY`.
+- `ASOP_TERMINALS` / `ASOP_TERMINAL_CERTS` — пусты (0/0), артефакта нет.
+
+**Известный гэп (dev OK, prod TODO)**: прямой `keys/delta` у distributor отдаёт `KEY_MATERIAL` = RSA-шифротекст (зашифрован публичным ключом сервера), а `KeyProvider` пытается AES-GCM-дешифровать через `TerminalKeyCryptor` → `decrypt key … failed`, `candidateKeys()` = dev-fallback `DEV_KEY(24) + ZERO_KEY(6)`. В dev-режиме `DEV_KEY` = dev-ключу crypto (`AAECAwQFBgc…`), поэтому тап работает. Для prod нужен RSA→AES-GCM-трансформ (аналог `KeyService` оркестратора) до `mergeKeys`.
+
+## Статус 2026-09-21 — HTTP-handoff, mTLS app-payment, колонки валидаций, EMV-доступ F20
+
+**HTTP-handoff банковской карты (терминал + distributor → app-payment по loopback, без Intent):**
+- Терминал: `payment/PaymentHttpClient.kt` (POST `/pay` + poll `/status`, HMAC по timestamp, `127.0.0.1:8790`); `SessionFlowViewModel.beginBankHandoff` сам шлёт HTTP в корутине (вместо `startActivityForResult(ACTION_PAY)`), `SessionFlowScreen` освобождён от ActivityResult. Промпт «приложите карту повторно» остался в `OpenTripScreen`.
+- Distributor: флоу перестроен под идеал `оператор → сумма+способ → [банк-карта → /pay] → MIFARE запись`; добавлен discriminator `MifareClassic.get(tag) != null` (MIFARE локально, не-MIFARE → HTTP); `TopUpViewModel` переписан (шаги `METHOD`/`BANK_CARD`/`MIFARE_WRITE`, read+write в одной mfc-сессии).
+- Контракт app-payment `/pay` не менялся (`LocalPaymentServer`, HMAC по `x-timestamp`).
+
+**mTLS-идентичность app-payment** (переиспользует distributor cert-sign — решение «крёст»):
+- `cert/CertManager` (алиас `asop_payment_cert`), `cert/AsopKeyManager`, `network/CertSignHmacInterceptor`, `network/ProvisioningManager` (cert-sign → poll → store PEM → `DistributionConfig.setPaired(true)`), `AcquirerReportClient` теперь реально постит `POST /api/v1/payment/report` по mTLS (до pairing — `DEFERRED`).
+- **Нюанс**: distributor и app-payment на одном F20 имеют одинаковый `ANDROID_ID` (один debug-ключ), а cert-sign upsert'ит по `terminalSerial` → app-payment использует serial `PAY-<ANDROID_ID>` → вторая строка `ASOP_DISTRIBUTOR_TERMINALS`; `uq_distributor_terminals_provider_id` требует уникальный provider (distributor `MOCK`, app-payment `MOCK-PAY`). OkHttp добавлен в deps.
+
+**Банк-валидация в web-admin «Валидации»:**
+- Терминал при `APPROVED` банк-картой пишет транзакцию «Оплата проезда» (`…0801`/`…0901`) с `amount`=тариф и метадатой `{bankCard, paymentSystem, cardLast4, cardToken, …}` (`SessionFlowViewModel.recordBankPayment`).
+- `pages/Sessions.tsx`: колонки «Платёж (банк)» (`МИР:*1234` из метадаты) + «Сумма» (`amount`). Платёжная система — из BIN (`PaymentHandoff.paymentSystem`).
+
+**EMV-доступ F20 — диагностика (важный вывод, корректирует прежнее «NFC залочен»):**
+- FTSDK `NfcReader.openCardEx(0)` → `89` (`ERR_OP_TIMEOUT`) — потому что нужен cardType `2`=`CARD_TYPE_RF`, а не `0`(IC).
+- Лицензионное ядро **доступно и работает**: `Emv.searchCard(2)` детектит МИР (ATS-обмен), `Emv.startEMV`/`startTransaction` стартует и задаёт TransData.
+- **PAN карта отдаёт только внутри полной EMV-транзакции** (`SELECT→GPO→READ RECORD` в `startEMV`); через `getCardData("5A")`/`GET DATA` вне транзакции — «данные недоступны».
+- До PAN нужно: корректный драйв интерактивного `startEMV`-флоу + загрузка терминальных параметров (AID-table / CAPK). Секретные MAC/SKI/DEA (ВТБ) — только для онлайн-авторизации.
+- Диагностика в `app-payment`: `core/BankCardProbe.kt`, `core/EmvProbe.kt`, endpoints `GET /probe/card`, `/probe/emv`, `/probe/startemv`.

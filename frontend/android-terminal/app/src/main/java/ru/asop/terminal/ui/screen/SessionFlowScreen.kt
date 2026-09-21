@@ -38,13 +38,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.compose.ui.text.font.FontWeight
 import ru.asop.nfc.Vcm1CardAuth
 import ru.asop.terminal.nfc.NfcReaderRefCount
-import ru.asop.terminal.payment.PaymentHandoff
 
 /**
  * Промпт 011: shared layout для OpenShift/CloseShift/OpenTrip/CloseTrip.
@@ -69,35 +66,6 @@ fun SessionFlowScreen(
     // Промпт 016 §3.6: пока идёт handoff банковской карты (REQUESTED/PROCESSING),
     // терминал гасит свой reader и НЕ арм'ит его — NFC нужен app-payment единолично.
     val handingOff = state.bankPayment?.handingOff == true
-
-    val bankPaymentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_CANCELED && result.data == null) {
-            viewModel.onBankPaymentCancelled()
-        } else {
-            viewModel.onBankPaymentResult(PaymentHandoff.parseResult(result.resultCode, result.data))
-        }
-    }
-
-    // Запуск app-payment ровно один раз на requestId, когда VM перешёл в REQUESTED.
-    LaunchedEffect(state.bankPayment?.phase, state.bankPayment?.requestId) {
-        val bp = state.bankPayment
-        if (bp?.phase == SessionFlowViewModel.BankPaymentPhase.REQUESTED && bp.request != null) {
-            try {
-                bankPaymentLauncher.launch(PaymentHandoff.buildIntent(bp.request))
-            } catch (e: Exception) {
-                Log.w("SessionNFC", "launch app-payment failed: ${e.message}")
-                viewModel.onBankPaymentResult(
-                    PaymentHandoff.Result(
-                        success = false, amount = 0.0, maskedPan = null,
-                        acqReference = null, rrn = null,
-                        errorMessage = "Не удалось запустить приложение оплаты"
-                    )
-                )
-            }
-        }
-    }
 
     LaunchedEffect(Unit) {
         viewModel.setKind(initialKind)

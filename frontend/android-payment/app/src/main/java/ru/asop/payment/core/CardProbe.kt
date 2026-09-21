@@ -41,6 +41,9 @@ class CardProbe private constructor(private val context: Context) {
         ProbeResult(available = false, checkCode = -1, isExist = false, error = e.message)
     }
 
+    /** Подключённый [NfcReader] (bind SystemService при необходимости). null — недоступен. */
+    fun reader(): NfcReader? = connectReader()
+
     private fun connectReader(): NfcReader? {
         if (bounded.get()) return runCatching { NfcReader.getInstance(context) }.getOrNull()
 

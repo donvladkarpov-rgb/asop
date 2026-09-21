@@ -21,9 +21,8 @@ class CertCommandService(
     private val log = LoggerFactory.getLogger(javaClass)
 
     fun publish(request: CertSignRequest): Mono<UUID> {
-        return Mono.fromCallable {
-            val eventId = UuidUtils.newId()
-            val command = CertSignRequested(
+        return publishEvent(request) { eventId ->
+            CertSignRequested(
                 terminalId = request.terminalId,
                 terminalSerial = request.terminalSerial,
                 terminalNumber = request.terminalNumber,
@@ -32,6 +31,34 @@ class CertCommandService(
                 publicKeyBase64 = request.publicKeyBase64,
                 correlationId = eventId
             )
+        }
+    }
+
+    /** Дистрибьютор: сага сохраняет ASOP_DISTRIBUTOR_TERMINALS (distributor=true). */
+    fun publishDistributor(request: CertSignRequest): Mono<UUID> {
+        return publishEvent(request) { eventId ->
+            CertSignRequested(
+                terminalId = request.terminalId,
+                terminalSerial = request.terminalSerial,
+                terminalNumber = request.terminalNumber,
+                terminalModel = request.terminalModel,
+                carrierId = request.carrierId,
+                publicKeyBase64 = request.publicKeyBase64,
+                distributor = true,
+                cardsDistributorId = request.cardsDistributorId,
+                paymentProviderId = request.paymentProviderId,
+                correlationId = eventId
+            )
+        }
+    }
+
+    private fun publishEvent(
+        request: CertSignRequest,
+        commandFactory: (UUID) -> CertSignRequested
+    ): Mono<UUID> {
+        return Mono.fromCallable {
+            val eventId = UuidUtils.newId()
+            val command = commandFactory(eventId)
             eventId to command
         }.flatMap { (eventId, command) ->
             val record = ProducerRecord(

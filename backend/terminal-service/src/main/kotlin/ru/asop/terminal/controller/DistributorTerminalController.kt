@@ -33,6 +33,23 @@ data class DistributorTerminalRequest(
     val softwareVersionId: UUID? = null
 )
 
+/**
+ * Регистрация серверным контуром дистрибьютора (mTLS sync, аналог TerminalRegister).
+ * Upsert по TERMINAL_SERIAL — идемпотентно при re-provision.
+ */
+data class DistributorTerminalRegisterRequest(
+    val terminalSerial: String,
+    val terminalNumber: String? = null,
+    val terminalModel: String? = null,
+    val cardsDistributorId: UUID? = null,
+    val contractId: UUID? = null,
+    val paymentProviderId: String? = null,
+    val status: String? = null,
+    val molUserId: UUID? = null,
+    val profileId: UUID? = null,
+    val softwareVersionId: UUID? = null
+)
+
 data class DistributorTerminalResponse(
     val distributorTerminalId: UUID,
     val cardsDistributorId: UUID,
@@ -77,6 +94,63 @@ class DistributorTerminalController(
         return repository.findById(id)
             .map { ResponseEntity.ok(it.toResponse()) }
             .defaultIfEmpty(ResponseEntity.notFound().build())
+    }
+
+    /**
+     * Идемпотентная регистрация/обновление терминала дистрибьютора по TERMINAL_SERIAL.
+     * Для новой серии обязательны cardsDistributorId + paymentProviderId (NOT NULL в DDL);
+     * terminalNumber при отсутствии = terminalSerial.
+     */
+    @PostMapping("/register")
+    fun register(@RequestBody request: DistributorTerminalRegisterRequest): Mono<ResponseEntity<DistributorTerminalResponse>> {
+        if (request.terminalSerial.isBlank()) {
+            return Mono.just(ResponseEntity.badRequest().build())
+        }
+        return repository.findByTerminalSerial(request.terminalSerial)
+            .next()
+            .flatMap { existing ->
+                val updated = existing.copy(
+                    cardsDistributorId = request.cardsDistributorId ?: existing.cardsDistributorId,
+                    contractId = request.contractId ?: existing.contractId,
+                    terminalNumber = request.terminalNumber ?: existing.terminalNumber,
+                    terminalModel = request.terminalModel ?: existing.terminalModel,
+                    paymentProviderId = request.paymentProviderId ?: existing.paymentProviderId,
+                    status = request.status ?: existing.status,
+                    molUserId = request.molUserId ?: existing.molUserId,
+                    profileId = request.profileId ?: existing.profileId,
+                    softwareVersionId = request.softwareVersionId ?: existing.softwareVersionId,
+                    updatedAt = Instant.now()
+                )
+                repository.save(updated).map { ResponseEntity.ok(it.toResponse()) }
+            }
+            .switchIfEmpty(
+                Mono.defer {
+                    val cardsId = request.cardsDistributorId
+                    val provider = request.paymentProviderId
+                    if (cardsId != null && !provider.isNullOrBlank()) {
+                        val entity = DistributorTerminalEntity(
+                            distributorTerminalId = UuidUtils.newId(),
+                            cardsDistributorId = cardsId,
+                            contractId = request.contractId,
+                            terminalNumber = request.terminalNumber?.takeIf { it.isNotBlank() } ?: request.terminalSerial,
+                            terminalSerial = request.terminalSerial,
+                            terminalModel = request.terminalModel,
+                            paymentProviderId = provider,
+                            status = request.status ?: "WAREHOUSE",
+                            molUserId = request.molUserId,
+                            profileId = request.profileId,
+                            softwareVersionId = request.softwareVersionId,
+                            createdAt = Instant.now(),
+                            updatedAt = Instant.now()
+                        )
+                        template.insert(entity).map {
+                            ResponseEntity.status(HttpStatus.CREATED).body(it.toResponse())
+                        }
+                    } else {
+                        Mono.just(ResponseEntity.status(HttpStatus.BAD_REQUEST).build())
+                    }
+                }
+            )
     }
 
     @PostMapping

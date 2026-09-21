@@ -38,4 +38,29 @@ class CertCommandController(
                     ))
             }
     }
+
+    /** Отдельный cert-sign для android-distributor: сага сохраняет ASOP_DISTRIBUTOR_TERMINALS. */
+    @PostMapping("/api/v1/distributor-terminals/cert-sign")
+    fun requestDistributorCertSign(
+        @Valid @RequestBody request: CertSignRequest
+    ): Mono<ResponseEntity<AcceptedResponse>> {
+        if (!request.distributor) {
+            return Mono.just(ResponseEntity.badRequest().build())
+        }
+        log.info(
+            "Distributor cert-sign requested: terminalSerial={}, distributorId={}, provider={}",
+            request.terminalSerial, request.cardsDistributorId, request.paymentProviderId
+        )
+        return certCommandService.publishDistributor(request)
+            .map { eventId ->
+                ResponseEntity.accepted()
+                    .header("X-Event-Id", eventId.toString())
+                    .body(AcceptedResponse(
+                        eventId = eventId,
+                        topic = "asop.terminal.cert.commands",
+                        acceptedAt = Instant.now(),
+                        locationHint = "/api/v1/distributor-terminals/{id}"
+                    ))
+            }
+    }
 }

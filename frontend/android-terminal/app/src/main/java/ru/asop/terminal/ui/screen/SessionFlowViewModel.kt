@@ -38,6 +38,7 @@ import ru.asop.terminal.nfc.TapCardKind
 import ru.asop.terminal.nfc.TonePlayer
 import ru.asop.nfc.Vcm1CardAuth
 import ru.asop.terminal.payment.PaymentHandoff
+import ru.asop.terminal.payment.PaymentHttpClient
 import ru.asop.terminal.util.JsonUtil
 import ru.asop.terminal.worker.EventTypes
 import javax.inject.Inject
@@ -988,6 +989,83 @@ class SessionFlowViewModel @Inject constructor(
         } catch (e: Exception) { carrierFilter }
     }
 
+    /**
+     * Промпт 016: запись банковской оплаты проезда как транзакции (тип «Оплата проезда»
+     * …0801 / результат «Успешно» …0901). Сумма = тариф, метаданные несут платёжную
+     * систему, последние 4 цифры и CARD_TOKEN (для серверного резолва льготы по
+     * ASOP_CARDS.USER_ID — банк-карта и MIFARE в общей базовой таблице ASOP_CARDS).
+     */
+    fun recordBankPayment(result: PaymentHandoff.Result) {
+        val trip = _state.value.openTrip ?: return
+        _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
+        viewModelScope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                val paymentId = UuidCreator.getTimeOrderedEpoch().toString()
+                val paymentTypeId = "00000000-0000-0000-0000-000000000801"   // Оплата проезда
+                val resultId = "00000000-0000-0000-0000-000000000901"         // Успешно
+                val system = PaymentHandoff.paymentSystem(result.bin)
+
+                val meta = org.json.JSONObject().apply {
+                    put("bankCard", true)
+                    put("paymentSystem", system ?: org.json.JSONObject.NULL)
+                    put("cardLast4", result.cardLast4 ?: org.json.JSONObject.NULL)
+                    put("amount", result.amount)
+                    put("cardToken", result.cardToken ?: org.json.JSONObject.NULL)
+                    put("acqReference", result.acqReference ?: org.json.JSONObject.NULL)
+                    put("rrn", result.rrn ?: org.json.JSONObject.NULL)
+                    put("benefitId", org.json.JSONObject.NULL)
+                    put("tripsAt", now)
+                }.toString()
+
+                val payment = TripPaymentEntity(
+                    id = paymentId,
+                    tripSessionId = trip.id,
+                    cardId = null,
+                    transactionTypeId = paymentTypeId,
+                    transactionResultId = resultId,
+                    amount = result.amount,
+                    currency = "RUB",
+                    timestamp = now,
+                    regionId = trip.regionId,
+                    carrierId = trip.carrierId,
+                    timezone = trip.timezone,
+                    lastSyncAt = null,
+                    metadata = meta
+                )
+                tripPaymentDao.insert(payment)
+
+                val payload = TransactionCompleteRequest(
+                    sessionId = trip.id,
+                    transactionTypeId = paymentTypeId,
+                    transactionResultId = resultId,
+                    amount = result.amount,
+                    currency = "RUB",
+                    cardId = null,
+                    metadata = meta,
+                    regionId = trip.regionId,
+                    carrierId = trip.carrierId,
+                    timezone = trip.timezone
+                )
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = paymentId,
+                        topic = "asop.transaction.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.TRANSACTION_COMPLETE,
+                        pathParam = null,
+                        seq = syncPreferences.nextSeq()
+                    )
+                )
+                workScheduler.enqueueOneShotSync()
+                _state.update { it.copy(submitState = SubmitState.IDLE) }
+            } catch (e: Exception) {
+                android.util.Log.e("SessionFlowVM", "recordBankPayment failed", e)
+                _state.update { it.copy(submitState = SubmitState.IDLE) }
+            }
+        }
+    }
+
     /** Название льготы из справочника asop_benefits (для показа при валидации). */
     private suspend fun lookupBenefitName(benefitId: String): String? {
         return try {
@@ -1265,6 +1343,13 @@ class SessionFlowViewModel @Inject constructor(
                 )
             )
         }
+        // Промпт 016 §3.6 (HTTP-контур): терминал шлёт POST /pay в app-payment по loopback
+        // (фоновый сервис, без Intent/foreground). Пока app-payment ждёт карту (FTSDK),
+        // UI показывает «приложите карту повторно»; результат — через onBankPaymentResult.
+        viewModelScope.launch {
+            val result = PaymentHttpClient().pay(request)
+            onBankPaymentResult(result)
+        }
     }
 
     /** Результат из app-payment (ActivityResult). */
@@ -1273,6 +1358,7 @@ class SessionFlowViewModel @Inject constructor(
         val current = _state.value.bankPayment
         if (result.success) {
             TonePlayer.successBeep()
+            recordBankPayment(result)
             _state.update {
                 it.copy(
                     cardStep = CardStep.IDLE,

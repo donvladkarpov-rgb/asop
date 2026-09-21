@@ -22,22 +22,30 @@ class CertIssuedPublisher(
         terminalId: UUID,
         terminalSerial: String,
         terminalNumber: String?,
+        terminalModel: String? = null,
         certificateBase64: String,
         serialNumber: String,
         validFrom: Instant,
         validUntil: Instant,
-        caChain: String
+        caChain: String,
+        distributor: Boolean = false,
+        cardsDistributorId: UUID? = null,
+        paymentProviderId: String? = null
     ): Mono<Void> {
         return Mono.fromRunnable<Unit> {
             val event = CertIssued(
                 terminalId = terminalId,
                 terminalSerial = terminalSerial,
                 terminalNumber = terminalNumber,
+                terminalModel = terminalModel,
                 certificateBase64 = certificateBase64,
                 certSerialNumber = serialNumber,
                 validFrom = validFrom,
                 validUntil = validUntil,
                 caChain = caChain,
+                distributor = distributor,
+                cardsDistributorId = cardsDistributorId,
+                paymentProviderId = paymentProviderId,
                 correlationId = eventId
             )
             val record = ProducerRecord(

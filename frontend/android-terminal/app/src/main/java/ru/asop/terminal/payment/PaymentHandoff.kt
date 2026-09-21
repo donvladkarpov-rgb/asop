@@ -80,8 +80,24 @@ object PaymentHandoff {
         val maskedPan: String?,
         val acqReference: String?,
         val rrn: String?,
-        val errorMessage: String?
+        val errorMessage: String?,
+        val bin: String? = null,
+        val cardLast4: String? = null,
+        val cardToken: String? = null
     )
+
+    /**
+     * Платёжная система по BIN (первые 6 цифр). МИР 2200–2204, Visa 4xxx,
+     * MasterCard 5xxx / 2221–2720. null — не распознано/нет BIN.
+     */
+    fun paymentSystem(bin: String?): String? = when {
+        bin.isNullOrBlank() -> null
+        bin.startsWith("220") -> "МИР"
+        bin.startsWith("4") -> "Visa"
+        bin.startsWith("5") -> "MasterCard"
+        bin.toLongOrNull()?.let { it in 222100L..272099L } == true -> "MasterCard"
+        else -> null
+    }
 
     fun isPaymentAppInstalled(context: Context): Boolean {
         val intent = Intent(ACTION_PAY).setPackage(PAYMENT_PACKAGE)
