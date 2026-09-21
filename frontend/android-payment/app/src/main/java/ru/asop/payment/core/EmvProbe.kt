@@ -162,9 +162,36 @@ class EmvProbe private constructor(private val context: Context) {
                     flow.append("[PAN=$pan]")
                 }
 
-                override fun onSearchCard() { flow.append("[seek]") }
+                override fun onSearchCard() {
+                    flow.append("[seek]")
+                    // Ядро просит приложение само искать карту — запускаем searchCard(2).
+                    runCatching {
+                        emv.searchCard(2, object : OnSearchCardCallback {
+                            override fun onSuccess(cardType: Int, trackData: TrackData?) {
+                                flow.append("[found:$cardType]")
+                            }
 
-                override fun onSearchCardAgain() { flow.append("[seekAgain]") }
+                            override fun onError(code: Int) {
+                                flow.append("[sErr:$code]")
+                            }
+                        })
+                    }
+                }
+
+                override fun onSearchCardAgain() {
+                    flow.append("[seekAgain]")
+                    runCatching {
+                        emv.searchCard(2, object : OnSearchCardCallback {
+                            override fun onSuccess(cardType: Int, trackData: TrackData?) {
+                                flow.append("[foundAgain:$cardType]")
+                            }
+
+                            override fun onError(code: Int) {
+                                flow.append("[sErr2:$code]")
+                            }
+                        })
+                    }
+                }
 
                 override fun onProcessInteractionPoint(point: Int) { flow.append("[pt=$point]") }
 
