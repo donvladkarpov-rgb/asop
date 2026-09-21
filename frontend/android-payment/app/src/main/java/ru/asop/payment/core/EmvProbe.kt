@@ -2,9 +2,11 @@ package ru.asop.payment.core
 
 import android.content.Context
 import android.util.Log
+import com.ftpos.library.smartpos.bean.CEmvAidBean
 import com.ftpos.library.smartpos.emv.Amount
 import com.ftpos.library.smartpos.emv.CandidateAIDInfo
 import com.ftpos.library.smartpos.emv.Emv
+import com.ftpos.library.smartpos.emv.IActionFlag
 import com.ftpos.library.smartpos.emv.OnEmvResponse
 import com.ftpos.library.smartpos.emv.OnSearchCardCallback
 import com.ftpos.library.smartpos.emv.TrackData
@@ -18,9 +20,9 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Зонд через ЛИЦЕНЗИОННОЕ EMV-ядро FTSDK (`Emv`), а не сырой `NfcReader`.
  *
- * `Emv.searchCardWithoutEMV` — поиск карты БЕЗ EMV-транзакции: детектирует карту и отдаёт
- * TrackData (Track2 содержит PAN). Отвечает на вопрос «доступно ли ядро нашему приложению»
- * и «читается ли карта через легальный путь» (в отличие от `NfcReader.openCardEx` → 89).
+ * `Emv.searchCard` — поиск карты (детект + ATS). PAN карта отдаёт только внутри
+ * полной EMV-транзакции `startEMV` (SELECT→GPO→READ RECORD), поэтому `probe()` даёт
+ * «карта найдена», а `startEmvProbe()` доводит до `onEndProcess` и читает PAN из `getTlvList("5A")`.
  */
 class EmvProbe private constructor(private val context: Context) {
 
@@ -76,29 +78,24 @@ class EmvProbe private constructor(private val context: Context) {
             })
         }.isSuccess
 
-        if (!started) return Result(false, -1, null, null, null, null, null, "searchCardWithoutEMV не стартовал")
+        if (!started) return Result(false, -1, null, null, null, null, null, "searchCard не стартовал")
 
         val done = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
         return if (!done) {
             runCatching { emv.stopEMV() }
-            Result(false, -1, null, null, null, null, null, "searchCardWithoutEMV timeout — держите карту на антенне")
+            Result(false, -1, null, null, null, null, null, "searchCard timeout — держите карту на антенне")
         } else if (errRef.get() != Int.MIN_VALUE) {
-            Result(false, -1, null, null, null, null, null, "searchCardWithoutEMV error=${errRef.get()}")
+            Result(false, -1, null, null, null, null, null, "searchCard error=${errRef.get()}")
         } else {
             val td = trackRef.get()
-            // Карта в поле — пробуем вычитать PAN (тег 5A) и Track2 (тег 57) из EMV-данных.
-            val pan = runCatching { emv.getCardData("5A") }.getOrNull()?.takeIf { it.isNotBlank() }
-                ?: runCatching { emv.getTlvList("5A") }.getOrNull()?.takeIf { it.isNotBlank() }
-            val track2 = runCatching { emv.getCardData("57") }.getOrNull()?.takeIf { it.isNotBlank() }
-                ?: runCatching { emv.getTlvList("57") }.getOrNull()?.takeIf { it.isNotBlank() }
             Result(
                 connected = true,
                 cardType = typeRef.get(),
                 track1 = td?.getTrack1Data()?.takeIf { it.isNotBlank() },
                 track2 = td?.getTrack2Data()?.takeIf { it.isNotBlank() },
                 track3 = td?.getTrack3Data()?.takeIf { it.isNotBlank() },
-                panTag5A = pan,
-                track2Tag57 = track2,
+                panTag5A = null,
+                track2Tag57 = null,
                 error = null
             )
         }
@@ -113,96 +110,135 @@ class EmvProbe private constructor(private val context: Context) {
     }
 
     /**
-     * Полная EMV-транзакция `startEMV` (ЗДЕСЬ карта отдаёт PAN через READ RECORD/GPO).
-     * Без загруженных AID/CAPK скорее всего вернёт «нет поддерживаемого приложения», но
-     * фиксируем весь флоу (поиск → select → PAN → online → end).
+     * Полная EMV-транзакция `startEMV` — порт `EmptyEventHandler` из легаси `feitian-hardware`.
+     *
+     * КЛЮЧЕВОЕ: ядро EMV — интерактивная стейт-машина. Приложение ОБЯЗАНО отвечать ядру на
+     * каждый колбэк (`respondEvent`/`setTLV`/`setIssuerOnlineResponseData`), иначе флоу виснет
+     * на `cbWaitCard` и не доходит до `onEndProcess` (это и происходило в прошлых попытках).
+     *
+     * PAN читается из `getTlvList("5A")` ВНУТРИ `onEndProcess` (после GPO + READ RECORD, который
+     * ядро делает само); fallback — track2 (`57`), срок — `5F24`.
      */
-    fun startEmvProbe(timeoutMs: Long = 40_000): String {
+    fun startEmvProbe(timeoutMs: Long = 60_000): String {
         CardProbe.get(context).reader()
         val emv = runCatching { Emv.getInstance(context) }.getOrNull()
             ?: return """{"error":"Emv.getInstance() null"}"""
 
         val panRef = AtomicReference<String?>()
+        val track2Ref = AtomicReference<String?>()
+        val expRef = AtomicReference<String?>()
         val endRef = AtomicReference<String?>()
         val appRef = AtomicReference<String?>()
         val onlineRef = AtomicReference<String?>()
         val flow = StringBuilder()
         val latch = CountDownLatch(1)
 
-        val amount = Amount(10000L, 0L)
-        val req = TransRequest(0, "643").setCardType(2).setVerifyPinSkip(true)
+        val amount = Amount(100L, 0L)
 
-        val started = runCatching {
-            emv.startEMV(amount, req, object : OnEmvResponse {
-                override fun onAppSelect(isMatched: Boolean, candidates: MutableList<CandidateAIDInfo>?) {
-                    val aids = candidates?.mapNotNull { c ->
-                        c.getDFName_tag84()?.let { b -> b.joinToString("") { "%02X".format(it) } }
-                    }?.take(6)
-                    appRef.set("matched=$isMatched count=${candidates?.size} aid=$aids")
-                    flow.append("[select:$isMatched]")
-                }
+        // Попытка загрузить минимальный МИР-AID (иначе «Valid AID Num: 0» → приложение не разрешено).
+        flow.append("[loadAid:${loadMirAid(emv)}]")
 
-                override fun onPinEntry(cardHolderConfirmed: Int) {
-                    flow.append("[pin=$cardHolderConfirmed]")
-                }
+        val searchCardCallback = object : OnSearchCardCallback {
+            override fun onSuccess(type: Int, trackData: TrackData?) {
+                flow.append("[found:$type]")
+                runCatching { emv.respondEvent(null) }
+            }
 
-                override fun onOnlineProcess(authData: String?) {
-                    onlineRef.set(authData)
-                    flow.append("[online]")
-                }
+            override fun onError(errCode: Int) {
+                flow.append("[sErr:$errCode]")
+                runCatching { emv.stopEMV() }
+                latch.countDown()
+            }
+        }
 
-                override fun onEndProcess(code: Int, data: String?) {
-                    endRef.set("code=$code data=$data")
-                    flow.append("[end=$code]")
+        val handler = object : OnEmvResponse {
+            override fun onAppSelect(reselect: Boolean, list: MutableList<CandidateAIDInfo>?) {
+                val aids = list?.mapNotNull { c ->
+                    c.getDFName_tag84()?.let { b -> b.joinToString("") { "%02X".format(it) } }
+                }?.take(6)
+                appRef.set("reselect=$reselect count=${list?.size} aid=$aids")
+                flow.append("[appSelect:${list?.size}]")
+            }
+
+            override fun onPinEntry(cvm: Int) {
+                flow.append("[pin]")
+                runCatching { emv.respondEvent(null) }
+            }
+
+            override fun onOnlineProcess(data: String?) {
+                onlineRef.set(data)
+                flow.append("[online]")
+                runCatching { emv.setIssuerOnlineResponseData(0, null, "00", null, null, null) }
+                runCatching { emv.respondEvent(null) }
+            }
+
+            override fun onEndProcess(code: Int, data: String?) {
+                endRef.set("code=$code")
+                flow.append("[end=$code]")
+                if (code == 89) {
                     latch.countDown()
+                    return
                 }
+                panRef.set(getTlvValue(emv.getTlvList("5A"), "5A"))
+                track2Ref.set(getTlvValue(emv.getTlvList("57"), "57"))
+                expRef.set(getTlvValue(emv.getTlvList("5F24"), "5F24"))
+                latch.countDown()
+            }
 
-                override fun onDisplayPanInfo(pan: String?) {
-                    panRef.set(pan)
-                    flow.append("[PAN=$pan]")
-                }
+            override fun onDisplayPanInfo(s: String?) {
+                if (!s.isNullOrBlank()) panRef.set(s)
+                flow.append("[PAN=$s]")
+            }
 
-                override fun onSearchCard() {
-                    flow.append("[seek]")
-                    // Ядро просит приложение само искать карту — запускаем searchCard(2).
-                    runCatching {
-                        emv.searchCard(2, object : OnSearchCardCallback {
-                            override fun onSuccess(cardType: Int, trackData: TrackData?) {
-                                flow.append("[found:$cardType]")
-                            }
+            override fun onSearchCard() {
+                flow.append("[seek]")
+                // Референс использует searchCard(1, …) (карта уже на поле при старте транзакции).
+                // У нас транзакция стартует первой — даём 20с, чтобы успеть поднести карту.
+                runCatching { emv.searchCard(20, searchCardCallback) }
+            }
 
-                            override fun onError(code: Int) {
-                                flow.append("[sErr:$code]")
-                            }
-                        })
+            override fun onSearchCardAgain() {
+                flow.append("[seekAgain]")
+                runCatching { emv.searchCard(20, searchCardCallback) }
+            }
+
+            override fun onProcessInteractionPoint(step: Int) {
+                flow.append("[step=$step]")
+                runCatching { emv.respondEvent(null) }
+            }
+
+            override fun onObtainData(coed: Int, data: ByteArray?, dataInformation: ByteArray?) {
+                flow.append("[obtain=$coed]")
+                val tagHex = data?.joinToString("") { "%02X".format(it) }
+                if (coed == 5) { // IKernelINSInfo.TAG_LIST
+                    when (tagHex) {
+                        "1F3E" -> runCatching { emv.setTLV("1F3E", "00000000") }
+                        "1F10" -> runCatching { emv.setTLV("1F10", "01") }
                     }
                 }
-
-                override fun onSearchCardAgain() {
-                    flow.append("[seekAgain]")
-                    runCatching {
-                        emv.searchCard(2, object : OnSearchCardCallback {
-                            override fun onSuccess(cardType: Int, trackData: TrackData?) {
-                                flow.append("[foundAgain:$cardType]")
-                            }
-
-                            override fun onError(code: Int) {
-                                flow.append("[sErr2:$code]")
-                            }
-                        })
-                    }
+                if (coed == 1) { // IKernelINSInfo.TLV_DATA
+                    runCatching { emv.setTLV("1F6A", "5A081122334455667788DF81100101") }
                 }
+                runCatching { emv.respondEvent(null) }
+            }
 
-                override fun onProcessInteractionPoint(point: Int) { flow.append("[pt=$point]") }
+            override fun onUpdateTransAmount(): Amount { return amount }
+        }
 
-                override fun onObtainData(type: Int, data: ByteArray?, additional: ByteArray?) {
-                    flow.append("[obtain=$type]")
-                }
+        val req = TransRequest(0)
+            .setmCurrencyCode("643")
+            .setCardType(2)   // ICardType.TYPE_CARD_CONTACT_LESS
+            .setVerifyPinSkip(true)
+            .setMagTransQuickPass(false)
+            .setMagTransServiceCodeProcess(true)
+            .setMaxTimeoutEMVThreadWait(30)
+            .setReadRecordCallback(true)
+            .setEnableAppSelectCallback(false)
+            .setNeedBeep(false)
+            .setSeePhoneContinueTrans(false)
+            .setAdditionalTlvData("1F300101")
 
-                override fun onUpdateTransAmount(): Amount { return amount }
-            })
-        }.isSuccess
-
+        val started = runCatching { emv.startEMV(amount, req, handler) }.isSuccess
         if (!started) return """{"error":"startEMV не стартовал"}"""
 
         val ended = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
@@ -211,10 +247,33 @@ class EmvProbe private constructor(private val context: Context) {
         return JSONObject()
             .put("ended", ended)
             .put("pan", panRef.get() ?: JSONObject.NULL)
+            .put("track2", track2Ref.get() ?: JSONObject.NULL)
+            .put("exp", expRef.get() ?: JSONObject.NULL)
             .put("endProcess", endRef.get() ?: JSONObject.NULL)
             .put("appSelect", appRef.get() ?: JSONObject.NULL)
             .put("online", onlineRef.get() ?: JSONObject.NULL)
             .put("flow", flow.toString())
             .toString()
     }
+
+    /** Извлекает значение TLV-тега из hex-строки `tlvData` (формат «TTLLVV…»). */
+    private fun getTlvValue(tlvData: String?, tag: String): String? {
+        if (tlvData.isNullOrEmpty()) return null
+        val tagIndex = tlvData.indexOf(tag)
+        if (tagIndex < 0) return null
+        val lengthStart = tagIndex + tag.length
+        if (lengthStart + 2 > tlvData.length) return null
+        val lengthHex = tlvData.substring(lengthStart, lengthStart + 2)
+        val valueLength = lengthHex.toIntOrNull(16)?.times(2) ?: return null
+        if (lengthStart + 2 + valueLength > tlvData.length) return null
+        return tlvData.substring(lengthStart + 2, lengthStart + 2 + valueLength)
+    }
+
+    /** Луч-effort загрузка AID МИР в EMV-ядро контактного/бесконтактного приложения. */
+    private fun loadMirAid(emv: Emv): String = runCatching {
+        val bean = CEmvAidBean("A0000006581010")
+        val tlv = bean.toTlvByteArray()
+        val rcCl = emv.manageEmvclAppParameters(IActionFlag.ADD, tlv)
+        "cl=$rcCl len=${tlv?.size}"
+    }.getOrElse { "err=${it.javaClass.simpleName}:${it.message}" }
 }

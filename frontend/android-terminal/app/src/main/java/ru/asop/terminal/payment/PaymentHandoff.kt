@@ -86,16 +86,27 @@ object PaymentHandoff {
         val cardToken: String? = null
     )
 
+    /** BIN-диапазоны МИР (расширенный список + co-badge) — синхронизировано с легаси
+     *  `asop-processing-Release-1.6` `Utils.detectPaymentSystem`. */
+    private val MIR_BINS = setOf(
+        "2200", "2201", "2202", "2203", "2204",
+        "3562", "3565", "6234", "6291", "6292", "6711",
+        "6763", "6764", "6765", "6768", "6769", "6773",
+        "9112", "9417", "5058", "9762", "5614", "9051",
+        "9990", "9364", "8888", "8600"
+    )
+
     /**
-     * Платёжная система по BIN (первые 6 цифр). МИР 2200–2204, Visa 4xxx,
-     * MasterCard 5xxx / 2221–2720. null — не распознано/нет BIN.
+     * Платёжная система по BIN (первые цифры PAN). МИР (полный диапазон + co-badge 35xx/62xx/67xx/91xx/94xx),
+     * Visa 4xxx, MasterCard 5xxx и новое 2-й серии (22–27), UnionPay 62xx. null — не распознано.
      */
     fun paymentSystem(bin: String?): String? = when {
         bin.isNullOrBlank() -> null
-        bin.startsWith("220") -> "МИР"
+        MIR_BINS.any { bin.startsWith(it) } -> "МИР"
         bin.startsWith("4") -> "Visa"
         bin.startsWith("5") -> "MasterCard"
-        bin.toLongOrNull()?.let { it in 222100L..272099L } == true -> "MasterCard"
+        listOf("22", "23", "24", "25", "26", "27").any { bin.startsWith(it) } -> "MasterCard"
+        bin.startsWith("62") -> "UnionPay"
         else -> null
     }
 
