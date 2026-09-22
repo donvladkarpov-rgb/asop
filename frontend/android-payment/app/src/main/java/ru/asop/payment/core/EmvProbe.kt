@@ -2,11 +2,9 @@ package ru.asop.payment.core
 
 import android.content.Context
 import android.util.Log
-import com.ftpos.library.smartpos.bean.CEmvAidBean
 import com.ftpos.library.smartpos.emv.Amount
 import com.ftpos.library.smartpos.emv.CandidateAIDInfo
 import com.ftpos.library.smartpos.emv.Emv
-import com.ftpos.library.smartpos.emv.IActionFlag
 import com.ftpos.library.smartpos.emv.OnEmvResponse
 import com.ftpos.library.smartpos.emv.OnSearchCardCallback
 import com.ftpos.library.smartpos.emv.TrackData
@@ -269,11 +267,6 @@ class EmvProbe private constructor(private val context: Context) {
         return tlvData.substring(lengthStart + 2, lengthStart + 2 + valueLength)
     }
 
-    /** Луч-effort загрузка AID МИР в EMV-ядро контактного/бесконтактного приложения. */
-    private fun loadMirAid(emv: Emv): String = runCatching {
-        val bean = CEmvAidBean("A0000006581010")
-        val tlv = bean.toTlvByteArray()
-        val rcCl = emv.manageEmvclAppParameters(IActionFlag.ADD, tlv)
-        "cl=$rcCl len=${tlv?.size}"
-    }.getOrElse { "err=${it.javaClass.simpleName}:${it.message}" }
+    /** Загрузка параметров бесконтактного приложения (EMVCL) из assets/emv/EMVCL_AppParameters.xml. */
+    private fun loadMirAid(emv: Emv): String = EmvclParamsLoader.load(context, emv)
 }

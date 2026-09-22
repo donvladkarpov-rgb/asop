@@ -19,15 +19,6 @@ class PayProcessor(private val context: Context) {
 
     /** Выполняет /pay. В PoC-режиме не блокирует на EMV — возвращает сразу. */
     suspend fun process(req: PayRequest): PayResponse {
-        val stubCard = CardInfo(
-            maskedPan = "2200 00•• •••• 1234",
-            panLast4 = "1234",
-            bin = "220000",
-            expiry = "12/28",
-            holdername = null,
-            cardToken = null
-        )
-
         // Фаза 0: фиксируем доступность NFC-ридера на F20.
         val probe = CardProbe.get(context).checkNfc()
         if (!probe.available) {
@@ -38,6 +29,10 @@ class PayProcessor(private val context: Context) {
             // Реальный EMV — TBD (интерфейс ВТБ). Возвращаем TIMEOUT, чтобы не «съесть» карту.
             return response(req, PayStatus.TIMEOUT, errorCode = "91", errorMessage = "EMV kernel не настроен (TBD)")
         }
+
+        // Читаем РЕАЛЬНЫЕ публичные данные карты (PPSE→SELECT→GPO→READ RECORD, без ядра EMV),
+        // чтобы MVP отдавал фактический masked PAN / срок / держателя. Фолбэк — заглушка.
+        val card = readCard() ?: stubCard
 
         val kopecks = kotlin.math.round(req.amount * 100.0).toInt() % 100
         return when (kopecks) {
@@ -50,9 +45,33 @@ class PayProcessor(private val context: Context) {
                 acqReference = "MOCK-${req.requestId}",
                 rrn = "000000" + req.requestId.take(6),
                 authCode = (1000..9999).random().toString(),
-                card = stubCard
+                card = card
             )
         }
+    }
+
+    private val stubCard = CardInfo(
+        maskedPan = "2200 00•• •••• 1234",
+        panLast4 = "1234",
+        bin = "220000",
+        expiry = "12/28",
+        holdername = null,
+        cardToken = null
+    )
+
+    /** Ручное чтение доступных данных карты (не EMV-ядро). null — карта не прочитана. */
+    private fun readCard(): CardInfo? {
+        val d = EmvCardReader.get(context).read(12_000)
+        if (!d.connected || d.pan.isBlank()) return null
+        Log.i(tag, "card read: pan=${d.maskedPan} exp=${d.expDate} label=${d.appLabel}")
+        return CardInfo(
+            maskedPan = d.maskedPan,
+            panLast4 = d.pan.takeLast(4),
+            bin = d.pan.take(6),
+            expiry = d.expDate,
+            holdername = d.cardholderName.ifBlank { null },
+            cardToken = null
+        )
     }
 
     /** void: в PoC-моде онлайн-attempt не контактировал с эквайером — void не нужен, но локальный статус сохраняем. */

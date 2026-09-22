@@ -892,10 +892,17 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
             // carrier уже implicitly привязан к региону. Иначе пользователи, которые
             // есть в asop_user_carriers (carrier 1403) но НЕ в asop_user_regions,
             // отфильтровываются — и оператор видит «Нет пользователей».
-            val skipRegionCheck = !carrierId.isNullOrBlank()
+            //
+            // Carrier-фильтр (asop_user_carriers) применяется ТОЛЬКО к needsCarrier-ролям
+            // (DRIVER/CARRIER_ADMIN/CARRIER_DISPATCHER). Для пассажирских/льготных карт
+            // владелец привязан к РЕГИОНУ (asop_user_regions), а НЕ к перевозчику: иначе
+            // carrier-фильтр исключал льготников (у них нет asop_user_carriers), хотя
+            // они есть в выбранном регионе.
+            val carrierFilterActive = needsCarrier && !carrierId.isNullOrBlank()
+            val skipRegionCheck = carrierFilterActive
             val matchesRegion = skipRegionCheck || regionId.isNullOrBlank() ||
                 regionsOfUser[u.id]?.contains(regionId) == true
-            val matchesCarrier = carrierId.isNullOrBlank() ||
+            val matchesCarrier = !carrierFilterActive ||
                 carriersOfUser[u.id]?.contains(carrierId) == true
             matchesRegion && matchesCarrier
         }

@@ -88,6 +88,11 @@ class LocalPaymentServer private constructor(context: Context) {
             path == "/probe/card" && req.method == "GET" -> handleProbeCard()
             path == "/probe/emv" && req.method == "GET" -> handleProbeEmv()
             path == "/probe/startemv" && req.method == "GET" -> handleProbeStartEmv()
+            path == "/probe/whitelist" && req.method == "GET" -> handleWhitelist()
+            path == "/probe/signcert" && req.method == "GET" -> handleSignCert()
+            path == "/probe/emvfiles" && req.method == "GET" -> handleEmvFiles()
+            path == "/probe/emvcard" && req.method == "GET" -> handleEmvCard()
+            path.startsWith("/probe/kernel/") && req.method == "GET" -> handleSetKernel(path.removePrefix("/probe/kernel/"))
             path.startsWith(METHOD_PAY) && req.method == "POST" -> handlePay(req)
             path.startsWith("/status/") && req.method == "GET" -> handleStatus(req, path.removePrefix("/status/"))
             path.startsWith("/void/") && req.method == "POST" -> handleVoid(req, path.removePrefix("/void/"))
@@ -165,6 +170,44 @@ class LocalPaymentServer private constructor(context: Context) {
         val result = EmvProbe.get(appContext).startEmvProbe()
         Log.i(tag, "probe/startemv -> $result")
         return respondJson(200, result)
+    }
+
+    /** Эксперимент с KernelID: GET /probe/kernel/{01|02|03|reset} → подмена KernelID при загрузке EMVCL. */
+    private fun handleSetKernel(value: String): HttpResponse {
+        EmvclParamsLoader.kernelIdOverride =
+            if (value == "reset" || value.isBlank()) null else value
+        return respondJson(
+            200,
+            """{"kernelIdOverride":${org.json.JSONObject.quote(EmvclParamsLoader.kernelIdOverride)}}"""
+        )
+    }
+
+    /** Доступ к API FTSDK: GET /probe/whitelist → проверить/добавить себя в whitelist SysAPI. */
+    private fun handleWhitelist(): HttpResponse {
+        val result = AsopApiPermission.ensureWhitelisted(appContext)
+        Log.i(tag, "probe/whitelist -> $result")
+        return respondJson(200, result)
+    }
+
+    /** Зарегистрировать подписочный сертификат приложения в FTSDK. */
+    private fun handleSignCert(): HttpResponse {
+        val result = AsopApiPermission.registerSignCert(appContext)
+        Log.i(tag, "probe/signcert -> $result")
+        return respondJson(200, result)
+    }
+
+    /** Список файловых параметров EMV ядра (SysAPI IEMVFileManager). */
+    private fun handleEmvFiles(): HttpResponse {
+        val result = EmvclParamsLoader.probeEmvFiles(appContext)
+        Log.i(tag, "probe/emvfiles -> $result")
+        return respondJson(200, result)
+    }
+
+    /** Ручное чтение публичных данных банковской карты (PPSE→SELECT→GPO→READ RECORD). */
+    private fun handleEmvCard(): HttpResponse {
+        val result = EmvCardReader.get(appContext).read()
+        Log.i(tag, "probe/emvcard -> ${result.toJson()}")
+        return respondJson(200, result.toJson())
     }
 
     private data class HttpResponse(val code: Int, val reason: String, val body: String?)
