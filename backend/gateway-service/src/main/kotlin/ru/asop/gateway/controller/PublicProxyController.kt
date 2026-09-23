@@ -30,6 +30,7 @@ class PublicProxyController(
         return when {
             sub.startsWith("tracking") -> svc("session-service", 8085)
             sub.startsWith("stops") -> svc("route-service", 8092)
+            sub.startsWith("payment") -> svc("payment-service", 8093)
             else -> null
         }
     }

@@ -87,11 +87,15 @@ class CertCommandConsumer(
                 terminalId = terminalId,
                 terminalSerial = event.terminalSerial,
                 terminalNumber = event.terminalNumber,
+                terminalModel = event.terminalModel,
                 certificateBase64 = certificateBase64,
                 serialNumber = serialNumber,
                 validFrom = validFrom,
                 validUntil = validUntil,
-                caChain = caChain
+                caChain = caChain,
+                distributor = event.distributor,
+                cardsDistributorId = event.cardsDistributorId,
+                paymentProviderId = event.paymentProviderId
             ).subscribe(
                 { /* success: log already below */ },
                 { err ->

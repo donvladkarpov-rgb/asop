@@ -12,6 +12,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
+    <!-- Промпт 016 §3.6: видимость app-payment для resolveActivity (Android 11+),
+         иначе PaymentHandoff.isPaymentAppInstalled всегда false. -->
+    <queries>
+        <package android:name="ru.asop.payment" />
+    </queries>
+
     <permission
         android:name="ru.asop.terminal.provider.READ"
         android:protectionLevel="signature" />

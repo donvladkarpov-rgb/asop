@@ -43,7 +43,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import ru.asop.terminal.activation.AsopCardType
+import ru.asop.nfc.AsopCardType
 import ru.asop.terminal.nfc.NfcReaderRefCount
 
 /**

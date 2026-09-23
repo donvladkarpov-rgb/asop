@@ -443,6 +443,45 @@ services:
     networks:
       - asop-net
 
+  payment-service:
+    mem_limit: 256m
+    build:
+      context: ../../backend/payment-service
+      dockerfile: Dockerfile
+    #ports:
+    #  - "8593:8093"
+    entrypoint: ["/provision.sh"]
+    command: ["java", "-jar", "app.jar"]
+    environment:
+      <<: *jvm-opts
+      SERVICE_NAME: payment-service
+      KEY_ALIAS: payment-service
+      DNS_NAMES: payment-service
+      KEYSTORE_PATH: file:/tmp/certs/payment-service.p12
+      TRUSTSTORE_PATH: file:/tmp/certs/truststore.p12
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: asop
+      DB_USER: asop
+      DB_PASSWORD: asop
+      KEYCLOAK_URL: ${KEYCLOAK_INTERNAL_URL:-http://keycloak:8080}
+      KEYCLOAK_ISSUER_URI: ${KEYCLOAK_ISSUER_URI:-http://keycloak:8080/realms/asop}
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-kafka:9093}
+      ASOP_ACQUIRER_PROVIDER: ${ASOP_ACQUIRER_PROVIDER:-mock}
+    volumes:
+      - ./certs/provision.sh:/provision.sh:ro
+    depends_on:
+      crypto-service:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - asop-net
+
   debt-service:
     mem_limit: 256m
     build:

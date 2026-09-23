@@ -16,6 +16,7 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import ru.asop.terminal.network.CertSignHmacInterceptor
 import ru.asop.terminal.network.SeqHeaderInterceptor
+import ru.asop.nfc.TerminalKeyCryptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.converter.scalars.ScalarsConverterFactory
@@ -51,6 +52,12 @@ object AppModule {
     fun provideMoshi(): Moshi = Moshi.Builder()
         .add(KotlinJsonAdapterFactory())
         .build()
+
+    /** asop-nfc-lib: шифрование ASOP-ключей at-rest (либовая версия без @Inject). */
+    @Provides
+    @Singleton
+    fun provideTerminalKeyCryptor(): TerminalKeyCryptor =
+        TerminalKeyCryptor()
 
     @Provides
     @Singleton

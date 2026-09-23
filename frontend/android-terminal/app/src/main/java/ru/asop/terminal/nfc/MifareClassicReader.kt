@@ -5,7 +5,7 @@ import android.nfc.tech.MifareClassic
 import android.nfc.tech.NfcA
 import android.util.Log
 import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
-import ru.asop.terminal.activation.CardIdentityVcm1
+import ru.asop.nfc.CardIdentityVcm1
 import ru.asop.terminal.nfc.DesfireCardReader.ClassicInfo
 import ru.asop.terminal.nfc.DesfireCardReader.ReadResult
 import java.io.IOException
@@ -514,7 +514,7 @@ fun decodeSectorOne(blocks: Map<Int, List<String>>): SectorOneDecode? {
         val entityAllZero = b2.all { it == 0x00.toByte() }
         val entityFmt = if (entityAllZero) "(пусто — passenger anonymous)"
             else formatUuid(b2)
-        val bitmaskRoles: List<String> = ru.asop.terminal.activation.AsopCardType
+        val bitmaskRoles: List<String> = ru.asop.nfc.AsopCardType
             .allRolesForBitmask(bitmask and 0x3FFF)
             .map { "${it.ordinal}=${it.label} (${it.role})" }
         SectorOneDecode(

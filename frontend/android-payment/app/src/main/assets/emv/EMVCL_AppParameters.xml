@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Терминальные параметры бесконтактных приложений EMV (EMVCL) для FEITIAN F20.
+
+  Формат соответствует парсеру легаси feitian-hardware-master
+  (biz.altsoft...feitian_hardware.emv: XmlParser + EMVCLAppParamsBean):
+    * корень <Body>
+    * на каждый карточный AID — один блок <Parameters AID=... KernelID=...>
+    * дочерние элементы = именованные теги из TAG_LIST (имя => EMV-тег)
+
+  Атрибуты <Parameters> читаются по ИМЕНИ (AID / KernelID / TransTypeGroup).
+
+  Значения TAC / TerminalCapabilities / UDOL / AcquirerID / MerchantID / TerminalID
+  — ЗАГЛУШКИ для эксперимента (реконструкция из doc/soft). Перед боевым
+  использованием заменить на значения, выданные эквайером (ВТБ/НСПК).
+
+  IMPORTANT (эксперимент с KernelID):
+    * KernelID="01" — EMVCo-kernel
+    * KernelID="02" — PayPass (включает remap TAC 1F04/1F05/1F06 -> DF8120/21/22)
+    * KernelID="03" — Visa payWave kernel
+    Для МИР (A0000006581010) пробуем 01/02/03 и смотрим на onEndProcess c PAN.
+-->
+<Body>
+
+  <!-- ============ МИР Дебетовая (A0000006581010) ============ -->
+  <Parameters AID="A0000006581010" KernelID="01">
+    <TerminalCapabilities>E0B8C8</TerminalCapabilities>
+    <AdditionalTerminalCapabilities>FF80F0A001</AdditionalTerminalCapabilities>
+    <TerminalType>22</TerminalType>
+    <TerminalTransactionQualifier>B6204000</TerminalTransactionQualifier>
+    <TerminalCountryCode>0643</TerminalCountryCode>
+    <TransCurrencyCode>0643</TransCurrencyCode>
+    <TransCurrencyExponent>02</TransCurrencyExponent>
+    <TerminalFloorLimit>00000000</TerminalFloorLimit>
+    <TerminalActionCodeDefault>DC4004F800</TerminalActionCodeDefault>
+    <TerminalActionCodeDenial>0000000000</TerminalActionCodeDenial>
+    <TerminalActionCodeOnline>FC50ACA000</TerminalActionCodeOnline>
+    <AcquirerID>000000000001</AcquirerID>
+    <MerchantCategoryCode>4111</MerchantCategoryCode>
+    <MerchantID>000000000000001</MerchantID>
+    <TerminalID>00000001</TerminalID>
+    <DefaultUDOL>9F02069F03069F1A0295055F2A029A039C019F3704</DefaultUDOL>
+    <KernelConfiguration>30</KernelConfiguration>
+    <CVMCapability_NotRequired>08</CVMCapability_NotRequired>
+  </Parameters>
+
+</Body>

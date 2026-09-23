@@ -7,6 +7,8 @@ const navItems = [
   { to: '/', label: 'Панель управления', icon: '📊' },
   { to: '/terminals', label: 'Терминалы', icon: '💳' },
   { to: '/cards', label: 'Карты', icon: '🪪' },
+  { to: '/blacklists', label: 'Чёрный список', icon: '🔒' },
+  { to: '/payments', label: 'Платежи', icon: '💳' },
   { to: '/sessions', label: 'Смены', icon: '🔐' },
 ];
 

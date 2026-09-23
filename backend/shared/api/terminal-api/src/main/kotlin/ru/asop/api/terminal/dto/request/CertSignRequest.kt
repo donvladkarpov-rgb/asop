@@ -19,6 +19,13 @@ data class CertSignRequest(
 
     val terminalId: UUID? = null,
 
+    /** Дистрибьютор: сага создаёт ASOP_DISTRIBUTOR_TERMINALS, а не ASOP_TERMINALS. */
+    val distributor: Boolean = false,
+
+    /** Обязательны при distributor=true (NOT NULL в ASOP_DISTRIBUTOR_TERMINALS). */
+    val cardsDistributorId: UUID? = null,
+    val paymentProviderId: String? = null,
+
     @field:NotBlank(message = "Public key is required")
     val publicKeyBase64: String
 )

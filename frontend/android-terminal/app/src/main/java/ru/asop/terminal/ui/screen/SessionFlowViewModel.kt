@@ -17,10 +17,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import ru.asop.terminal.NfcTagBus
-import ru.asop.terminal.activation.AsopCardType
-import ru.asop.terminal.activation.CardIdentityVcm1
+import ru.asop.nfc.AsopCardType
+import ru.asop.nfc.CardIdentityVcm1
 import ru.asop.terminal.db.SyncPreferences
-import ru.asop.terminal.db.TerminalKeyCryptor
+import ru.asop.nfc.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.PendingEventDao
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.SessionDao
@@ -33,7 +33,12 @@ import ru.asop.terminal.network.SyncApi
 import ru.asop.terminal.network.models.SessionCloseRequest
 import ru.asop.terminal.network.models.SessionOpenRequest
 import ru.asop.terminal.network.models.TransactionCompleteRequest
-import ru.asop.terminal.nfc.Vcm1CardAuth
+import ru.asop.terminal.nfc.CardClassifier
+import ru.asop.terminal.nfc.TapCardKind
+import ru.asop.terminal.nfc.TonePlayer
+import ru.asop.nfc.Vcm1CardAuth
+import ru.asop.terminal.payment.PaymentHandoff
+import ru.asop.terminal.payment.PaymentHttpClient
 import ru.asop.terminal.util.JsonUtil
 import ru.asop.terminal.worker.EventTypes
 import javax.inject.Inject
@@ -76,6 +81,28 @@ class SessionFlowViewModel @Inject constructor(
     }
     enum class SubmitState { IDLE, SUBMITTING, ACCEPTED, FAILED }
 
+    /** Промпт 016 §3.6: фазовое состояние handoff'а банковской карты. */
+    enum class BankPaymentPhase { NONE, REQUESTED, PROCESSING, SUCCESS, FAILED }
+
+    /**
+     * Состояние банковской оплаты в TAP_PASSENGER. REQUESTED/PROCESSING = терминал погасил
+     * свой reader и ждёт app-payment (handingOff); SUCCESS/FAILED — результат показывается
+     * [resultDisplayMs], reader уже перевооружён.
+     */
+    data class BankPaymentState(
+        val phase: BankPaymentPhase,
+        val requestId: String? = null,
+        val amount: Double = 0.0,
+        val request: PaymentHandoff.Request? = null,
+        val maskedPan: String? = null,
+        val acqReference: String? = null,
+        val rrn: String? = null,
+        val errorMessage: String? = null
+    ) {
+        val handingOff: Boolean
+            get() = phase == BankPaymentPhase.REQUESTED || phase == BankPaymentPhase.PROCESSING
+    }
+
     companion object {
         /**
          * Роли, которым разрешено открывать/закрывать смены и рейсы:
@@ -96,6 +123,15 @@ class SessionFlowViewModel @Inject constructor(
         private val SHIFT_ADMIN_ROLES = setOf(
             "SUPER_ADMIN", "REGION_ADMIN", "ORGANIZER_ADMIN", "CARRIER_ADMIN"
         )
+
+        /**
+         * Промпт 016: сумма проезда для банковской карты по умолчанию, если тариф
+         * из `tariff-rates` не найден (fare-decision). Реальный расчёт — [lookupBankFare].
+         */
+        private const val BANK_FARE_PLACEHOLDER = 0.0
+
+        /** Владелец NFC-шины на время handoff'а банковской карты (промпт 016 §3.6). */
+        private const val BANK_BUS_OWNER = "payment"
     }
 
     data class CardTapInfo(
@@ -138,7 +174,9 @@ class SessionFlowViewModel @Inject constructor(
         // Промпт 014+: контекст открытого рейса для экрана ожидания пассажиров
         // (наименование маршрута и имя водителя, открывшего рейс).
         val passengerRouteLabel: String? = null,
-        val passengerDriverLabel: String? = null
+        val passengerDriverLabel: String? = null,
+        // Промпт 016 §3.6: handoff банковской карты в app-payment (режим A).
+        val bankPayment: BankPaymentState? = null
     ) {
         val canConfirmOpenShift: Boolean
             get() = cardStep == CardStep.AUTH_OK && submitState == SubmitState.IDLE
@@ -146,6 +184,7 @@ class SessionFlowViewModel @Inject constructor(
             get() = cardStep == CardStep.AUTH_OK &&
                 submitState == SubmitState.IDLE &&
                 openShift != null &&
+                tripTidId != null &&
                 tripVehicleId != null && tripPathId != null
     }
 
@@ -231,6 +270,9 @@ class SessionFlowViewModel @Inject constructor(
 
     fun onScreenExit() {
         screenVisible = false
+        // Промпт 016 §3.6: уход с экрана во время handoff'а не должен оставлять claim
+        // на NFC-шине (release идемпотентен).
+        NfcTagBus.release(BANK_BUS_OWNER)
     }
 
     init {
@@ -575,6 +617,12 @@ class SessionFlowViewModel @Inject constructor(
         }
         if (s.tripVehicleId == null || s.tripPathId == null) {
             _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Выберите ТС и путь следования") }
+            return
+        }
+        // Промпт 016 §3.1.7: TID обязателен — на него вешаются все платежи и льготы рейса
+        // (фискальный чек резолвит перевозчика именно через ASOP_SESSIONS.TID_ID).
+        if (s.tripTidId == null) {
+            _state.update { it.copy(submitState = SubmitState.FAILED, errorMessage = "Выберите TID банковского эквайринга") }
             return
         }
         val tidId = s.tripTidId
@@ -941,6 +989,83 @@ class SessionFlowViewModel @Inject constructor(
         } catch (e: Exception) { carrierFilter }
     }
 
+    /**
+     * Промпт 016: запись банковской оплаты проезда как транзакции (тип «Оплата проезда»
+     * …0801 / результат «Успешно» …0901). Сумма = тариф, метаданные несут платёжную
+     * систему, последние 4 цифры и CARD_TOKEN (для серверного резолва льготы по
+     * ASOP_CARDS.USER_ID — банк-карта и MIFARE в общей базовой таблице ASOP_CARDS).
+     */
+    fun recordBankPayment(result: PaymentHandoff.Result) {
+        val trip = _state.value.openTrip ?: return
+        _state.update { it.copy(submitState = SubmitState.SUBMITTING) }
+        viewModelScope.launch {
+            try {
+                val now = System.currentTimeMillis()
+                val paymentId = UuidCreator.getTimeOrderedEpoch().toString()
+                val paymentTypeId = "00000000-0000-0000-0000-000000000801"   // Оплата проезда
+                val resultId = "00000000-0000-0000-0000-000000000901"         // Успешно
+                val system = PaymentHandoff.paymentSystem(result.bin)
+
+                val meta = org.json.JSONObject().apply {
+                    put("bankCard", true)
+                    put("paymentSystem", system ?: org.json.JSONObject.NULL)
+                    put("cardLast4", result.cardLast4 ?: org.json.JSONObject.NULL)
+                    put("amount", result.amount)
+                    put("cardToken", result.cardToken ?: org.json.JSONObject.NULL)
+                    put("acqReference", result.acqReference ?: org.json.JSONObject.NULL)
+                    put("rrn", result.rrn ?: org.json.JSONObject.NULL)
+                    put("benefitId", org.json.JSONObject.NULL)
+                    put("tripsAt", now)
+                }.toString()
+
+                val payment = TripPaymentEntity(
+                    id = paymentId,
+                    tripSessionId = trip.id,
+                    cardId = null,
+                    transactionTypeId = paymentTypeId,
+                    transactionResultId = resultId,
+                    amount = result.amount,
+                    currency = "RUB",
+                    timestamp = now,
+                    regionId = trip.regionId,
+                    carrierId = trip.carrierId,
+                    timezone = trip.timezone,
+                    lastSyncAt = null,
+                    metadata = meta
+                )
+                tripPaymentDao.insert(payment)
+
+                val payload = TransactionCompleteRequest(
+                    sessionId = trip.id,
+                    transactionTypeId = paymentTypeId,
+                    transactionResultId = resultId,
+                    amount = result.amount,
+                    currency = "RUB",
+                    cardId = null,
+                    metadata = meta,
+                    regionId = trip.regionId,
+                    carrierId = trip.carrierId,
+                    timezone = trip.timezone
+                )
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = paymentId,
+                        topic = "asop.transaction.commands",
+                        payload = JsonUtil.encode(payload),
+                        eventType = EventTypes.TRANSACTION_COMPLETE,
+                        pathParam = null,
+                        seq = syncPreferences.nextSeq()
+                    )
+                )
+                workScheduler.enqueueOneShotSync()
+                _state.update { it.copy(submitState = SubmitState.IDLE) }
+            } catch (e: Exception) {
+                android.util.Log.e("SessionFlowVM", "recordBankPayment failed", e)
+                _state.update { it.copy(submitState = SubmitState.IDLE) }
+            }
+        }
+    }
+
     /** Название льготы из справочника asop_benefits (для показа при валидации). */
     private suspend fun lookupBenefitName(benefitId: String): String? {
         return try {
@@ -1046,21 +1171,37 @@ class SessionFlowViewModel @Inject constructor(
         }
         viewModelScope.launch {
             try {
-                val rows = terminalKeyDao.getActive(limit = 20)
-                val asopKeys = rows.mapNotNull { entity ->
-                    runCatching { terminalKeyCryptor.decrypt(entity.keyMaterialEnc) }
-                        .getOrNull()
-                }
-                android.util.Log.i("SessionFlowVM", "ASOP-keys loaded: ${asopKeys.size}")
-                if (_state.value.kind == FlowKind.TAP_PASSENGER) {
-                    // Read + debit в ОДНОЙ mfc-сессии: Feitian F20 не даёт второй connect()
-                    // по тому же Tag после close() (IOException null) — writeTripsLeft
-                    // с отдельным подключением здесь не работает.
-                    handlePassengerTap(tag, asopKeys)
+                val kind = _state.value.kind
+                val tapKind = withContext(Dispatchers.IO) { CardClassifier.classify(tag) }
+                android.util.Log.i("SessionFlowVM", "tap class=$tapKind, kind=$kind")
+
+                if (kind == FlowKind.TAP_PASSENGER) {
+                    when (tapKind) {
+                        TapCardKind.MIFARE_CLASSIC -> {
+                            // Read + debit в ОДНОЙ mfc-сессии: Feitian F20 не даёт второй connect()
+                            // по тому же Tag после close() (IOException null) — writeTripsLeft
+                            // с отдельным подключением здесь не работает.
+                            handlePassengerTap(tag, loadAsopKeys())
+                        }
+                        TapCardKind.BANK_EMV -> beginBankHandoff()
+                        TapCardKind.ASOP_DESFIRE -> rejectPassengerTap(
+                            "DESFire-карта: проезд по DESFire пока не поддерживается"
+                        )
+                        TapCardKind.UNSUPPORTED -> rejectPassengerTap("Карта не поддерживается")
+                    }
                 } else {
-                    val outcome = ru.asop.terminal.nfc.Vcm1CardAuth.read(tag, asopKeys)
+                    // Авторизация водителя/администратора — только ASOP MIFARE Classic (VCM1).
+                    // Банковская карта здесь не запускает handoff и не уходит в долгий неудачный read.
+                    if (tapKind != TapCardKind.MIFARE_CLASSIC) {
+                        TonePlayer.errorBeep()
+                        _state.update {
+                            it.copy(cardStep = CardStep.NFC_ERROR, errorMessage = "Это не ASOP-карта")
+                        }
+                        return@launch
+                    }
+                    val outcome = ru.asop.nfc.Vcm1CardAuth.read(tag, loadAsopKeys())
                     when (outcome) {
-                        is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Ok -> {
+                        is ru.asop.nfc.Vcm1CardAuth.Outcome.Ok -> {
                             android.util.Log.i("SessionFlowVM",
                                 "VCM1 auth OK: uid=${outcome.uidHex}, " +
                                     "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
@@ -1068,11 +1209,11 @@ class SessionFlowViewModel @Inject constructor(
                             android.util.Log.d("SessionFlowVM", "VCM1 OK handler: kind=${_state.value.kind}")
                             onCardTappedForAuth(outcome.uidHex, outcome.rawVcm1Bytes)
                         }
-                        is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
+                        is ru.asop.nfc.Vcm1CardAuth.Outcome.Failed -> {
                             android.util.Log.w("SessionFlowVM",
                                 "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
                                     "details=${outcome.details}")
-                            ru.asop.terminal.nfc.TonePlayer.errorBeep()
+                            TonePlayer.errorBeep()
                             _state.update {
                                 it.copy(
                                     cardStep = CardStep.NFC_ERROR,
@@ -1084,7 +1225,7 @@ class SessionFlowViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 android.util.Log.e("SessionFlowVM", "readVcm1 outer catch", e)
-                ru.asop.terminal.nfc.TonePlayer.errorBeep()
+                TonePlayer.errorBeep()
                 _state.update {
                     it.copy(
                         cardStep = CardStep.NFC_ERROR,
@@ -1092,6 +1233,182 @@ class SessionFlowViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Отказ в приёме пассажирской карты в TAP_PASSENGER (не MIFARE/банк): показываем ✗ с
+     * причиной на [resultDisplayMs] и сразу возвращаем cardStep в IDLE, чтобы ForegroundDispatch-
+     * поллинг NfcTagBus продолжал принимать следующие тапы.
+     */
+    private fun rejectPassengerTap(detail: String) {
+        TonePlayer.errorBeep()
+        val t = System.currentTimeMillis()
+        _state.update {
+            it.copy(
+                cardStep = CardStep.IDLE,
+                validationResult = false,
+                validationResultTime = t,
+                validationDetail = detail,
+                errorMessage = detail
+            )
+        }
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(resultDisplayMs)
+            _state.update {
+                if (it.validationResultTime == t) {
+                    it.copy(validationResult = null, validationResultTime = 0L, validationDetail = null)
+                } else it
+            }
+        }
+    }
+
+    /** Загружает и расшифровывает активные терминальные ключи (для VCM1-операций). */
+    private suspend fun loadAsopKeys(): List<ByteArray> {
+        val rows = terminalKeyDao.getActive(limit = 20)
+        val keys = rows.mapNotNull { entity ->
+            runCatching { terminalKeyCryptor.decrypt(entity.keyMaterialEnc) }.getOrNull()
+        }
+        android.util.Log.i("SessionFlowVM", "ASOP-keys loaded: ${keys.size}")
+        return keys
+    }
+
+    /**
+     * Промпт 016 §3.6: старт handoff'а банковской карты. Если app-payment не установлен —
+     * мгновенный отказ (без запуска Activity). Иначе генерим requestId и переводим состояние
+     * в REQUESTED: экран погасит reader и запустит app-payment.
+     */
+    private suspend fun beginBankHandoff() {
+        val app = getApplication<Application>()
+        if (!PaymentHandoff.isPaymentAppInstalled(app)) {
+            TonePlayer.errorBeep()
+            val message = "Приложение оплаты не установлено"
+            _state.update {
+                it.copy(
+                    cardStep = CardStep.IDLE,
+                    errorMessage = "Банковская карта: $message",
+                    bankPayment = BankPaymentState(phase = BankPaymentPhase.FAILED, errorMessage = message)
+                )
+            }
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(resultDisplayMs)
+                clearBankPaymentIfPhase(BankPaymentPhase.FAILED)
+            }
+            return
+        }
+        NfcTagBus.claim(BANK_BUS_OWNER)
+        val terminalSerial = runCatching {
+            android.provider.Settings.Secure.getString(
+                app.contentResolver, android.provider.Settings.Secure.ANDROID_ID
+            )
+        }.getOrNull().orEmpty()
+        val regionId = runCatching { syncPreferences.regionId.first() }.getOrNull()
+        val fare = lookupBankFare(_state.value.openTrip?.pathId)
+        if (fare <= 0.0) {
+            TonePlayer.errorBeep()
+            val message = "Не найден тариф для рейса — обновите справочники"
+            _state.update {
+                it.copy(
+                    cardStep = CardStep.IDLE,
+                    errorMessage = message,
+                    bankPayment = BankPaymentState(phase = BankPaymentPhase.FAILED, errorMessage = message)
+                )
+            }
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(resultDisplayMs)
+                clearBankPaymentIfPhase(BankPaymentPhase.FAILED)
+            }
+            return
+        }
+        val request = PaymentHandoff.Request(
+            requestId = UuidCreator.getTimeOrderedEpoch().toString(),
+            amount = fare,
+            currency = "RUB",
+            terminalSerial = terminalSerial,
+            carrierId = _state.value.cardTap?.carrierId ?: _state.value.openShift?.carrierId,
+            regionId = regionId,
+            sessionId = _state.value.openTrip?.id,
+            issuedAt = System.currentTimeMillis()
+        )
+        TonePlayer.tapBeep()
+        _state.update {
+            it.copy(
+                cardStep = CardStep.PROCESSING,
+                errorMessage = null,
+                bankPayment = BankPaymentState(
+                    phase = BankPaymentPhase.REQUESTED,
+                    requestId = request.requestId,
+                    amount = request.amount,
+                    request = request
+                )
+            )
+        }
+        // Промпт 016 §3.6 (HTTP-контур): терминал шлёт POST /pay в app-payment по loopback
+        // (фоновый сервис, без Intent/foreground). Пока app-payment ждёт карту (FTSDK),
+        // UI показывает «приложите карту повторно»; результат — через onBankPaymentResult.
+        viewModelScope.launch {
+            val result = PaymentHttpClient().pay(request)
+            onBankPaymentResult(result)
+        }
+    }
+
+    /** Результат из app-payment (ActivityResult). */
+    fun onBankPaymentResult(result: PaymentHandoff.Result) {
+        NfcTagBus.release(BANK_BUS_OWNER)
+        val current = _state.value.bankPayment
+        if (result.success) {
+            TonePlayer.successBeep()
+            recordBankPayment(result)
+            _state.update {
+                it.copy(
+                    cardStep = CardStep.IDLE,
+                    errorMessage = null,
+                    bankPayment = (it.bankPayment ?: current ?: BankPaymentState(BankPaymentPhase.SUCCESS)).copy(
+                        phase = BankPaymentPhase.SUCCESS,
+                        amount = result.amount,
+                        request = null,
+                        maskedPan = result.maskedPan,
+                        acqReference = result.acqReference,
+                        rrn = result.rrn,
+                        errorMessage = null
+                    )
+                )
+            }
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(resultDisplayMs)
+                clearBankPaymentIfPhase(BankPaymentPhase.SUCCESS)
+            }
+        } else {
+            TonePlayer.errorBeep()
+            val message = result.errorMessage ?: "Оплата банковской картой не прошла"
+            _state.update {
+                it.copy(
+                    cardStep = CardStep.IDLE,
+                    errorMessage = message,
+                    bankPayment = (it.bankPayment ?: current ?: BankPaymentState(BankPaymentPhase.FAILED)).copy(
+                        phase = BankPaymentPhase.FAILED,
+                        request = null,
+                        errorMessage = message
+                    )
+                )
+            }
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(resultDisplayMs)
+                clearBankPaymentIfPhase(BankPaymentPhase.FAILED)
+            }
+        }
+    }
+
+    /** Пользователь отменил оплату / app-payment вернул RESULT_CANCELED без деталей. */
+    fun onBankPaymentCancelled() {
+        NfcTagBus.release(BANK_BUS_OWNER)
+        _state.update { it.copy(bankPayment = null, cardStep = CardStep.IDLE) }
+    }
+
+    private fun clearBankPaymentIfPhase(phase: BankPaymentPhase) {
+        NfcTagBus.release(BANK_BUS_OWNER)
+        _state.update {
+            if (it.bankPayment?.phase == phase) it.copy(bankPayment = null) else it
         }
     }
 
@@ -1106,27 +1423,27 @@ class SessionFlowViewModel @Inject constructor(
      */
     private suspend fun handlePassengerTap(tag: Tag, asopKeys: List<ByteArray>) {
         withContext(Dispatchers.IO) {
-            val result = ru.asop.terminal.nfc.Vcm1CardAuth.readWithSession(tag, asopKeys)
+            val result = ru.asop.nfc.Vcm1CardAuth.readWithSession(tag, asopKeys)
             try {
                 when (val outcome = result.outcome) {
-                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Ok -> {
+                    is ru.asop.nfc.Vcm1CardAuth.Outcome.Ok -> {
                         android.util.Log.i("SessionFlowVM",
                             "VCM1 auth OK: uid=${outcome.uidHex}, " +
                                 "bitmask=0x${outcome.identity.bitmask.toString(16)}, " +
                                 "cardId=${outcome.identity.cardId}, tripsLeft=${outcome.identity.tripsLeft}")
-                        val roles = ru.asop.terminal.activation.AsopCardType
+                        val roles = ru.asop.nfc.AsopCardType
                             .allRolesForBitmask(outcome.identity.bitmask)
                         val isDriver = roles.any {
-                            it == ru.asop.terminal.activation.AsopCardType.DRIVER ||
-                            it == ru.asop.terminal.activation.AsopCardType.CARRIER_DISPATCHER ||
-                            it == ru.asop.terminal.activation.AsopCardType.KRS_DISPATCHER
+                            it == ru.asop.nfc.AsopCardType.DRIVER ||
+                            it == ru.asop.nfc.AsopCardType.CARRIER_DISPATCHER ||
+                            it == ru.asop.nfc.AsopCardType.KRS_DISPATCHER
                         }
                         if (isDriver) {
                             ru.asop.terminal.nfc.TonePlayer.tapBeep()
                             exitPassengerMode()
                         } else {
                             val isPassengerAnon = roles.any {
-                                it == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS
+                                it == ru.asop.nfc.AsopCardType.PASSENGER_ANONYMOUS
                             }
                             val identity = outcome.identity
 
@@ -1186,7 +1503,7 @@ class SessionFlowViewModel @Inject constructor(
                             )
                         }
                     }
-                    is ru.asop.terminal.nfc.Vcm1CardAuth.Outcome.Failed -> {
+                    is ru.asop.nfc.Vcm1CardAuth.Outcome.Failed -> {
                         android.util.Log.w("SessionFlowVM",
                             "VCM1 auth failed: uid=${outcome.uidHex}, status=${outcome.status}, " +
                                 "details=${outcome.details}")
@@ -1232,6 +1549,20 @@ class SessionFlowViewModel @Inject constructor(
     /** Подпись маршрута/пути из справочника по UUID. */
     private suspend fun lookupPathLabel(pathId: String): String? {
         return lookupLabelFromTable("paths", pathId, "name", "code", "routeName")
+    }
+
+    /**
+     * Промпт 016: сумма банковской оплаты проезда (fare-decision). Берётся тариф
+     * `asop_tariff_rates` для пути открытого рейса (`pathId`), иначе любой активный
+     * тариф с ценой. Не найдено → [BANK_FARE_PLACEHOLDER] (0.0 = платёж не запускается).
+     */
+    private suspend fun lookupBankFare(pathId: String?): Double {
+        val row = pathId?.let { referenceRowDao.findTariffForPath(it) }
+            ?: referenceRowDao.findAnyActiveTariff()
+        if (row == null) return BANK_FARE_PLACEHOLDER
+        return runCatching {
+            org.json.JSONObject(row).optDouble("price", BANK_FARE_PLACEHOLDER)
+        }.getOrDefault(BANK_FARE_PLACEHOLDER)
     }
 
     /** Ищет payload-строку по id в reference_rows и возвращает первое непустое поле-метку. */

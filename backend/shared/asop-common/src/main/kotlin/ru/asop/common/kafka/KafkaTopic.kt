@@ -48,6 +48,10 @@ object KafkaTopic {
     const val GPS_COMMANDS = "asop.gps.commands"
     const val GPS_EVENTS = "asop.gps.events"
 
+    // Payment (bank card acquiring)
+    const val PAYMENT_COMMANDS = "asop.payment.commands"
+    const val PAYMENT_EVENTS = "asop.payment.events"
+
     // Delta sync (gateway → orchestrator)
     const val DELTA_COMMANDS = "asop.delta.commands"
     const val DELTA_FULL_COMMANDS = "asop.delta.full.commands"

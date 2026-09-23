@@ -69,7 +69,9 @@ class CertSignHmacFilter(
     override fun filter(exchange: ServerWebExchange, chain: WebFilterChain): Mono<Void> {
         val path = exchange.request.uri.path
         val method = exchange.request.method
-        if (path != "/api/v1/terminals/cert-sign" || method != HttpMethod.POST) {
+        val isCertSignPath = path == "/api/v1/terminals/cert-sign" ||
+            path == "/api/v1/distributor-terminals/cert-sign"
+        if (!isCertSignPath || method != HttpMethod.POST) {
             return chain.filter(exchange)
         }
 

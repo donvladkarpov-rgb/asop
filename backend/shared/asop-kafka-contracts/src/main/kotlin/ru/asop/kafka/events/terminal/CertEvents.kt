@@ -8,6 +8,9 @@ import java.util.UUID
  * Команда: подписать публичный ключ терминала (gateway → crypto-service).
  * Если терминал новый — crypto-service создаёт запись.
  * correlationId == eventId в EventService Gateway (пробрасывается через Kafka header X-Event-Id).
+ *
+ * distributor=true — команда от android-distributor: terminal-service сохраняет
+ * не ASOP_TERMINALS, а ASOP_DISTRIBUTOR_TERMINALS (нужны cardsDistributorId + paymentProviderId).
  */
 data class CertSignRequested(
     val terminalId: UUID?,
@@ -16,6 +19,10 @@ data class CertSignRequested(
     val terminalModel: String?,
     val carrierId: UUID?,
     val publicKeyBase64: String,
+
+    val distributor: Boolean = false,
+    val cardsDistributorId: UUID? = null,
+    val paymentProviderId: String? = null,
 
     override val aggregateType: String = "TerminalCert",
     override val causationId: UUID? = null,
@@ -37,16 +44,22 @@ data class CertSignRequested(
  * Событие: сертификат выпущен (crypto-service → terminal-service).
  * terminalId — стабильный UUID терминала (crypto-service резолвит по serial или создаёт).
  * caChain — PEM-цепочка (Root + Intermediate) для последующего сохранения рядом с сертификатом.
+ * distributor — признак дистрибьютора, пробрасывается из CertSignRequested.
  */
 data class CertIssued(
     val terminalId: UUID,
     val terminalSerial: String,
     val terminalNumber: String?,
+    val terminalModel: String? = null,
     val certificateBase64: String,
     val certSerialNumber: String,
     val validFrom: Instant,
     val validUntil: Instant,
     val caChain: String,
+
+    val distributor: Boolean = false,
+    val cardsDistributorId: UUID? = null,
+    val paymentProviderId: String? = null,
 
     override val aggregateType: String = "TerminalCert",
     override val causationId: UUID? = null,

@@ -24,7 +24,8 @@ class CommandEventConsumer(
             "\${asop.kafka.topics.debt-events}",
             "\${asop.kafka.topics.fiscal-events}",
             "\${asop.kafka.topics.audit-events}",
-            "\${asop.kafka.topics.gps-events}"
+            "\${asop.kafka.topics.gps-events}",
+            "\${asop.kafka.topics.payment-events}"
         ],
         groupId = "gateway-command-events"
     )

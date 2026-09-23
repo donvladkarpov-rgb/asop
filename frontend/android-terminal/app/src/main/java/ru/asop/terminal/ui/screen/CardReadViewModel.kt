@@ -12,9 +12,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import ru.asop.terminal.activation.CardIdentityVcm1
+import ru.asop.nfc.CardIdentityVcm1
+import ru.asop.nfc.TerminalKeyCryptor
 import ru.asop.terminal.db.SignatureVerifier
-import ru.asop.terminal.db.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.nfc.DesfireCardReader
 import ru.asop.terminal.nfc.MifareClassicReader

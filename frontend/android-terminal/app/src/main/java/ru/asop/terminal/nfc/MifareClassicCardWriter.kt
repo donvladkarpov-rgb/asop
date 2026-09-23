@@ -4,8 +4,8 @@ import android.nfc.Tag
 import android.nfc.tech.MifareClassic
 import android.util.Log
 import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
-import ru.asop.terminal.activation.CardIdentityVcm1
-import ru.asop.terminal.activation.EntityType
+import ru.asop.nfc.CardIdentityVcm1
+import ru.asop.nfc.EntityType
 import java.io.IOException
 import java.util.UUID
 

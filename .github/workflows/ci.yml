@@ -46,8 +46,8 @@ jobs:
 
       - name: Assemble debug APK
         run: >
-          ./gradlew :frontend:android-terminal:app:clean
-          :frontend:android-terminal:app:assembleDebug
+          ./gradlew :android-terminal:app:clean
+          :android-terminal:app:assembleDebug
 
   web-admin:
     name: Web-admin typecheck

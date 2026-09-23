@@ -22,14 +22,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
-import ru.asop.terminal.activation.AsopCardType
-import ru.asop.terminal.activation.CardActivationMatrix
-import ru.asop.terminal.activation.CardIdentityVcm1
-import ru.asop.terminal.activation.EntityRef
-import ru.asop.terminal.activation.EntityType
+import ru.asop.nfc.AsopCardType
+import ru.asop.nfc.CardActivationMatrix
+import ru.asop.nfc.CardIdentityVcm1
+import ru.asop.nfc.EntityRef
+import ru.asop.nfc.EntityType
 import ru.asop.proto.v1.CardIdentity as ProtoCardIdentity
 import ru.asop.terminal.db.CardIdentityCodec
-import ru.asop.terminal.db.TerminalKeyCryptor
+import ru.asop.nfc.TerminalKeyCryptor
 import ru.asop.terminal.db.dao.ReferenceRowDao
 import ru.asop.terminal.db.dao.TerminalKeyDao
 import ru.asop.terminal.db.entity.ReferenceRowEntity
@@ -381,9 +381,9 @@ class CardActivationViewModel @Inject constructor(
                     var pos = 0
                     for (b in all) { b.copyInto(raw, pos); pos += b.size }
                     try {
-                        val identity = ru.asop.terminal.activation.CardIdentityVcm1.decodeFromBytes(raw)
+                        val identity = ru.asop.nfc.CardIdentityVcm1.decodeFromBytes(raw)
                         if (identity != null) {
-                            val roles = ru.asop.terminal.activation.AsopCardType
+                            val roles = ru.asop.nfc.AsopCardType
                                 .allRolesForBitmask(identity.bitmask).map { it.role }
                             if (roles.isNotEmpty()) {
                                 // Операторская карта-ключ тоже должна быть в локальном asop_cards.
@@ -892,10 +892,17 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
             // carrier уже implicitly привязан к региону. Иначе пользователи, которые
             // есть в asop_user_carriers (carrier 1403) но НЕ в asop_user_regions,
             // отфильтровываются — и оператор видит «Нет пользователей».
-            val skipRegionCheck = !carrierId.isNullOrBlank()
+            //
+            // Carrier-фильтр (asop_user_carriers) применяется ТОЛЬКО к needsCarrier-ролям
+            // (DRIVER/CARRIER_ADMIN/CARRIER_DISPATCHER). Для пассажирских/льготных карт
+            // владелец привязан к РЕГИОНУ (asop_user_regions), а НЕ к перевозчику: иначе
+            // carrier-фильтр исключал льготников (у них нет asop_user_carriers), хотя
+            // они есть в выбранном регионе.
+            val carrierFilterActive = needsCarrier && !carrierId.isNullOrBlank()
+            val skipRegionCheck = carrierFilterActive
             val matchesRegion = skipRegionCheck || regionId.isNullOrBlank() ||
                 regionsOfUser[u.id]?.contains(regionId) == true
-            val matchesCarrier = carrierId.isNullOrBlank() ||
+            val matchesCarrier = !carrierFilterActive ||
                 carriersOfUser[u.id]?.contains(carrierId) == true
             matchesRegion && matchesCarrier
         }
@@ -1062,8 +1069,8 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     val clientCardId = UuidCreator.getTimeOrderedEpoch().toString()
                     // Промпт 009 clean-break: entityType всегда "userId" (или "none" для
                     // PASSENGER_ANONYMOUS). entityId = selectedUserId из cascade dropdown UI.
-                    val entityType = if (roleEnum == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS) "none" else "userId"
-                    val entityId = if (roleEnum == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS) null
+                    val entityType = if (roleEnum == ru.asop.nfc.AsopCardType.PASSENGER_ANONYMOUS) "none" else "userId"
+                    val entityId = if (roleEnum == ru.asop.nfc.AsopCardType.PASSENGER_ANONYMOUS) null
                         else s2.selectedUserId
                     Log.i("CardActivationVM", "VCM1-activate: clientCardId=$clientCardId, uid=$uid, bitmask=0x${"0x"}${(1 shl roleEnum.ordinal).toString(16)}, entity=$entityType/$entityId")
                     val vcm1 = CardActivateClassicRequest(
@@ -1111,12 +1118,12 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
                     // как операторская немедленно, без ожидания дельты.
                     persistActivatedCardLocally(body.cardId, entityId)
                     val entityRef = entityId?.let {
-                        ru.asop.terminal.activation.EntityRef(
-                            type = ru.asop.terminal.activation.EntityType.fromFieldName(entityType)!!,
+                        ru.asop.nfc.EntityRef(
+                            type = ru.asop.nfc.EntityType.fromFieldName(entityType)!!,
                             id = java.util.UUID.fromString(it)
                         )
                     }
-                    pendingWriteVcm1 = ru.asop.terminal.activation.CardIdentityVcm1(
+                    pendingWriteVcm1 = ru.asop.nfc.CardIdentityVcm1(
                         cardId = java.util.UUID.fromString(body.cardId),
                         bitmask = vcm1Data.bitmask,
                         entity = entityRef
@@ -1271,13 +1278,13 @@ val payload = MifareClassicCardWriter.parseSac1Payload(raw)
      * Single-slot: берём highest-bit role entity field. Для PASSENGER_ANONYMOUS — null.
      */
     private fun resolveEntityFields(
-        role: ru.asop.terminal.activation.AsopCardType,
+        role: ru.asop.nfc.AsopCardType,
         identity: org.json.JSONObject
     ): Pair<String, String?> {
         // Промпт 009 clean-break: entity на КАРТЕ всегда = userId. Все *_Id/orgId/etc.
         // не хранятся на карте — routing делается через ASOP_USER_REGIONS / ASOP_USER_CARRIERS
         // на стороне запроса. Только PASSENGER_ANONYMOUS — entity=null.
-        if (role == ru.asop.terminal.activation.AsopCardType.PASSENGER_ANONYMOUS) {
+        if (role == ru.asop.nfc.AsopCardType.PASSENGER_ANONYMOUS) {
             return "none" to null
         }
         return "userId" to identity.optString("userId").takeIf { it.isNotBlank() }

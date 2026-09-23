@@ -8,4 +8,6 @@ import java.util.UUID
 @Repository
 interface DistributorTerminalRepository : ReactiveCrudRepository<DistributorTerminalEntity, UUID> {
     fun findByCardsDistributorId(cardsDistributorId: UUID): reactor.core.publisher.Flux<DistributorTerminalEntity>
+
+    fun findByTerminalSerial(terminalSerial: String): reactor.core.publisher.Flux<DistributorTerminalEntity>
 }

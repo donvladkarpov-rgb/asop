@@ -323,6 +323,8 @@ export function SessionsPage() {
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Пользователь</th>
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Поездки</th>
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Льгота</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Платёж (банк)</th>
+                                    <th style={{ padding: '4px 8px', textAlign: 'left' }}>Сумма</th>
                                     <th style={{ padding: '4px 8px', textAlign: 'left' }}>Время</th>
                                   </tr>
                                 </thead>
@@ -332,12 +334,18 @@ export function SessionsPage() {
                                     let benefitId: string | null = null;
                                     let declined = false;
                                     let writeFailed = false;
+                                    let bankCard = false;
+                                    let paymentSystem: string | null = null;
+                                    let cardLast4: string | null = null;
                                     try {
                                       const m = JSON.parse(tx.metadata || '{}');
                                       tripsDebited = typeof m.tripsDebited === 'number' ? m.tripsDebited : null;
                                       benefitId = m.benefitId || null;
                                       declined = !!m.declined;
                                       writeFailed = !!m.writeFailed;
+                                      bankCard = !!m.bankCard;
+                                      paymentSystem = m.paymentSystem || null;
+                                      cardLast4 = m.cardLast4 || null;
                                     } catch {}
                                     return (
                                       <tr key={tx.transactionId} style={{ borderBottom: '1px solid #e2e8f0' }}>
@@ -346,12 +354,23 @@ export function SessionsPage() {
                                         <td style={{ padding: '4px 8px' }}>
                                           {declined
                                             ? writeFailed ? '⚠ отказ (ошибка записи)' : '⚠ отказ (нет поездок)'
+                                            : bankCard ? 'по банк-карте'
                                             : tripsDebited === 1 ? 'списана 1'
                                             : benefitId ? 'по льготе (0)'
                                             : '—'}
                                         </td>
                                         <td style={{ padding: '4px 8px' }} title={benefitId ?? undefined}>
                                           {benefitId ? benefitLabel(benefitId) : '—'}
+                                        </td>
+                                        <td style={{ padding: '4px 8px' }}>
+                                          {bankCard
+                                            ? (paymentSystem
+                                              ? `${paymentSystem}:*${cardLast4 ?? '····'}`
+                                              : cardLast4 ? `*${cardLast4}` : '—')
+                                            : '—'}
+                                        </td>
+                                        <td style={{ padding: '4px 8px' }}>
+                                          {bankCard && tx.amount > 0 ? `${tx.amount.toFixed(2)} ₽` : '—'}
                                         </td>
                                         <td style={{ padding: '4px 8px' }}>{fmt(tx.startedAt)}</td>
                                       </tr>

@@ -1734,11 +1734,14 @@ CREATE OR REPLACE FUNCTION fn_create_card_debt(
     p_terminal_id UUID,
     p_carrier_id UUID,
     p_debt_amount NUMERIC,
-    p_recovery_days INT DEFAULT 14
+    p_recovery_days INT DEFAULT 14,
+    p_block_threshold NUMERIC DEFAULT NULL
 )
     RETURNS UUID AS $body$
 DECLARE
     v_debt_id UUID;
+    v_total_open NUMERIC;
+    v_threshold NUMERIC;
 BEGIN
     INSERT INTO ASOP_CARD_DEBTS (
         DEBT_ID, CARD_ID, TRANSACTION_ID, SESSION_ID, TERMINAL_ID, CARRIER_ID,
@@ -1748,17 +1751,35 @@ BEGIN
         p_debt_amount, 'OPEN', NOW(), NOW() + (p_recovery_days || ' days')::INTERVAL, NOW(), NOW()
     ) RETURNING DEBT_ID INTO v_debt_id;
 
-    INSERT INTO ASOP_BLACKLISTS (CARD_ID, BLOCK_TYPE, BLOCKED_AT, RELATED_DEBT_ID, AUTO_UNBLOCK_ON_RECOVERY)
-    VALUES (p_card_id, 'NEGATIVE_BALANCE', NOW(), v_debt_id, true)
-    ON CONFLICT (CARD_ID) DO UPDATE
-        SET RELATED_DEBT_ID = v_debt_id,
-            AUTO_UNBLOCK_ON_RECOVERY = true,
-            BLOCKED_AT = NOW();
+    -- Промпт 016 §3.1.6: порог стоп-листа. Приоритет: явный параметр > base-строка
+    -- ASOP_CONFIG_PARAMS (`blacklist.debtThreshold`) > NULL (блокировать всегда — старое поведение).
+    v_threshold := p_block_threshold;
+    IF v_threshold IS NULL THEN
+        SELECT (PARAMS ->> 'blacklist.debtThreshold')::NUMERIC INTO v_threshold
+        FROM ASOP_CONFIG_PARAMS
+        WHERE REGION_ID IS NULL AND ORGANIZER_ID IS NULL AND CARRIER_ID IS NULL
+          AND CARDS_DISTRIBUTOR_ID IS NULL AND KRS_ID IS NULL AND DELETED_AT IS NULL
+        LIMIT 1;
+    END IF;
+
+    SELECT COALESCE(SUM(DEBT_AMOUNT), 0) INTO v_total_open
+    FROM ASOP_CARD_DEBTS
+    WHERE CARD_ID = p_card_id
+      AND DEBT_STATUS IN ('OPEN', 'RECOVERY_IN_PROGRESS');
+
+    IF v_threshold IS NULL OR v_total_open >= v_threshold THEN
+        INSERT INTO ASOP_BLACKLISTS (CARD_ID, BLOCK_TYPE, BLOCKED_AT, RELATED_DEBT_ID, AUTO_UNBLOCK_ON_RECOVERY)
+        VALUES (p_card_id, 'NEGATIVE_BALANCE', NOW(), v_debt_id, true)
+        ON CONFLICT (CARD_ID) DO UPDATE
+            SET RELATED_DEBT_ID = v_debt_id,
+                AUTO_UNBLOCK_ON_RECOVERY = true,
+                BLOCKED_AT = NOW();
+    END IF;
 
     RETURN v_debt_id;
 END;
 $body$ LANGUAGE plpgsql;
-COMMENT ON FUNCTION fn_create_card_debt IS 'Создаёт долг по карте и добавляет карту в стоп-лист. UUIDv7 генерируется на уровне приложения.';
+COMMENT ON FUNCTION fn_create_card_debt IS 'Создаёт долг по карте; добавляет карту в стоп-лист, если суммарный открытый долг >= порога (blacklist.debtThreshold из base-конфига). UUIDv7 генерируется на уровне приложения.';
 
 -- Функция: погашение долга
 CREATE OR REPLACE FUNCTION fn_recover_card_debt(
@@ -1768,6 +1789,9 @@ CREATE OR REPLACE FUNCTION fn_recover_card_debt(
     RETURNS VOID AS $body$
 DECLARE
     v_card_id UUID;
+    v_total_open NUMERIC;
+    v_threshold NUMERIC;
+    v_any_debt UUID;
 BEGIN
     UPDATE ASOP_CARD_DEBTS
     SET DEBT_STATUS = 'RECOVERED',
@@ -1786,6 +1810,34 @@ BEGIN
     WHERE CARD_ID = v_card_id
       AND RELATED_DEBT_ID = p_debt_id
       AND AUTO_UNBLOCK_ON_RECOVERY = true;
+
+    -- Промпт 016 §3.1.6: если после погашения остались открытые долги >= порога — пере-блокировать.
+    v_threshold := NULL;
+    SELECT (PARAMS ->> 'blacklist.debtThreshold')::NUMERIC INTO v_threshold
+    FROM ASOP_CONFIG_PARAMS
+    WHERE REGION_ID IS NULL AND ORGANIZER_ID IS NULL AND CARRIER_ID IS NULL
+      AND CARDS_DISTRIBUTOR_ID IS NULL AND KRS_ID IS NULL AND DELETED_AT IS NULL
+    LIMIT 1;
+
+    SELECT COALESCE(SUM(DEBT_AMOUNT), 0) INTO v_total_open
+    FROM ASOP_CARD_DEBTS
+    WHERE CARD_ID = v_card_id
+      AND DEBT_STATUS IN ('OPEN', 'RECOVERY_IN_PROGRESS');
+
+    IF v_total_open > 0 AND (v_threshold IS NULL OR v_total_open >= v_threshold) THEN
+        SELECT DEBT_ID INTO v_any_debt
+        FROM ASOP_CARD_DEBTS
+        WHERE CARD_ID = v_card_id AND DEBT_STATUS IN ('OPEN', 'RECOVERY_IN_PROGRESS')
+        ORDER BY DEBT_OPENED_AT ASC
+        LIMIT 1;
+
+        INSERT INTO ASOP_BLACKLISTS (CARD_ID, BLOCK_TYPE, BLOCKED_AT, RELATED_DEBT_ID, AUTO_UNBLOCK_ON_RECOVERY)
+        VALUES (v_card_id, 'NEGATIVE_BALANCE', NOW(), v_any_debt, true)
+        ON CONFLICT (CARD_ID) DO UPDATE
+            SET RELATED_DEBT_ID = v_any_debt,
+                AUTO_UNBLOCK_ON_RECOVERY = true,
+                BLOCKED_AT = NOW();
+    END IF;
 END;
 $body$ LANGUAGE plpgsql;
 
@@ -2313,6 +2365,83 @@ COMMENT ON TABLE ASOP_TERMINAL_PENDING_SEQ IS
 CREATE INDEX idx_pending_seq_terminal_seq ON ASOP_TERMINAL_PENDING_SEQ (TERMINAL_ID, SEQ);
 CREATE INDEX idx_pending_seq_acks_pending ON ASOP_TERMINAL_PENDING_SEQ (ACKS_PUBLISHED_AT)
     WHERE ACKS_PUBLISHED_AT IS NULL;
+
+
+-- ============================================================
+-- Промпт 016: Банковский эквайринг (payment-service)
+-- ============================================================
+-- ВАЖНО: имя ASOP_BANK_PAYMENTS, а не ASOP_PAYMENTS — таблица ASOP_PAYMENTS уже занята
+-- поступлениями Offline Top-Up (см. выше "CREATE TABLE ASOP_PAYMENTS"). Коллизия имён
+-- ломала бы Liquibase на чистом старте ("relation asop_payments already exists").
+-- PAN в открытом виде не хранится: только HMAC(PAN)/PAN_TOKEN, last4 и BIN.
+CREATE TABLE ASOP_BANK_PAYMENTS
+(
+    PAYMENT_ID         UUID           NOT NULL,  -- UUIDv7
+    REQUEST_ID         UUID,                     -- идемпотентный ключ от устройства
+    CARD_ID            UUID,                     -- ASOP_CARDS для банковской карты (если известна)
+    CARD_TOKEN         VARCHAR(255),             -- HMAC(PAN) / PAN_TOKEN из ASOP_CARD_BANKS
+    PAN_LAST4          CHAR(4),
+    BIN                VARCHAR(8),
+    AMOUNT             NUMERIC(10, 2) NOT NULL,
+    CURRENCY           CHAR(3)        NOT NULL DEFAULT 'RUB',
+    PAYMENT_TYPE       VARCHAR(30)    NOT NULL CHECK (PAYMENT_TYPE IN ('TOPUP', 'FARE', 'DEBT_RECOVERY')),
+    STATUS             VARCHAR(20)    NOT NULL DEFAULT 'PENDING' CHECK (STATUS IN (
+        'PENDING', 'AUTHORIZED', 'DECLINED', 'FAILED', 'REVERSED', 'REFUNDED'
+        )),
+    PROVIDER           VARCHAR(30)    NOT NULL DEFAULT 'MOCK',
+    ACQUIRER_REFERENCE VARCHAR(64),
+    RRN                VARCHAR(20),
+    AUTH_CODE          VARCHAR(10),
+    ERROR_CODE         VARCHAR(50),
+    ERROR_MESSAGE      VARCHAR(1000),
+    TERMINAL_ID        UUID,
+    SESSION_ID         UUID,
+    TRANSACTION_ID     UUID,
+    OCCURRED_AT        TIMESTAMPTZ,              -- время операции НА УСТРОЙСТВЕ
+    CREATED_AT         TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    UPDATED_AT         TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    DELETED_AT         TIMESTAMPTZ,
+    VERSION            BIGINT,
+    CONSTRAINT pk_bank_payments PRIMARY KEY (PAYMENT_ID),
+    CONSTRAINT fk_bank_payments_card FOREIGN KEY (CARD_ID) REFERENCES ASOP_CARDS (CARD_ID),
+    CONSTRAINT chk_payments_amount_positive CHECK (AMOUNT > 0)
+);
+COMMENT ON TABLE ASOP_BANK_PAYMENTS IS
+    'Промпт 016: банковские платежи (топ-ап / проезд / погашение долга). PAN не хранится — только токен/last4/BIN.';
+CREATE UNIQUE INDEX uq_bank_payments_request_id ON ASOP_BANK_PAYMENTS (REQUEST_ID)
+    WHERE REQUEST_ID IS NOT NULL AND DELETED_AT IS NULL;
+CREATE INDEX idx_bank_payments_card ON ASOP_BANK_PAYMENTS (CARD_ID);
+CREATE INDEX idx_bank_payments_status ON ASOP_BANK_PAYMENTS (STATUS);
+CREATE INDEX idx_bank_payments_terminal ON ASOP_BANK_PAYMENTS (TERMINAL_ID, CREATED_AT DESC);
+CREATE INDEX idx_bank_payments_occurred ON ASOP_BANK_PAYMENTS (OCCURRED_AT DESC);
+
+CREATE TABLE ASOP_PAYMENT_ATTEMPTS
+(
+    ATTEMPT_ID      UUID           NOT NULL,  -- UUIDv7
+    PAYMENT_ID      UUID           NOT NULL,
+    ATTEMPT_NUMBER  INT            NOT NULL,
+    PROVIDER        VARCHAR(30)    NOT NULL DEFAULT 'MOCK',
+    STATUS          VARCHAR(20)    NOT NULL DEFAULT 'PENDING' CHECK (STATUS IN (
+        'PENDING', 'SUCCESS', 'FAILED', 'TIMEOUT', 'REJECTED'
+        )),
+    ERROR_CODE      VARCHAR(50),
+    ERROR_MESSAGE   VARCHAR(1000),
+    BANK_RESPONSE   TEXT,
+    DURATION_MS     INT,
+    NEXT_RETRY_AT   TIMESTAMPTZ,
+    CREATED_AT      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_payment_attempts PRIMARY KEY (ATTEMPT_ID),
+    CONSTRAINT fk_payment_attempts_payment FOREIGN KEY (PAYMENT_ID)
+        REFERENCES ASOP_BANK_PAYMENTS (PAYMENT_ID) ON DELETE CASCADE
+);
+COMMENT ON TABLE ASOP_PAYMENT_ATTEMPTS IS
+    'Промпт 016: попытки авторизации у эквайера (аналог легаси bill_bank_operations_attempts).';
+CREATE INDEX idx_payment_attempts_payment ON ASOP_PAYMENT_ATTEMPTS (PAYMENT_ID, ATTEMPT_NUMBER);
+CREATE INDEX idx_payment_attempts_retry ON ASOP_PAYMENT_ATTEMPTS (NEXT_RETRY_AT)
+    WHERE NEXT_RETRY_AT IS NOT NULL;
+
+CREATE TRIGGER trg_touch_updated_asop_bank_payments BEFORE INSERT OR UPDATE
+    ON asop_bank_payments FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
 
 
 -- ============================================================

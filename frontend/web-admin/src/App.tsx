@@ -47,6 +47,8 @@ import { PasswordChangePage } from './pages/PasswordChange';
 import { AsopKeysPage } from './pages/AsopKeys';
 import { ConfigParamsPage } from './pages/ConfigParams';
 import { SessionsPage } from './pages/Sessions';
+import { PaymentsPage } from './pages/Payments';
+import { BlacklistsPage } from './pages/Blacklists';
 import { LiveMapPage } from './pages/LiveMapPage';
 import { RouteEditorPage } from './pages/routes/RouteEditorPage';
 import { useAuth } from './auth/useAuth';
@@ -89,6 +91,7 @@ function AppRoutes() {
         <Route index element={<DashboardPage />} />
         <Route path="terminals" element={<TerminalsPage />} />
         <Route path="cards" element={<CardsPage />} />
+        <Route path="blacklists" element={<BlacklistsPage />} />
         <Route path="regions" element={<RegionsPage />} />
         <Route path="territories" element={<TerritoriesPage />} />
         <Route path="organizers" element={<OrganizersPage />} />
@@ -129,6 +132,7 @@ function AppRoutes() {
         <Route path="asop-keys" element={<AsopKeysPage />} />
         <Route path="config-params" element={<ConfigParamsPage />} />
         <Route path="sessions" element={<SessionsPage />} />
+        <Route path="payments" element={<PaymentsPage />} />
         <Route path="live-map" element={<LiveMapPage />} />
         <Route path="route-editor" element={<RouteEditorPage />} />
         <Route path="password" element={<PasswordChangePage />} />
