@@ -6,6 +6,7 @@ import reactor.core.publisher.Mono
 import ru.asop.api.user.dto.request.UserCreateRequest
 import ru.asop.api.user.dto.response.UserResponse
 import ru.asop.common.util.UuidUtils
+import java.time.LocalDate
 import java.util.UUID
 
 @Service
@@ -15,7 +16,7 @@ class UserAdminService(
 ) {
 
     fun list(regionId: UUID? = null, carrierId: UUID? = null, cardsDistributorId: UUID? = null): Mono<List<Map<String, Any?>>> {
-        val baseSql = "SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS"
+        val baseSql = "SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, birth_date, keycloak_id FROM ASOP_USERS"
         // Без scope-фильтров — все живые пользователи (как раньше, + soft-delete).
         if (regionId == null && carrierId == null && cardsDistributorId == null) {
             return db.sql("$baseSql WHERE deleted_at IS NULL ORDER BY first_name")
@@ -57,12 +58,12 @@ class UserAdminService(
     }
 
     fun getById(id: String): Mono<Map<String, Any?>> =
-        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE user_id = :id LIMIT 1")
+        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, birth_date, keycloak_id FROM ASOP_USERS WHERE user_id = :id LIMIT 1")
             .bind("id", parseId(id))
             .fetch().one().defaultIfEmpty(emptyMap())
 
     fun getByKeycloakId(keycloakId: String): Mono<Map<String, Any?>> =
-        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id FROM ASOP_USERS WHERE keycloak_id = :keycloakId LIMIT 1")
+        db.sql("SELECT user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, birth_date, keycloak_id FROM ASOP_USERS WHERE keycloak_id = :keycloakId LIMIT 1")
             .bind("keycloakId", keycloakId)
             .fetch().one().defaultIfEmpty(emptyMap())
 
@@ -101,7 +102,8 @@ class UserAdminService(
                             patronymicInitial = request.patronymicInitial,
                             phone = request.phone,
                             email = email,
-                            keycloakId = keycloakId
+                            keycloakId = keycloakId,
+                            birthDate = request.birthDate
                         )
                     )
                     .onErrorResume { dbError ->
@@ -125,10 +127,12 @@ class UserAdminService(
             // ими управляют отдельные страницы («Роли пользователей», «Перевозчики
             // пользователей» и т.д.), а форма профиля этих полей не содержит — раньше
             // update молча сносил все привязки (clearAssociations + removeAllRoles).
+            val birthDate: LocalDate? = request.birthDate
             val dbOps = db.sql("""
                 UPDATE ASOP_USERS SET first_name = :firstName, last_name = :lastName,
                 last_name_initial = :lastNameInitial,
-                patronymic_initial = :patronymicInitial, phone = :phone WHERE user_id = :id
+                patronymic_initial = :patronymicInitial, phone = :phone,
+                birth_date = :birthDate WHERE user_id = :id
             """.trimIndent())
                 .bind("firstName", request.firstName)
                 .bind("lastName", effectiveLastName)
@@ -136,6 +140,11 @@ class UserAdminService(
                 .bind("patronymicInitial", request.patronymicInitial ?: "")
                 .bind("phone", request.phone ?: "")
                 .bind("id", uuid)
+                .let { s ->
+                    // NB: bind() возвращает новый immutable spec.
+                    if (birthDate != null) s.bind("birthDate", birthDate)
+                    else s.bindNull("birthDate", LocalDate::class.java)
+                }
                 .fetch().rowsUpdated()
 
             val keycloakOps = if (keycloakId != null) {
@@ -152,7 +161,8 @@ class UserAdminService(
                         id = id, firstName = request.firstName, lastName = effectiveLastName,
                         lastNameInitial = request.lastNameInitial.take(1),
                         patronymicInitial = request.patronymicInitial, phone = request.phone,
-                        email = request.email, keycloakId = keycloakId
+                        email = request.email, keycloakId = keycloakId,
+                        birthDate = request.birthDate
                     )
                 }
             )
@@ -173,10 +183,10 @@ class UserAdminService(
         }
     }
 
-    private fun writeUserToDb(userId: UUID, request: UserCreateRequest, keycloakId: String, effectiveLastName: String): Mono<Long> =
-        db.sql("""
-            INSERT INTO ASOP_USERS (user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, keycloak_id)
-            VALUES (:userId, :firstName, :lastName, :lastNameInitial, :patronymicInitial, :phone, :keycloakId)
+private fun writeUserToDb(userId: UUID, request: UserCreateRequest, keycloakId: String, effectiveLastName: String): Mono<Long> {
+        var spec = db.sql("""
+            INSERT INTO ASOP_USERS (user_id, first_name, last_name, last_name_initial, patronymic_initial, phone, birth_date, keycloak_id)
+            VALUES (:userId, :firstName, :lastName, :lastNameInitial, :patronymicInitial, :phone, :birthDate, :keycloakId)
         """.trimIndent())
             .bind("userId", userId)
             .bind("firstName", request.firstName)
@@ -185,7 +195,12 @@ class UserAdminService(
             .bind("patronymicInitial", request.patronymicInitial ?: "")
             .bind("phone", request.phone ?: "")
             .bind("keycloakId", keycloakId)
-            .fetch().rowsUpdated()
+        // NB: bind() возвращает новый immutable spec — результат обязателен.
+        val birthDate: LocalDate? = request.birthDate
+        spec = if (birthDate != null) spec.bind("birthDate", birthDate)
+        else spec.bindNull("birthDate", LocalDate::class.java)
+        return spec.fetch().rowsUpdated()
+    }
 
     private fun writeAssociations(
         userId: UUID,

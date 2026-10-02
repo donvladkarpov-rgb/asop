@@ -51,6 +51,7 @@ import { PaymentsPage } from './pages/Payments';
 import { BlacklistsPage } from './pages/Blacklists';
 import { LiveMapPage } from './pages/LiveMapPage';
 import { RouteEditorPage } from './pages/routes/RouteEditorPage';
+import { TripRegistrationReportPage } from './pages/reports/TripRegistrationReportPage';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -134,6 +135,7 @@ function AppRoutes() {
         <Route path="sessions" element={<SessionsPage />} />
         <Route path="payments" element={<PaymentsPage />} />
         <Route path="live-map" element={<LiveMapPage />} />
+        <Route path="reports/trip-registrations" element={<TripRegistrationReportPage />} />
         <Route path="route-editor" element={<RouteEditorPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>

@@ -432,9 +432,12 @@ CREATE TABLE ASOP_USERS
     LAST_NAME_INITIAL  CHAR(1)      NOT NULL,
     PATRONYMIC_INITIAL CHAR(1),
     PHONE              VARCHAR(20),
-    SNILS_HASH         VARCHAR(64) UNIQUE,
+SNILS_HASH          VARCHAR(64) UNIQUE,
     SNILS_ENCRYPTED    BYTEA,
     KEYCLOAK_ID        VARCHAR(255) UNIQUE,
+    -- Дата рождения (ПДн). В отчёте-реестре транзакций идёт частью «ФИО водителя»,
+    -- заполняется оператором в web-admin (карта значения не содержит).
+    BIRTH_DATE         DATE,
     CREATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UPDATED_AT TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     DELETED_AT TIMESTAMPTZ,
@@ -1311,6 +1314,10 @@ CREATE TABLE ASOP_TRANSACTIONS
     ERROR_CODE            VARCHAR(50),
     ERROR_MESSAGE         VARCHAR(512),
     METADATA              JSONB,
+    -- Момент фактической обработки на сервере. STARTED_AT/COMPLETED_AT приходят с
+    -- терминала (event.completedAt), поэтому время обработки без этой колонки
+    -- отличить от времени операции невозможно. Нужна для отчёта-реестра транзакций.
+    CREATED_AT            TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
     CONSTRAINT pk_transactions PRIMARY KEY (TRANSACTION_ID),
     CONSTRAINT fk_transactions_session FOREIGN KEY (SESSION_ID) REFERENCES ASOP_SESSIONS (SESSION_ID),
     CONSTRAINT fk_transactions_type FOREIGN KEY (TRANSACTION_TYPE_ID) REFERENCES ASOP_TRANSACTION_TYPES (TRANSACTION_TYPE_ID),
@@ -1319,6 +1326,7 @@ CREATE TABLE ASOP_TRANSACTIONS
 COMMENT ON TABLE ASOP_TRANSACTIONS IS 'Финансовые проводки (списания). METADATA хранит детали расчета (зоны, скидки, льготы).';
 CREATE INDEX idx_transactions_session ON ASOP_TRANSACTIONS (SESSION_ID);
 CREATE INDEX idx_transactions_completed_at ON ASOP_TRANSACTIONS (COMPLETED_AT) WHERE COMPLETED_AT IS NULL;
+CREATE INDEX idx_transactions_started_at ON ASOP_TRANSACTIONS (STARTED_AT);
 
 -- ИСПРАВЛЕНО: Добавлен CHECK для CARD_ROLE
 CREATE TABLE ASOP_TRANSACTION_CARDS

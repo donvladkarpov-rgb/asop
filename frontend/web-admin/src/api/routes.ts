@@ -338,6 +338,8 @@ export interface AdminUser {
   lastNameInitial: string;
   patronymicInitial?: string | null;
   phone?: string | null;
+  /** Дата рождения в формате ISO yyyy-MM-dd (реестр поездок, ASOP_USERS.BIRTH_DATE). */
+  birthDate?: string | null;
   keycloakId?: string | null;
 }
 export type AdminUserCreate = Omit<AdminUser, 'id' | 'keycloakId'> & {

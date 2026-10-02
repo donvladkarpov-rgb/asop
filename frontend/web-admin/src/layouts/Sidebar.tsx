@@ -16,6 +16,10 @@ const monitoringItems = [
   { to: '/live-map', label: 'Карта ТС', icon: '🗺️' },
 ];
 
+const reportItems = [
+  { to: '/reports/trip-registrations', label: 'Реестр поездок', icon: '📄' },
+];
+
 const contractorItems = [
   { to: '/carriers', label: 'Перевозчики', icon: '🚌' },
   { to: '/tids', label: 'TID (пулы)', icon: '🔑' },
@@ -121,6 +125,22 @@ export function Sidebar() {
         <CollapsibleSection label="Мониторинг" defaultOpen={true}>
           <nav className="sidebar-nav">
             {monitoringItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn('nav-link', isActive && 'active')
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </CollapsibleSection>
+        <CollapsibleSection label="Отчёты" defaultOpen={true}>
+          <nav className="sidebar-nav">
+            {reportItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}

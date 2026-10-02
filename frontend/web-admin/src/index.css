@@ -224,3 +224,195 @@ h1 {
 .leaflet-container {
   font-family: inherit;
 }
+
+/* ===== Отчёты: реестр поездок ===== */
+.page-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.filters-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  margin-bottom: 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.field-label {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6b7280;
+}
+
+.field input,
+.field select {
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #111827;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.field-actions {
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  min-width: auto;
+}
+
+.field-actions .btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #374151;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.field-actions .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.alert-error {
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #991b1b;
+  background: #fee2e2;
+  border-radius: 6px;
+}
+
+.report-summary {
+  margin-bottom: 16px;
+}
+
+.report-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.report-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.report-totals {
+  margin-bottom: 20px;
+}
+
+.report-totals summary {
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #374151;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.report-totals .data-table {
+  margin-top: 8px;
+}
+
+.report-totals .num {
+  text-align: right;
+}
+
+.total-row td {
+  font-weight: 500;
+  background: #f9fafb;
+}
+
+.total-level-1 td { background: #eef2ff; }
+.total-level-2 td { background: #f5f3ff; }
+.total-level-3 td { background: #faf5ff; }
+.total-level-4 td { background: #f9fafb; }
+.total-level-5 td { background: #fff; color: #6b7280; }
+
+.total-grand td {
+  font-weight: 700;
+  background: #fffbeb;
+  border-top: 2px solid #f59e0b;
+}
+
+.table-scroll {
+  overflow: auto;
+  max-height: 70vh;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.report-table-scroll .report-table {
+  min-width: 3400px;
+}
+
+.report-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+
+.report-table td {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.report-table .num {
+  text-align: right;
+}
+
+.report-table .center {
+  text-align: center;
+}
+
+.empty-cell {
+  padding: 24px 16px;
+  color: #6b7280;
+  text-align: center;
+}

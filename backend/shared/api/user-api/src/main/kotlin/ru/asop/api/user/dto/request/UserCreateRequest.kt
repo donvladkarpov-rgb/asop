@@ -2,6 +2,7 @@ package ru.asop.api.user.dto.request
 
 import jakarta.validation.constraints.NotBlank
 import jakarta.validation.constraints.Size
+import java.time.LocalDate
 
 data class UserCreateRequest(
     @field:NotBlank @field:Size(max = 100)
@@ -25,6 +26,11 @@ data class UserCreateRequest(
     @field:Size(max = 255)
     val email: String? = null,
     val password: String? = null,
+    /**
+     * Дата рождения. В карте значения нет — заполняется оператором в web-admin,
+     * далее попадает в колонку «ФИО водителя» отчёта-реестра транзакций.
+     */
+    val birthDate: LocalDate? = null,
     val roleIds: List<String> = emptyList(),
     val carrierIds: List<String> = emptyList(),
     val regionIds: List<String> = emptyList(),

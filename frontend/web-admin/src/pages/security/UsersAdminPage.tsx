@@ -121,6 +121,7 @@ export function UsersAdminPage() {
             <th>Имя</th>
             <th>Отчество (инициал)</th>
             <th>Телефон</th>
+            <th>Дата рождения</th>
             <th>Keycloak ID</th>
             <th />
           </tr>
@@ -132,6 +133,7 @@ export function UsersAdminPage() {
               <td>{r.firstName}</td>
               <td>{r.patronymicInitial ? r.patronymicInitial + '.' : ''}</td>
               <td>{r.phone || ''}</td>
+              <td>{r.birthDate || ''}</td>
               <td style={{ fontSize: '0.85em', opacity: 0.7 }}>{r.keycloakId || ''}</td>
               <td style={{ display: 'flex', gap: 8 }}>
                 <button className="btn-secondary btn-sm" onClick={() => { setEdit(r); setShowForm(false); setFormError(null); }}>✎</button>
@@ -172,6 +174,7 @@ function UserForm({ initial, autoBindings, onSave, onCancel }: {
         <label>Инициал фамилии <input value={form.lastNameInitial || ''} maxLength={1} onChange={(e) => setForm({ ...form, lastNameInitial: e.target.value })} /></label>
         <label>Инициал отчества <input value={form.patronymicInitial || ''} maxLength={1} onChange={(e) => setForm({ ...form, patronymicInitial: e.target.value })} /></label>
         <label>Телефон <input value={form.phone || ''} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
+        <label>Дата рождения <input type="date" value={form.birthDate || ''} onChange={(e) => setForm({ ...form, birthDate: e.target.value })} /></label>
       </div>
       {bindingNotes.length > 0 && (
         <div style={{ marginTop: 12, color: '#2563eb', fontSize: '0.9em' }}>

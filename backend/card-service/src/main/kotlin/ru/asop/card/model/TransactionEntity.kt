@@ -20,5 +20,9 @@ data class TransactionEntity(
     val acquirerReference: String? = null,
     val errorCode: String? = null,
     val errorMessage: String? = null,
-    val metadata: String? = null
+    val metadata: String? = null,
+    // Момент обработки на сервере. STARTED_AT/COMPLETED_AT приходят с терминала,
+    // поэтому заполняется DEFAULT NOW() на INSERT (в TransactionCommandConsumer
+    // колонка не перечисляется) и не обновляется.
+    val createdAt: Instant
 )

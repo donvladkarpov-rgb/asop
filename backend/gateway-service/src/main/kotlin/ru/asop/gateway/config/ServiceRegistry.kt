@@ -22,6 +22,7 @@ class ServiceRegistry {
         "user-benefits" to svc("card-service", 8086),
         "tariff-rates" to svc("card-service", 8086),
         "transactions" to svc("card-service", 8086),
+        "reports" to svc("card-service", 8086),
         "carriers" to svc("carrier-service", 8087),
         "cards-distributors" to svc("carrier-service", 8087),
         "contracts" to svc("carrier-service", 8087),
