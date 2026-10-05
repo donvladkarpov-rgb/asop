@@ -163,21 +163,21 @@ export function ShiftReportPage() {
             <label>Маршрут</label>
             <select value={routeId} onChange={(e) => { setRouteId(e.target.value); setPathId(''); setApplied(false); }}>
               <option value="">Все</option>
-              {routesQuery.data?.items?.map((rt: Route) => (<option key={rt.id} value={rt.id}>{rt.routeNumber} {rt.routeName}</option>))}
+              {(routesQuery.data as Route[] | undefined)?.map((rt: Route) => (<option key={rt.id} value={rt.id}>{rt.routeNumber} {rt.routeName}</option>))}
             </select>
           </div>
           <div className="filter-field">
             <label>Путь</label>
             <select value={pathId} onChange={(e) => { setPathId(e.target.value); setVehicleId(''); setApplied(false); }}>
               <option value="">Все</option>
-              {pathsQuery.data?.items?.map((p: Path) => (<option key={p.id} value={p.id}>{p.pathName}</option>))}
+              {(pathsQuery.data as Path[] | undefined)?.map((p: Path) => (<option key={p.id} value={p.id}>{p.pathName}</option>))}
             </select>
           </div>
           <div className="filter-field">
             <label>Транспортное средство</label>
             <select value={vehicleId} onChange={(e) => { setVehicleId(e.target.value); setApplied(false); }}>
               <option value="">Все</option>
-              {vehiclesQuery.data?.map((v: Vehicle) => (<option key={v.id} value={v.id}>{v.vehicleNumber} {v.vehicleName}</option>))}
+              {(vehiclesQuery.data as Vehicle[] | undefined)?.map((v: Vehicle) => (<option key={v.id} value={v.id}>{v.vehicleNumber} {v.vehicleName}</option>))}
             </select>
           </div>
         </div>
@@ -187,14 +187,14 @@ export function ShiftReportPage() {
             <label>Терминал</label>
             <select value={terminalId} onChange={(e) => { setTerminalId(e.target.value); setApplied(false); }}>
               <option value="">Все</option>
-              {terminalsQuery.data?.map((t: Terminal) => (<option key={t.id} value={t.id}>{t.terminalNumber || t.terminalSerial}</option>))}
+              {(terminalsQuery.data as Terminal[] | undefined)?.map((t: Terminal) => (<option key={t.id} value={t.id}>{t.terminalNumber || t.terminalSerial}</option>))}
             </select>
           </div>
           <div className="filter-field">
             <label>Водитель</label>
             <select value={driverId} onChange={(e) => { setDriverId(e.target.value); setApplied(false); }}>
               <option value="">Все</option>
-              {usersQuery.data?.items?.map((u: AdminUser) => (<option key={u.id} value={u.id}>{u.firstName} {u.lastNameInitial}</option>))}
+              {(usersQuery.data as AdminUser[] | undefined)?.map((u: AdminUser) => (<option key={u.id} value={u.id}>{u.firstName} {u.lastNameInitial}</option>))}
             </select>
           </div>
         </div>
