@@ -5,7 +5,7 @@ import { getCarriers } from '../../api/carriers';
 import { getRoutes, getPaths, getVehicles, getAdminUsers, type Route, type Path, type Vehicle, type AdminUser } from '../../api/routes';
 import { getTerminals } from '../../api/terminals';
 import type { Terminal } from '../../types';
-import { getShiftReport, type ShiftReportParams, type ShiftReport } from '../../api/reports-shifts';
+import { getShiftReport, type ShiftReportParams } from '../../api/reports-shifts';
 import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
 import { formatDateTime, formatMoney } from './columns';
 
@@ -163,21 +163,21 @@ export function ShiftReportPage() {
             <label>Маршрут</label>
             <select value={routeId} onChange={(e) => { setRouteId(e.target.value); setPathId(''); setApplied(false); }}>
               <option value="">Все</option>
-              {routesQuery.data?.items?.map((rt: Route) => (<option key={rt.routeId} value={rt.routeId}>{rt.routeNumber} {rt.routeName}</option>))}
+              {routesQuery.data?.items?.map((rt: Route) => (<option key={rt.id} value={rt.id}>{rt.routeNumber} {rt.routeName}</option>))}
             </select>
           </div>
           <div className="filter-field">
             <label>Путь</label>
             <select value={pathId} onChange={(e) => { setPathId(e.target.value); setVehicleId(''); setApplied(false); }}>
               <option value="">Все</option>
-              {pathsQuery.data?.items?.map((p: Path) => (<option key={p.pathId} value={p.pathId}>{p.pathNumber ?? p.pathName}</option>))}
+              {pathsQuery.data?.items?.map((p: Path) => (<option key={p.id} value={p.id}>{p.pathName}</option>))}
             </select>
           </div>
           <div className="filter-field">
             <label>Транспортное средство</label>
             <select value={vehicleId} onChange={(e) => { setVehicleId(e.target.value); setApplied(false); }}>
               <option value="">Все</option>
-              {vehiclesQuery.data?.map((v: Vehicle) => (<option key={v.vehicleId} value={v.vehicleId}>{v.vehicleNumber} {v.vehicleName}</option>))}
+              {vehiclesQuery.data?.map((v: Vehicle) => (<option key={v.id} value={v.id}>{v.vehicleNumber} {v.vehicleName}</option>))}
             </select>
           </div>
         </div>
@@ -187,14 +187,14 @@ export function ShiftReportPage() {
             <label>Терминал</label>
             <select value={terminalId} onChange={(e) => { setTerminalId(e.target.value); setApplied(false); }}>
               <option value="">Все</option>
-              {terminalsQuery.data?.map((t: Terminal) => (<option key={t.terminalId} value={t.terminalId}>{t.terminalNumber || t.terminalSerial}</option>))}
+              {terminalsQuery.data?.map((t: Terminal) => (<option key={t.id} value={t.id}>{t.terminalNumber || t.terminalSerial}</option>))}
             </select>
           </div>
           <div className="filter-field">
             <label>Водитель</label>
             <select value={driverId} onChange={(e) => { setDriverId(e.target.value); setApplied(false); }}>
               <option value="">Все</option>
-              {usersQuery.data?.items?.map((u: AdminUser) => (<option key={u.userId} value={u.userId}>{u.lastName} {u.firstName}</option>))}
+              {usersQuery.data?.items?.map((u: AdminUser) => (<option key={u.id} value={u.id}>{u.firstName} {u.lastNameInitial}</option>))}
             </select>
           </div>
         </div>
