@@ -27,4 +27,11 @@ interface DeltaSyncJobDao {
 
     @Query("DELETE FROM delta_sync_jobs WHERE event_id = :eventId")
     suspend fun delete(eventId: String)
+
+    /** Сброс терминала при повторной регистрации: старые задания выкачки больше неактуальны. */
+    @Query("DELETE FROM delta_sync_jobs")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM delta_sync_jobs")
+    suspend fun count(): Int
 }

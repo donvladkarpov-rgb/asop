@@ -30,4 +30,11 @@ interface TransactionDao {
 
     @Query("SELECT COUNT(*) FROM transactions WHERE status = 'PENDING' AND session_id = :sessionId")
     fun observeUnsyncedCount(sessionId: String): Flow<Int>
+
+    /** Сброс терминала при повторной регистрации. */
+    @Query("DELETE FROM transactions")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM transactions")
+    suspend fun count(): Int
 }

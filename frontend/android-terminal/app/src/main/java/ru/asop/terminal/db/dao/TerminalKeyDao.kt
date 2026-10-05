@@ -39,4 +39,11 @@ interface TerminalKeyDao {
 
     @Query("SELECT COUNT(*) FROM terminal_keys WHERE DELETED_AT = 0")
     suspend fun count(): Int
+
+    /** Сброс терминала при повторной регистрации: ключи приедут заново с дельтой. */
+    @Query("DELETE FROM terminal_keys")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM terminal_keys")
+    suspend fun countAll(): Int
 }

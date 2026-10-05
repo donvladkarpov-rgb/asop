@@ -18,4 +18,11 @@ interface SyncMetaDao {
 
     @Query("SELECT * FROM sync_meta WHERE id = 0")
     fun observe(): Flow<SyncMetaEntity?>
+
+    /**
+     * Сброс терминала при повторной регистрации: watermark обнуляется, и следующая дельта
+     * забирает справочники с нуля (все читатели используют get()?.lastVersion → null → 0).
+     */
+    @Query("DELETE FROM sync_meta")
+    suspend fun clearAll()
 }

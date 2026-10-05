@@ -28,4 +28,11 @@ interface TripPaymentDao {
 
     @Query("SELECT COUNT(*) FROM trip_payments WHERE trip_session_id = :tripId")
     suspend fun countForTrip(tripId: String): Int
+
+    /** Сброс терминала при повторной регистрации. */
+    @Query("DELETE FROM trip_payments")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM trip_payments")
+    suspend fun count(): Int
 }

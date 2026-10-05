@@ -55,4 +55,11 @@ interface PendingEventDao {
 
     @Query("DELETE FROM pending_events WHERE created_at < :before AND status != 'PENDING'")
     suspend fun deleteOldEvents(before: Long)
+
+    /** Сброс терминала при повторной регистрации: очередь неотправленных событий обнуляется. */
+    @Query("DELETE FROM pending_events")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM pending_events")
+    suspend fun count(): Int
 }

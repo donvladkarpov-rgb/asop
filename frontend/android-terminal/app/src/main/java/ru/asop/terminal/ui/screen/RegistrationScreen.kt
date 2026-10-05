@@ -64,6 +64,12 @@ fun RegistrationScreen(
     val regions by viewModel.regions.collectAsState()
     val carriers by viewModel.carriers.collectAsState()
 
+    // terminalId == null → терминал пришёл на регистрацию «с нуля» (после cert-sign):
+    // сбрасываем локальную базу молча. Иначе регистрация из drawer — это перерегистрация
+    // работающего терминала, спрашиваем подтверждение (сносятся неотправленные события).
+    val freshRegistration = viewModel.terminalId.collectAsState().value == null
+    var confirmWipe by remember { mutableStateOf(false) }
+
     var model by remember { mutableStateOf("") }
     var number by remember { mutableStateOf("") }
     var selectedRegionId by remember { mutableStateOf<String?>(null) }
@@ -72,6 +78,40 @@ fun RegistrationScreen(
     var carrierExpanded by remember { mutableStateOf(false) }
     var timezoneExpanded by remember { mutableStateOf(false) }
     var selectedTimezone by remember { mutableStateOf(TimeZone.getDefault().id) }
+
+    val submitRegistration = {
+        viewModel.registerTerminal(
+            regionId = selectedRegionId,
+            carrierId = selectedCarrierId,
+            timezone = selectedTimezone,
+            model = model.ifBlank { null },
+            number = number.ifBlank { null },
+            wipeLocalState = true
+        )
+    }
+
+    if (confirmWipe) {
+        AlertDialog(
+            onDismissRequest = { confirmWipe = false },
+            title = { Text("Сбросить локальные данные?") },
+            text = {
+                Text(
+                    "Повторная регистрация полностью очистит базу терминала: справочники, " +
+                        "неотправленные события, смены и ключи АСОП. Все фоновые загрузки будут " +
+                        "остановлены, справочники терминал загрузит заново."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmWipe = false
+                    submitRegistration()
+                }) { Text("Сбросить и зарегистрировать") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmWipe = false }) { Text("Отмена") }
+            }
+        )
+    }
 
     LaunchedEffect(Unit) {
         viewModel.loadReferenceData()
@@ -222,13 +262,7 @@ fun RegistrationScreen(
 
         Button(
             onClick = {
-                viewModel.registerTerminal(
-                    regionId = selectedRegionId,
-                    carrierId = selectedCarrierId,
-                    timezone = selectedTimezone,
-                    model = model.ifBlank { null },
-                    number = number.ifBlank { null }
-                )
+                if (freshRegistration) submitRegistration() else confirmWipe = true
             },
             enabled = number.isNotBlank() && selectedRegionId != null && selectedCarrierId != null
                     && state !is TerminalViewModel.UiState.Registering,

@@ -54,4 +54,11 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET last_sync_at = :syncAt WHERE id = :id")
     suspend fun markSynced(id: String, syncAt: Long = System.currentTimeMillis())
+
+    /** Сброс терминала при повторной регистрации: открытые смены/рейсы больше не актуальны. */
+    @Query("DELETE FROM sessions")
+    suspend fun clearAll()
+
+    @Query("SELECT COUNT(*) FROM sessions")
+    suspend fun count(): Int
 }

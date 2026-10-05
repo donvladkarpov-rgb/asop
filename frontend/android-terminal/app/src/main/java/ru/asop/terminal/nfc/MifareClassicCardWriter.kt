@@ -160,9 +160,30 @@ class MifareClassicCardWriter {
      */
     fun detectState(tag: Tag, candidateKeys: List<ByteArray>): DetectResult {
         val mfc = MifareClassic.get(tag) ?: return DetectResult(ClassicState.UNRECOGNIZED, null, DetectResult.MatchKind.UNKNOWN)
+        Log.i(
+            TAG,
+            "detectState: uid=${tag.id.joinToString("") { String.format("%02X", it) }} " +
+                "techs=${tag.techList.joinToString(",")} size=${mfc.size} sectors=${mfc.sectorCount} " +
+                "candidateKeys=${candidateKeys.size}"
+        )
         return try {
             mfc.connect()
-            mfc.timeout = 3000
+            mfc.timeout = 5000
+            // Блок 0 сектора 0 читается БЕЗ аутентификации — даём UID карты в диагностику,
+            // даже если ни один ключ не подошёл (иначе в логе нет ни UID, ни techs).
+            // Повторяем: на F20 первое transceive после входа в поле часто отваливается.
+            repeat(3) { attempt ->
+                runCatching { mfc.readBlock(0) }
+                    .onSuccess { b0 ->
+                        Log.i(
+                            TAG,
+                            "detectState: block0 ok (attempt ${attempt + 1}) =${b0.joinToString("") { String.format("%02X", it) }} " +
+                                "(UID=${b0.copyOfRange(0, minOf(7, b0.size)).joinToString("") { String.format("%02X", it) }})"
+                        )
+                        return@repeat
+                    }
+                    .onFailure { Log.i(TAG, "detectState: block0 attempt ${attempt + 1} failed: ${it.message}") }
+            }
             // 1. Factory — если прошёл, карта нетронутая
             for (factory in FACTORY_KEYS) {
                 if (tryAuth(mfc, FIRST_IDENTITY_SECTOR, factory)) {
