@@ -117,3 +117,6 @@ frontend/android-test/app/src/main/assets/expected-all.json
 /classes*.dex
 /frontend/**/classes*.dex
 /doc/soft/
+/doc/soft/transcard/.idea/AndroidProjectSystem.xml
+/doc/soft/transcard/.idea/markdown.xml
+/doc/soft/transcard/.idea/runConfigurations.xml
