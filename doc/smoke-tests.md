@@ -732,3 +732,55 @@ $PSQL "SELECT session_type_code, status FROM asop_sessions
        WHERE opened_by_user_id='$DRIVER_A' ORDER BY started_at DESC LIMIT 4;"
 # Ожидаемо: SHIFT CLOSED ×1–2, TRIP CLOSED ×1 (+ SHIFT IN_PROGRESS из негативного кейса)
 ```
+
+---
+
+## Scenario 8: Отчёты (реестр поездок + отчёт по сменам)
+
+**Goal:** Два отчёта card-service отдают агрегаты по демо-данным, карта в формате `СХЕМА:*ПОСЛ4`, дубликатов «платёж ↔ транзакция» нет.
+
+### Pre-conditions
+
+```bash
+# Справочники + демо-данные отчётов (вне последовательности delta-seed, идемпотентен)
+PSQL="docker exec -i -e PGPASSWORD=asop docker-postgres-1 psql -U asop -d asop"
+$PSQL < infrastructure/docker/seed-data.sql
+$PSQL < infrastructure/docker/seed-data-report-demo.sql
+```
+
+### Steps и ожидаемый HTTP trace
+
+```bash
+CS="docker exec docker-card-service-1 sh -c"
+
+# 1. Реестр поездок (47 строк демо, итог 1364.00 / 47 поездок)
+$CS 'wget -qO- --no-check-certificate \
+  "https://localhost:8086/api/v1/reports/trip-registrations?dateFrom=2026-10-05&dateTo=2026-10-07&limit=50"' \
+  | jq '{totalRows, grandTotalAmount, grandTotalTrips}'
+# → {"totalRows":47,"grandTotalAmount":1364.0,"grandTotalTrips":47}
+
+# 2. Формат карты СХЕМА:*ПОСЛ4 (без BIN******last4)
+... | jq -r '.rows[].cardNumber' | sort -u
+# → МИР:*6359, МИР:*1234, VISA:*2468, MASTERCARD:*4062, ... (+ NULL у безбанных/МИФЕР)
+
+# 3. Отчёт по сменам (5 смен: 47 транзакций, безнал 1364.00, наличные 248.00)
+$CS 'wget -qO- --no-check-certificate \
+  "https://localhost:8086/api/v1/reports/shifts?dateFrom=2026-10-05&dateTo=2026-10-07&limit=10"' \
+  | jq '{totalRows, grandTotalTransactions, grandTotalCashlessAmount, grandTotalCashAmount}'
+# → {"totalRows":5,"grandTotalTransactions":47,"grandTotalCashlessAmount":1364.0,"grandTotalCashAmount":248.0}
+# Наличные = нет банк-платежа + …0901 + tripsDebited=0/tripsAfter=0 (валидации …0803 не считаются)
+
+# 4. Дедуп: 0 групп транзакций с одинаковым acqReference, 0 непривязанных платежей
+$PSQL -c "SELECT COUNT(*) FROM (SELECT METADATA->>'acqReference' FROM ASOP_TRANSACTIONS
+           WHERE METADATA ? 'acqReference' GROUP BY 1 HAVING COUNT(*)>1) x;"
+# → 0
+$PSQL -c "SELECT COUNT(*) FROM ASOP_BANK_PAYMENTS WHERE TRANSACTION_ID IS NULL AND DELETED_AT IS NULL;"
+# → 0
+```
+
+### Web-admin
+
+`Отчёты → Реестр поездок` (`/reports/trip-registrations`) и `Отчёты → Отчёт по сменам`
+(`/reports/shifts`): «Построить отчёт» → строки как выше; «Выгрузить в Excel» →
+SpreadsheetML `.xml` (листы «Строки» + «Итоги»). Визуальная проверка наличных: две смены
+ГУП «Мосгортранс» возвращают `cashAmount=124.00` каждая (итого 248.00).

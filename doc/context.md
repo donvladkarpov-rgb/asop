@@ -772,12 +772,12 @@ Liquibase запускается **отдельным Docker-контейнер�
 
 **Офлайн-буферизация:** Все write-команды сначала сохраняются в Room (`PendingEventEntity`, статус `PENDING`). Фоновые `WorkManager` workers (`SyncWorker` каждые 15 мин, `EventPollWorker` каждые 5 мин) отправляют их на gateway через `SyncApi` (mTLS). После получения `202 + X-Event-Id` статус меняется на `SENDING`. Polling `GET /api/v1/events/{eventId}` через `EventPollWorker` отслеживает COMPLETED/FAILED (теперь статус живёт в Redis, TTL 24 ч).
 
-См. подробнее в `doc/smoke-tests.md` (7 сценариев интеграционного тестирования).
+См. подробнее в `doc/smoke-tests.md` (8 сценариев интеграционного тестирования).
 
 **Целевое устройство:** Feitian F20 (см. `doc/architecture.md` раздел «Целевое устройство»).
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`, `Sessions` (иерархия смен/рейсов), `UserBenefits`, `LiveMap` (`/live-map`), `RouteEditor` (`/route-editor`), отчёты `/reports/*` (см. «Отчёты» ниже)
 
 Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
 
@@ -786,6 +786,19 @@ Liquibase запускается **отдельным Docker-контейнер�
 - **TID (пулы)** (`/tids`) — полный sync-CRUD TIDs перевозчиков. Filter по carrierId dropdown. Форма: `carrierId` (обязательно), `tidValue` (VARCHAR(20), обязательно), `status` (UNUSED/ASSIGNED/REVOKED, только для редактирования), `terminalId` (optional, для привязки TID к терминалу). Endpoint: `GET/POST/PUT/DELETE /api/v1/tids` (sync-proxy через gateway в carrier-service, без Kafka — Read/Write-CRUD).
 - **Дистрибьюторы карт** (`/cards-distributors`) — полный CRUD + выбиралка договоров (привязка/отвязка через `PUT /api/v1/contracts/{id}`).
 - **Договоры** (`/contracts`) — полный CRUD. Форма валидирует "только одно поле" (carrierId XOR cardsDistributorId). Поле `attributes` — textarea для JSON.
+
+### Отчёты (reports)
+
+Раздел **«Отчёты»** в Sidebar, два sync GET в card-service через gateway (Kafka не участвует, `ServiceRegistry["reports"]` → `card-service:8086`):
+
+- **«Реестр поездок»** (`/reports/trip-registrations`) — `GET /api/v1/reports/trip-registrations`, реестр операций регистрации проезда: 29 колонок (организация/перевозчик/маршрут/смена/рейс, ТС, терминал, водитель, карта, льгота, тариф, форма оплаты, сумма, остановки, фискал, RRN), итоги 5 уровней через `GROUPING SETS` (организатор → перевозчик → маршрут → смена → рейс), `dateFrom/dateTo` + scope-фильтры + offset/limit. Даты — по `METADATA->>'tripsAt'` (fallback `STARTED_AT`).
+- **«Отчёт по сменам»** (`/reports/shifts`) — `GET /api/v1/reports/shifts`, 20 колонок: смена → первый рейс по `STARTED_AT`, счётчики транзакций, безнал/наличные, доли (`failedSharePct`/`cashlessSharePct` уже в процентах), итоги 4 уровней. Наличные — нет банк-платежа + `…0901` + `tripsDebited=0` и `tripsAfter=0`; soft-deleted смены включаются (история сохраняется).
+
+**Карта в реестре — `СХЕМА:*ПОСЛ4`** (единый формат с «Сменами и рейсами»): схема из `METADATA->>'paymentSystem'` (Visa→VISA, MasterCard→MASTERCARD, UnionPay→UNIONPAY, МИР→МИР), fallback BIN (2200–2204→МИР, 4→VISA, 51–55/2221–2720→MASTERCARD, 34/37→AMEX, иначе «Карта»); последние 4 — `metadata.cardLast4` → `ASOP_CARD_BANKS.PAN_LAST4` → `ASOP_BANK_PAYMENTS.PAN_LAST4`; без данных — NULL (не `******`), МИФЕР — hex UID.
+
+**Дедуп «платёж ↔ транзакция»**: `payment-service` `PaymentService.resolveTransactionLink` (`POST /api/v1/payment/report`) при отсутствии `transactionId` матчит по `METADATA->>'acqReference' = ACQUIRER_REFERENCE`; fallback в отчётном SQL привязывает непривязанный платёж только к ПЕРВОЙ транзакции с данным acq — дубликаты транзакций не задвоят безнал, платёж не теряется до прихода `/sync/transactions`.
+
+Веб-реализация: `api/reports.ts`/`api/reports-shifts.ts`, `pages/reports/{TripRegistrationReportPage,ShiftReportPage}.tsx`, общее `columns.ts` + `excelXml.ts` (SpreadsheetML-выгрузка, листы «Строки»+«Итоги»). Обе страницы используют классы `filters-panel`/`filters-row`/`field`, кнопки «Построить отчёт»/«Выгрузить в Excel», `report-summary`/`report-totals`; `applied`-состояние не сбрасывается при смене фильтров (авто-refetch после первого построения). Демо-данные: `infrastructure/docker/seed-data-report-demo.sql`.
 
 Экран Android-приложения: **"Подписать новый сертификат"** — генерация ключевой пары, отправка публичного ключа через Gateway, polling `GET /api/v1/events/{eventId}`, сохранение сертификата и CA-цепочки в AndroidKeyStore.
 

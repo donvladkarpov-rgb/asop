@@ -211,3 +211,15 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [ ] **Heading/bearing** — направление по двум последним точкам (+0,25 дн.).
 - [ ] **Retention / партиционирование** `ASOP_GPS_TRACKING` по месяцам.
 - [ ] **Self-hosted тайл-сервер + офлайн-кэш osmdroid** для продакшена (см. `doc/gps_maps.md`).
+
+## 15. Отчёты (web-admin) ✅
+
+Два отчёта в card-service через gateway (`ServiceRegistry["reports"]` → card-service:8086), без Kafka. Подробно — `AGENTS.md` раздел «Отчёты» и `doc/context.md` раздел «Отчёты (reports)».
+
+- [x] **Реестр операций регистрации проезда** — `GET /api/v1/reports/trip-registrations` (29 колонок, итоги 5 уровней GROUPING SETS, dateFrom/dateTo + scope-фильтры + offset/limit), страница `/reports/trip-registrations` + SpreadsheetML-выгрузка.
+- [x] **Отчёт по сменам** — `GET /api/v1/reports/shifts` (20 колонок, итоги 4 уровней), страница `/reports/shifts`; «морда» и фильтры перенесены с страницы реестра (class `filters-panel`/`filters-row`/`field`), исправлены dropdown'ы региона/организатора/перевозчика (в типах поля `id`, а не `regionId`/`carrierId`).
+- [x] **Формат карты `СХЕМА:*ПОСЛ4`** в реестре — схема из `metadata.paymentSystem` → BIN, последние 4 из `metadata.cardLast4` → `ASOP_CARD_BANKS` → `ASOP_BANK_PAYMENTS`; без данных NULL; МИФЕР — hex UID.
+- [x] **Дедуп «платёж ↔ транзакция»** — `PaymentService.resolveTransactionLink` (payment-service, матч по `acqReference`) + fallback в отчётном SQL (непривязанный платёж → только первая транзакция с этим acq). Проверено: 0 дублей групп, 22/22 платежа привязаны.
+- [x] **Семантика наличных/первого рейса в отчёте смен** — `tripsDebited=0 AND tripsAfter=0`, первый рейс по `STARTED_AT`, soft-deleted смены включены.
+- [x] **seed-data-report-demo.sql** — 16 транзакций (включая 4 наличных и отклонённую `…0902`), 3 банковских платежа.
+- [ ] **Дальнейшее** — сверка/возвраты по платежам в UI, выгрузка в XLSX (сейчас SpreadsheetML `.xml`), drill-down «строка отчёта → карточка транзакции».

@@ -311,3 +311,23 @@ payment-service (новый модуль, порт ~809x)
 **Интеграция**: `PayProcessor.process` (в `PO_C_MOCK_EMV`) теперь читает реальную карту (`EmvCardReader.read(12с)`), заполняет `CardInfo` (maskedPan/panLast4/bin/expiry/holdername); фолбэк — заглушка. E2E: `POST /pay` с картой МИР → `APPROVED` + `card.maskedPan=220024******6359`, `expiry=04/31`, `appLabel=MIR`.
 
 **Код**: `frontend/android-payment/…/core/EmvCardReader.kt` (парсер BER-TLV + APDU-флоу), `EmvclParamsLoader.kt` (схемные бины + probe `switchDebug`), `AsopApiPermission.kt` (whitelist/sign-cert), `assets/emv/EMVCL_AppParameters.xml` (пример формата эквайера). Endpoints `GET /probe/emvcard` (прямое чтение), `/probe/kernel/{id}`, `/probe/whitelist`, `/probe/signcert`, `/probe/emvfiles`.
+
+## Статус 2026-10-06 — FGS LocalPaymentServer (App Freezer), ANR-фиксы app-payment
+
+Два класса проблем, найденных на живом F20, и их фиксы.
+
+**1. App Freezer (Android 12+) → «Нет связи с app-payment».**
+`LocalPaymentServer` (loopback `127.0.0.1:8790`) жил в фоновом процессе: когда дистрибьютор сворачивал app-payment, система замораживала процесс (`cgroup.freeze=1`) — `accept()` переставал работать, `POST /pay` от distributor получал timeout.
+
+- **Фикс**: FGS `service/PaymentServerService.kt`, тип **`specialUse`** (НЕ `dataSync` — у того на targetSdk 35 лимит 6 часов в сутки, а локальный сервер должен работать всю смену), `START_STICKY`, низкоприоритетная нотификация `payment_server` («Локальный сервер 127.0.0.1:8790 работает»).
+- Старт из `PaymentApp.onCreate` (`PaymentServerService.start()` → `startForegroundService`); если FGS запрещён из background — fallback на прямой `paymentServer.start()` с логом.
+- Manifest: `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_SPECIAL_USE` (вместо `FOREGROUND_SERVICE_DATA_SYNC`), `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` с описанием use-case.
+- `PaymentServerService.onCreate` дергает `server().start()` повторно — `LocalPaymentServer.start()` идемпотентен.
+
+**2. ANR «приложение не отвечает».**
+`handleHandoff` (входящий intent от distributor) и PoC-экран (`PoCViewModel.refresh/pay`) делали `runBlocking { processor.process(...) }` / `CardProbe.checkNfc()` **на main thread** — FTSDK bind + EMV-чтение + Room блокировали input dispatch.
+
+- **Фикс**: весь I/O перенесён в `Dispatchers.IO` (`lifecycleScope.launch` + `withContext` в handoff, `viewModelScope.launch` + `withContext` в `refresh/pay`); кнопка «Выполнить платёж» блокируется на время платежа (`processing` + `CircularProgressIndicator`), двойные нажатия игнорируются; ошибки платежа показываются в UI, а не роняют coroutine.
+- **`CardProbe`**: negative-cache `FAIL_COOLDOWN_MS = 60 с` — на устройствах без FTSDK (Samsung) callback bind'а НЕ приходит вообще, каждый вызов ждал бы полный таймаут (2×25 c); после первой полной неудачи `connectReader()` в течение минуты мгновенно возвращает null. Latch'и ужаты: main 25→10 с, bind-поток 20→12 с (плюс прогрев `ftsdk-warmup` в `PaymentApp.onCreate`).
+
+Проверено: `./gradlew assembleDebug` (frontend/android-payment) — BUILD SUCCESSFUL.
