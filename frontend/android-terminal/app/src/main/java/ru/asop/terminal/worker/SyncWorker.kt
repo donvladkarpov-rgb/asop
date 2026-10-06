@@ -34,6 +34,9 @@ class SyncWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "SyncWorker"
         private const val MAX_RETRIES = 5
+
+        /** Claim без ответа сервера старше этого срока считается упавшим (crash mid-send). */
+        private const val STALE_CLAIM_MS = 10 * 60 * 1000L
     }
 
     /**
@@ -45,6 +48,8 @@ class SyncWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         val params = terminalProfileProvider.params()
         return try {
+            // Crash-recovery: claim без gateway_event_id старше 10 мин (процесс убит mid-send).
+            pendingEventDao.reclaimStale(System.currentTimeMillis() - STALE_CLAIM_MS)
             val pending = pendingEventDao.getPending()
             if (pending.isNotEmpty()) {
                 for (event in pending) {
@@ -53,12 +58,18 @@ class SyncWorker @AssistedInject constructor(
                         Log.w(TAG, "Max retries for ${event.eventType}: ${event.id}")
                         continue
                     }
+                    // Атомарный claim: параллельный SyncWorker (poller шлёт one-shot каждые 500мс)
+                    // не может отправить то же событие второй раз — иначе дубли на сервере.
+                    if (pendingEventDao.claimForSend(event.id) == 0) {
+                        Log.d(TAG, "Event ${event.id} already claimed by another worker, skipping")
+                        continue
+                    }
                     try {
                         val gatewayEventId = sendEvent(event)
                         pendingEventDao.markSending(event.id, gatewayEventId)
                         Log.d(TAG, "Sent ${event.eventType} -> eventId=$gatewayEventId")
                     } catch (e: Exception) {
-                        pendingEventDao.incrementPollRetry(event.id)
+                        pendingEventDao.releaseClaim(event.id)
                         Log.w(TAG, "Transient error sending ${event.eventType}: ${e.message}, will retry next cycle")
                         break
                     }

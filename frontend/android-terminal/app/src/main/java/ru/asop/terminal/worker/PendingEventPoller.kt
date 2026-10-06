@@ -3,6 +3,7 @@ package ru.asop.terminal.worker
 import android.content.Context
 import android.util.Log
 import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
@@ -34,6 +35,11 @@ class PendingEventPoller @Inject constructor(
     private val tag = "PendingPoller"
     private var job: Job? = null
 
+    companion object {
+        /** Отдельное unique-имя от цепочки WorkScheduler.SYNC_WORK_NAME (она REPLACE с delay). */
+        private const val IMMEDIATE_SYNC_WORK_NAME = "sync_pending_events_immediate"
+    }
+
     fun start() {
         if (job?.isActive == true) return
         job = CoroutineScope(Dispatchers.IO).launch {
@@ -53,7 +59,11 @@ class PendingEventPoller @Inject constructor(
                         val request = OneTimeWorkRequestBuilder<SyncWorker>()
                             .setConstraints(constraints)
                             .build()
-                        WorkManager.getInstance(context).enqueue(request)
+                        // Unique + KEEP: пока предыдущий one-shot ещё работает/в очереди,
+                        // новые не плодятся (раньше анонимный enqueue каждые 500мс давал
+                        // параллельные воркеры и дубли событий на сервере).
+                        WorkManager.getInstance(context)
+                            .enqueueUniqueWork(IMMEDIATE_SYNC_WORK_NAME, ExistingWorkPolicy.KEEP, request)
                     }
                 } catch (e: Exception) {
                     Log.w(tag, "poll error: ${e.message}")

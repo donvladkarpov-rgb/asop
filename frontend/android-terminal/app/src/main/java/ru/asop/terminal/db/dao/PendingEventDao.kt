@@ -38,6 +38,35 @@ interface PendingEventDao {
     @Query("UPDATE pending_events SET status = :status, gateway_event_id = :gatewayEventId, sent_at = :sentAt, error_message = NULL WHERE id = :id")
     suspend fun markSending(id: String, gatewayEventId: String, sentAt: Long = System.currentTimeMillis(), status: String = PendingEventEntity.STATUS_SENDING)
 
+    /**
+     * Атомарный claim перед HTTP-отправкой: только один SyncWorker может взять событие
+     * (PENDING → SENDING). Возвращает число затронутых строк: 1 = claimнут, 0 = уже
+     * отправляется другим воркером. Предотвращает дубли при параллельных one-shot запусках.
+     */
+    @Query("UPDATE pending_events SET status = :status, sent_at = :sentAt, error_message = NULL WHERE id = :id AND status = :pending")
+    suspend fun claimForSend(
+        id: String,
+        sentAt: Long = System.currentTimeMillis(),
+        status: String = PendingEventEntity.STATUS_SENDING,
+        pending: String = PendingEventEntity.STATUS_PENDING
+    ): Int
+
+    /** Откат claim'а при неудачной отправке: событие возвращается в PENDING (+retry). */
+    @Query("UPDATE pending_events SET status = :pending, retry_count = retry_count + 1 WHERE id = :id AND status = :sending AND gateway_event_id IS NULL")
+    suspend fun releaseClaim(
+        id: String,
+        pending: String = PendingEventEntity.STATUS_PENDING,
+        sending: String = PendingEventEntity.STATUS_SENDING
+    ): Int
+
+    /** Crash-recovery: claim без ответа сервера (процесс убит между claim и markSending). */
+    @Query("UPDATE pending_events SET status = :pending, retry_count = retry_count + 1 WHERE status = :sending AND gateway_event_id IS NULL AND sent_at < :before")
+    suspend fun reclaimStale(
+        before: Long,
+        pending: String = PendingEventEntity.STATUS_PENDING,
+        sending: String = PendingEventEntity.STATUS_SENDING
+    ): Int
+
     @Query("UPDATE pending_events SET status = :status, error_message = :error, retry_count = retry_count + 1 WHERE id = :id")
     suspend fun markFailed(id: String, error: String, status: String = PendingEventEntity.STATUS_FAILED)
 
