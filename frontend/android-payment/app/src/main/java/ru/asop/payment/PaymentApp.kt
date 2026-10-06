@@ -12,6 +12,7 @@ import ru.asop.payment.cert.CertManager
 import ru.asop.payment.core.CardProbe
 import ru.asop.payment.core.LocalPaymentServer
 import ru.asop.payment.network.ProvisioningManager
+import ru.asop.payment.service.PaymentServerService
 import ru.asop.payment.worker.ReportWorker
 import java.util.concurrent.TimeUnit
 
@@ -23,6 +24,9 @@ class PaymentApp : Application() {
     override fun onCreate() {
         super.onCreate()
         paymentServer.start()
+        // Foreground-сервис удерживает процесс от App Freezer (Android 12+):
+        // замороженный процесс не accept()ит /pay → «Нет связи с app-payment».
+        PaymentServerService.start(this)
         // Прогрев FTSDK ServiceManager при старте: первый handoff не ждёт bind (25 c).
         Thread({ CardProbe.get(this).checkNfc() }, "ftsdk-warmup").start()
         scheduleReportWorker(this)

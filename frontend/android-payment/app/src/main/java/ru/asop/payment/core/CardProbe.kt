@@ -26,6 +26,13 @@ class CardProbe private constructor(private val context: Context) {
     private val tag = "CardProbe"
     private val bounded = AtomicBoolean(false)
 
+    /**
+     * Negative cache: на устройствах без FTSDK (Samsung и пр.) callback bind'а НЕ приходит
+     * вообще — каждый вызов ждал бы полный таймаут (2 попытки × 25 c). После первой
+     * полной неудачи в течение [FAIL_COOLDOWN_MS] отвечаем мгновенно null.
+     */
+    @Volatile private var lastFailAt = 0L
+
     fun checkNfc(): ProbeResult = runCatching {
         val reader = connectReader()
         if (reader == null) {
@@ -47,12 +54,16 @@ class CardProbe private constructor(private val context: Context) {
     private fun connectReader(): NfcReader? {
         if (bounded.get()) return runCatching { NfcReader.getInstance(context) }.getOrNull()
 
+        val now = System.currentTimeMillis()
+        if (now - lastFailAt < FAIL_COOLDOWN_MS) return null
+
         // Ретрай: иногда сервис F20 не успевает подняться с первого bind.
         for (attempt in 1..2) {
             val reader = tryConnect()
             if (reader != null) return reader
             runCatching { Thread.sleep(1_500) }
         }
+        lastFailAt = System.currentTimeMillis()
         return null
     }
 
@@ -75,7 +86,7 @@ class CardProbe private constructor(private val context: Context) {
         Thread({
             runCatching {
                 ServiceManager.bindPosServer(context, binder)
-                val connected = latch.await(20, TimeUnit.SECONDS)
+                val connected = latch.await(12, TimeUnit.SECONDS)
                 if (connected && ok.get()) {
                     Log.i(tag, "FTSDK ServiceManager connected")
                 } else {
@@ -84,7 +95,7 @@ class CardProbe private constructor(private val context: Context) {
             }.onFailure { e -> Log.e(tag, "bindPosServer error", e) }
         }, "ftsdk-bind").start()
 
-        return if (latch.await(25, TimeUnit.SECONDS) && ok.get()) {
+        return if (latch.await(10, TimeUnit.SECONDS) && ok.get()) {
             bounded.set(true)
             runCatching { NfcReader.getInstance(context) }.getOrNull()
         } else {
@@ -100,6 +111,9 @@ class CardProbe private constructor(private val context: Context) {
     )
 
     companion object {
+        /** Кулдаун после полной неудачи bind'а (Samsung: callback не приходит никогда). */
+        private const val FAIL_COOLDOWN_MS = 60_000L
+
         @Volatile private var instance: CardProbe? = null
         fun get(context: Context): CardProbe =
             instance ?: synchronized(this) {

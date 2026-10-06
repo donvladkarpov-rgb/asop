@@ -19,11 +19,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -33,11 +35,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import ru.asop.payment.core.CardProbe
 import ru.asop.payment.core.LocalPaymentServer
 import ru.asop.payment.core.PayProcessor
@@ -93,12 +96,16 @@ class MainActivity : ComponentActivity() {
         val store = PendingPaymentStore.get(context)
         // В PoC-моде результат мгновенный (mock EMV). В боевом EMV здесь экран
         // «Приложите карту» → результат по завершении аппрува/таймаута.
-        val response = runBlocking { processor.process(request) }
-        runBlocking { store.persist(response, request.paymentType) }
-        Log.i(tag, "handoff result: ${response.status} paymentId=${response.paymentId}")
-        val result = PaymentHandoff.writeResult(Intent(intent), response)
-        setResult(RESULT_OK, result)
-        finish()
+        // Весь I/O (FTSDK bind, EMV, Room) — в Dispatchers.IO: runBlocking на main
+        // блокировал input dispatch → ANR «приложение не отвечает».
+        lifecycleScope.launch {
+            val response = withContext(Dispatchers.IO) { processor.process(request) }
+            withContext(Dispatchers.IO) { store.persist(response, request.paymentType) }
+            Log.i(tag, "handoff result: ${response.status} paymentId=${response.paymentId}")
+            val result = PaymentHandoff.writeResult(Intent(intent), response)
+            setResult(RESULT_OK, result)
+            finish()
+        }
     }
 }
 
@@ -120,7 +127,8 @@ class PoCViewModel : ViewModel() {
     fun refresh() {
         val c = appContext ?: return
         viewModelScope.launch {
-            val probe = CardProbe.get(c).checkNfc()
+            // checkNfc блокируется на FTSDK bind (latch до 25 c) — только IO-диспетчер.
+            val probe = withContext(Dispatchers.IO) { CardProbe.get(c).checkNfc() }
             _state.value = _state.value.copy(
                 probeCode = probe.checkCode,
                 probeExists = probe.isExist,
@@ -133,20 +141,30 @@ class PoCViewModel : ViewModel() {
     fun pay() {
         val c = appContext ?: return
         val amount = amountText.toDoubleOrNull() ?: return
+        if (_state.value.processing) return
+        _state.value = _state.value.copy(processing = true, log = "Обработка платежа…")
         viewModelScope.launch {
-            val request = PayRequest(
-                requestId = com.github.f4b6a3.uuid.UuidCreator.getTimeOrderedEpoch().toString(),
-                amount = amount,
-                currency = "RUB",
-                paymentType = "FARE",
-                capture = true,
-                sessionId = null,
-                transactionId = null,
-                message = "PoC demo"
-            )
-            val response = PayProcessor(c).process(request)
-            PendingPaymentStore.get(c).persist(response)
-            _state.value = _state.value.copy(log = response.toJson())
+            try {
+                val request = PayRequest(
+                    requestId = com.github.f4b6a3.uuid.UuidCreator.getTimeOrderedEpoch().toString(),
+                    amount = amount,
+                    currency = "RUB",
+                    paymentType = "FARE",
+                    capture = true,
+                    sessionId = null,
+                    transactionId = null,
+                    message = "PoC demo"
+                )
+                val response = withContext(Dispatchers.IO) { PayProcessor(c).process(request) }
+                withContext(Dispatchers.IO) { PendingPaymentStore.get(c).persist(response) }
+                _state.value = _state.value.copy(log = response.toJson(), processing = false)
+            } catch (e: Exception) {
+                Log.e("PoCVM", "pay failed", e)
+                _state.value = _state.value.copy(
+                    log = "Ошибка платежа: ${e.message}",
+                    processing = false
+                )
+            }
         }
     }
 }
@@ -155,12 +173,14 @@ data class StatusUiState(
     val probeCode: Int = -1,
     val probeExists: Boolean = false,
     val probeError: String? = null,
-    val log: String = "—"
+    val log: String = "—",
+    val processing: Boolean = false
 )
 
 @Composable
 private fun StatusScreen(vm: PoCViewModel, context: Context) {
     androidx.compose.runtime.LaunchedEffect(Unit) { vm.attach(context) }
+    val state by vm.state.collectAsState()
     Scaffold(modifier = Modifier.fillMaxSize()) { pad ->
         Column(
             modifier = Modifier
@@ -178,9 +198,8 @@ private fun StatusScreen(vm: PoCViewModel, context: Context) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("NFC (FTSDK NfcReader)", style = MaterialTheme.typography.titleMedium)
-                    val s = vm.state.value
-                    Text("checkNFCCardreader=${s.probeCode}  isExist=${s.probeExists}")
-                    s.probeError?.let { Text("err: $it") }
+                    Text("checkNFCCardreader=${state.probeCode}  isExist=${state.probeExists}")
+                    state.probeError?.let { Text("err: $it") }
                     Button(onClick = { vm.refresh() }) { Text("Проверить NFC") }
                 }
             }
@@ -193,13 +212,23 @@ private fun StatusScreen(vm: PoCViewModel, context: Context) {
                             modifier = Modifier.weight(1f)
                         )
                     }
-                    Button(onClick = { vm.pay() }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Выполнить платёж")
+                    Button(
+                        onClick = { vm.pay() },
+                        enabled = !state.processing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (state.processing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.height(18.dp).padding(end = 8.dp),
+                                strokeWidth = 2.dp
+                            )
+                        }
+                        Text(if (state.processing) "Обработка…" else "Выполнить платёж")
                     }
                 }
             }
             Text("Последний результат:", style = MaterialTheme.typography.labelLarge)
-            Text(vm.state.value.log, style = MaterialTheme.typography.bodySmall)
+            Text(state.log, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
