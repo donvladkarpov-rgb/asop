@@ -1,6 +1,7 @@
 import type { TripRegistrationReportRow } from '../../api/reports';
+import type { ShiftReportRow } from '../../api/reports-shifts';
 
-export type CellKind = 'text' | 'center' | 'money' | 'datetime';
+export type CellKind = 'text' | 'center' | 'money' | 'datetime' | 'num' | 'percent';
 
 export interface ReportColumn {
   /** Заголовок — ровно как в ТЗ, порядок фиксирован (29 колонок). */
@@ -8,6 +9,13 @@ export interface ReportColumn {
   width: number;
   kind: CellKind;
   get: (row: TripRegistrationReportRow) => string | number | null;
+}
+
+export interface ShiftReportColumn {
+  header: string;
+  width: number;
+  kind: CellKind;
+  get: (row: ShiftReportRow) => string | number | null;
 }
 
 const pad = (n: number) => n.toString().padStart(2, '0');
@@ -34,9 +42,41 @@ export function formatShare(value: string | number | null | undefined): string {
   return `${(n * 100).toFixed(2)}%`;
 }
 
+/** failedSharePct / cashlessSharePct приходят уже в процентах (44.44). */
+export function formatPct(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '';
+  const n = typeof value === 'number' ? value : Number(value);
+  if (Number.isNaN(n)) return String(value);
+  return `${n.toFixed(2)}%`;
+}
+
 function join(...parts: (string | null | undefined)[]): string {
   return parts.map((p) => (p ?? '').trim()).filter(Boolean).join(' ');
 }
+
+/** Колонки «Отчёт по сменам» (17 колонок, порядок фиксирован). */
+export const SHIFT_REPORT_COLUMNS: ShiftReportColumn[] = [
+  { header: 'ID смены', width: 260, kind: 'text', get: (r) => r.shiftId },
+  { header: 'Организатор', width: 180, kind: 'text', get: (r) => r.organizerName },
+  { header: 'Перевозчик', width: 180, kind: 'text', get: (r) => r.carrierName },
+  { header: 'Маршрут', width: 190, kind: 'text', get: (r) => join(r.routeNumber, r.routeName) },
+  { header: 'Транспортное средство', width: 190, kind: 'text', get: (r) => join(r.vehicleNumber, r.vehicleName) },
+  { header: 'Тип ТС', width: 90, kind: 'text', get: (r) => r.vehicleTypeName },
+  { header: 'Вид ТС', width: 110, kind: 'text', get: (r) => r.vehicleModelName },
+  { header: 'Серийный номер терминала', width: 150, kind: 'text', get: (r) => r.terminalSerial ?? r.terminalNumber },
+  { header: 'Дата открытия смены', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.shiftStartedAt) },
+  { header: 'Дата закрытия смены', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.shiftClosedAt) },
+  { header: 'Количество транзакций', width: 120, kind: 'num', get: (r) => r.transactionsCount },
+  { header: 'Успешных по картам', width: 115, kind: 'num', get: (r) => r.successfulCardTransactions },
+  { header: 'Неуспешных по картам', width: 115, kind: 'num', get: (r) => r.failedCardTransactions },
+  { header: 'Доля неуспешных', width: 110, kind: 'percent', get: (r) => r.failedSharePct },
+  { header: 'Сумма безнал', width: 120, kind: 'money', get: (r) => r.cashlessAmount },
+  { header: 'Сумма безнал (без скидки)', width: 140, kind: 'money', get: (r) => r.cashlessAmountWithoutDiscount },
+  { header: 'Количество безнал', width: 115, kind: 'num', get: (r) => r.cashlessCount },
+  { header: 'Безнал, доля', width: 110, kind: 'percent', get: (r) => r.cashlessSharePct },
+  { header: 'Сумма наличными', width: 120, kind: 'money', get: (r) => r.cashAmount },
+  { header: 'Количество наличными', width: 120, kind: 'num', get: (r) => r.cashCount },
+];
 
 export const REPORT_COLUMNS: ReportColumn[] = [
   { header: 'Реализатор', width: 180, kind: 'text', get: (r) => r.organizerName },

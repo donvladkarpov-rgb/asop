@@ -53,6 +53,9 @@ class TripRegistrationReportRepository(
                 t.TRANSACTION_TYPE_ID,
                 t.TRANSACTION_RESULT_ID,
                 t.CREATED_AT AS processed_at,
+                t.METADATA->>'acqReference' AS acq_reference,
+                t.METADATA->>'paymentSystem' AS payment_system,
+                t.METADATA->>'cardLast4' AS card_last4,
                 -- Время операции НА ТЕРМИНАЛЕ (metadata.tripsAt, epoch ms), иначе серверный STARTED_AT
                 CASE WHEN t.METADATA->>'tripsAt' ~ '^[0-9]+$'
                      THEN to_timestamp((t.METADATA->>'tripsAt')::double precision / 1000.0)
@@ -118,9 +121,33 @@ class TripRegistrationReportRepository(
                      ELSE 'МИФЕР' END AS payment_form,
                 COALESCE(bp.AMOUNT, 0) AS paid_amount,
 
+                -- Формат «СХЕМА:*ПОСЛ4» (как в «Сменах и рейсах»): источник схемы —
+                -- metadata.paymentSystem терминала, затем BIN; источник последних 4 —
+                -- metadata.cardLast4, затем ASOP_CARD_BANKS / ASOP_BANK_PAYMENTS.
                 CASE
-                    WHEN bp.PAYMENT_ID IS NOT NULL
-                        THEN CONCAT(BTRIM(COALESCE(cb.BIN, '')), '******', BTRIM(COALESCE(cb.PAN_LAST4, '')))
+                    WHEN bp.PAYMENT_ID IS NOT NULL AND COALESCE(
+                             NULLIF(BTRIM(COALESCE(tx.card_last4, '')), ''),
+                             NULLIF(BTRIM(COALESCE(cb.PAN_LAST4, '')), ''),
+                             NULLIF(BTRIM(COALESCE(bp.pan_last4, '')), '')) IS NOT NULL
+                        THEN COALESCE(
+                                CASE BTRIM(COALESCE(tx.payment_system, ''))
+                                    WHEN 'Visa' THEN 'VISA'
+                                    WHEN 'MasterCard' THEN 'MASTERCARD'
+                                    WHEN 'UnionPay' THEN 'UNIONPAY'
+                                    WHEN 'МИР' THEN 'МИР'
+                                    ELSE NULL END,
+                                CASE
+                                    WHEN SUBSTRING(BTRIM(COALESCE(cb.BIN, bp.bin, '')), 1, 4) BETWEEN '2200' AND '2204' THEN 'МИР'
+                                    WHEN SUBSTRING(BTRIM(COALESCE(cb.BIN, bp.bin, '')), 1, 1) = '4' THEN 'VISA'
+                                    WHEN SUBSTRING(BTRIM(COALESCE(cb.BIN, bp.bin, '')), 1, 2) BETWEEN '51' AND '55'
+                                      OR SUBSTRING(BTRIM(COALESCE(cb.BIN, bp.bin, '')), 1, 4) BETWEEN '2221' AND '2720' THEN 'MASTERCARD'
+                                    WHEN SUBSTRING(BTRIM(COALESCE(cb.BIN, bp.bin, '')), 1, 2) IN ('34', '37') THEN 'AMEX'
+                                    ELSE 'Карта' END)
+                             || ':*'
+                             || COALESCE(
+                                    NULLIF(BTRIM(COALESCE(tx.card_last4, '')), ''),
+                                    NULLIF(BTRIM(COALESCE(cb.PAN_LAST4, '')), ''),
+                                    NULLIF(BTRIM(COALESCE(bp.pan_last4, '')), ''))
                     WHEN cm.UID IS NOT NULL THEN encode(cm.UID, 'hex')
                     ELSE NULL
                 END AS card_number,
@@ -197,13 +224,25 @@ class TripRegistrationReportRepository(
               ON bn.BENEFIT_ID = COALESCE(tx.metadata_benefit_id, ub.BENEFIT_ID)
             -- Платёж за проезд: на транзакцию ожидается один, но при ретраях эквайера
             -- строк может быть несколько — берём последний.
+            -- Связка платежа: TRANSACTION_ID (backfill/resolve в payment-service), а если он ещё
+            -- NULL (отчёт пришёл раньше транзакции) — fallback по acqReference, но только на
+            -- ПЕРВУЮ транзакцию с этим acq, иначе дубликаты транзакций задвоят оплату.
             LEFT JOIN LATERAL (
-                SELECT p.PAYMENT_ID, p.AMOUNT, p.RRN
+                SELECT p.PAYMENT_ID, p.AMOUNT, p.RRN, p.BIN, p.PAN_LAST4
                 FROM ASOP_BANK_PAYMENTS p
-                WHERE p.TRANSACTION_ID = tx.TRANSACTION_ID
-                  AND p.PAYMENT_TYPE = 'FARE'
+                WHERE p.PAYMENT_TYPE = 'FARE'
                   AND p.DELETED_AT IS NULL
-                ORDER BY p.CREATED_AT DESC
+                  AND (p.TRANSACTION_ID = tx.TRANSACTION_ID
+                       OR (p.TRANSACTION_ID IS NULL
+                           AND tx.acq_reference IS NOT NULL
+                           AND p.ACQUIRER_REFERENCE = tx.acq_reference
+                           AND NOT EXISTS (
+                               SELECT 1 FROM ASOP_TRANSACTIONS t2
+                               WHERE t2.METADATA->>'acqReference' = tx.acq_reference
+                                 AND t2.CREATED_AT < tx.processed_at
+                           )))
+                ORDER BY CASE WHEN p.TRANSACTION_ID = tx.TRANSACTION_ID THEN 0 ELSE 1 END,
+                         p.CREATED_AT DESC
                 LIMIT 1
             ) bp ON TRUE
             -- Фискальный чек: на транзакцию может быть несколько попыток — берём последний.

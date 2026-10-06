@@ -1,5 +1,6 @@
 import type { TripRegistrationReport, TripRegistrationReportRow } from '../../api/reports';
-import { REPORT_COLUMNS } from './columns';
+import type { ShiftReport } from '../../api/reports-shifts';
+import { REPORT_COLUMNS, SHIFT_REPORT_COLUMNS, formatPct, type ShiftReportColumn } from './columns';
 
 /**
  * SpreadsheetML 2003 (Excel XML) — открывается двойным кликом в Excel/LibreOffice.
@@ -32,9 +33,11 @@ function cellNumber(value: unknown, styleId?: string): string {
   return `<Cell${style}><Data ss:Type="Number">${safe}</Data></Cell>`;
 }
 
-/** Ячейка по типу колонки: money → Number, остальное → String. */
+/** Ячейка по типу колонки: money → Number, числа → Number, остальное → String. */
 function typedCell(value: unknown, kind: string): string {
-  return kind === 'money' ? cellNumber(value, 's-money') : cell(value, styleFor(kind));
+  if (kind === 'money' || kind === 'num') return cellNumber(value, 's-money');
+  if (kind === 'percent') return cell(formatPct(value as string | number), 's-money');
+  return cell(value, styleFor(kind));
 }
 
 /** 1-based индекс колонки «Оплаченная сумма» — в неё встаёт итоговая сумма. */
@@ -170,6 +173,111 @@ export function downloadExcelXml(report: TripRegistrationReport): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `Отчет-реестр_${report.dateFrom}_${report.dateTo}.xml`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ===== «Отчёт по сменам» =====
+
+/** 1-based индекс первой денежной колонки («Сумма безнал») — в неё встаёт итог. */
+const SHIFT_MONEY_COLUMN_INDEX = SHIFT_REPORT_COLUMNS.findIndex((c) => c.header === 'Сумма безнал') + 1;
+
+function shiftHeaderRow(): string {
+  const cells = SHIFT_REPORT_COLUMNS.map((c) => cell(c.header, 's-header')).join('');
+  const widths = SHIFT_REPORT_COLUMNS.map((c) => `<Column ss:Width="${c.width}"/>`).join('');
+  return `${widths}\n   <Row ss:Height="32">${cells}</Row>`;
+}
+
+function shiftDetailRows(report: ShiftReport): string {
+  return report.rows
+    .map((row) => {
+      const cells = SHIFT_REPORT_COLUMNS.map((c: ShiftReportColumn) => typedCell(c.get(row), c.kind)).join('');
+      return `<Row>${cells}</Row>`;
+    })
+    .join('\n   ');
+}
+
+/** Лист «Итоги»: 4 уровня группировки (организатор → перевозчик → маршрут → смена). */
+function shiftTotalsSheet(report: ShiftReport): string {
+  const head = `<Row>${cell('Уровень', 's-header')}${cell('Группировка', 's-header')}${cell('Смен', 's-header')}${cell('Транзакций', 's-header')}${cell('Безнал', 's-header')}${cell('Наличными', 's-header')}</Row>`;
+  const label = (t: ShiftReport['totals'][number]): string => {
+    switch (t.level) {
+      case 1: return t.organizerName ?? '—';
+      case 2: return `${t.organizerName ?? '—'} / ${t.carrierName ?? '—'}`;
+      case 3: return `${t.carrierName ?? '—'} / ${t.routeLabel ?? '—'}`;
+      default: return `Смена ${t.shiftId ?? '—'}`;
+    }
+  };
+  const body = report.totals
+    .map(
+      (t) =>
+        `<Row>${cell(t.levelName, 's-center')}${cell(label(t))}${cellNumber(t.shiftsCount)}${cellNumber(t.transactionsCount)}${cellNumber(t.cashlessAmount, 's-total-money')}${cellNumber(t.cashAmount, 's-total-money')}</Row>`,
+    )
+    .join('\n   ');
+  const grand =
+    `<Row>${cell('', 's-total')}${cell('ИТОГО', 's-total')}` +
+    `${cellNumber(report.rows.length, 's-total')}${cellNumber(report.grandTotalTransactions, 's-total')}` +
+    `${cellNumber(report.grandTotalCashlessAmount, 's-total-money')}${cellNumber(report.grandTotalCashAmount, 's-total-money')}</Row>`;
+  return ` <Worksheet ss:Name="Итоги">
+  <Table>
+   <Column ss:Width="90"/>
+   <Column ss:Width="420"/>
+   <Column ss:Width="70"/>
+   <Column ss:Width="100"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="110"/>
+   ${head}
+   ${body}
+   ${grand}
+  </Table>
+ </Worksheet>`;
+}
+
+export function buildShiftExcelXml(report: ShiftReport): string {
+  const titleRow = `<Row>${cell(report.title, 's-title')}</Row>`;
+  // ИТОГО: объединённая ячейка до «Сумма безнал» + сумма + количество смен/транзакций.
+  const grandRow =
+    `<Row>` +
+    `<Cell ss:MergeAcross="${SHIFT_MONEY_COLUMN_INDEX - 2}" ss:StyleID="s-total">` +
+    `<Data ss:Type="String">${esc(
+      `ИТОГО — смен: ${report.totalRows}, транзакций: ${report.grandTotalTransactions}`,
+    )}</Data></Cell>` +
+    `<Cell ss:Index="${SHIFT_MONEY_COLUMN_INDEX}" ss:StyleID="s-total-money">` +
+    `<Data ss:Type="Number">${Number(report.grandTotalCashlessAmount) || 0}</Data></Cell>` +
+    `<Cell ss:StyleID="s-total-money">` +
+    `<Data ss:Type="Number">${Number(report.grandTotalCashAmount) || 0}</Data></Cell>` +
+    `</Row>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+${STYLES}
+ <Worksheet ss:Name="Смены">
+  <Table>
+   ${titleRow}
+   ${shiftHeaderRow()}
+   ${shiftDetailRows(report)}
+   <Row ss:Height="6"/>
+   ${grandRow}
+  </Table>
+ </Worksheet>
+${shiftTotalsSheet(report)}
+</Workbook>`;
+}
+
+export function downloadShiftExcelXml(report: ShiftReport): void {
+  const xml = `\uFEFF${buildShiftExcelXml(report)}`;
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Отчет-по-сменам_${report.dateFrom}_${report.dateTo}.xml`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

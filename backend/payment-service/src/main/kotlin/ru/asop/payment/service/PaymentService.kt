@@ -100,9 +100,40 @@ class PaymentService(
     }
 
     fun report(request: PaymentReportRequest): Mono<PaymentResponse> =
-        payments.findActiveById(request.paymentId)
-            .flatMap { existing -> updateFromReport(existing, request) }
-            .switchIfEmpty(createFromReport(request))
+        resolveTransactionLink(request).flatMap { req ->
+            payments.findActiveById(req.paymentId)
+                .flatMap { existing -> updateFromReport(existing, req) }
+                .switchIfEmpty(createFromReport(req))
+        }
+
+    /**
+     * Связка отчёта с транзакцией: терминал не передаёт transactionId (его создаёт
+     * gateway при приёме /sync/transactions), поэтому матчим по acqReference —
+     * `METADATA->>'acqReference'` транзакции равно `ACQUIRER_REFERENCE` платежа.
+     * Если транзакция ещё не пришла — остаётся NULL, fallback в отчётном SQL догонит.
+     */
+    private fun resolveTransactionLink(request: PaymentReportRequest): Mono<PaymentReportRequest> {
+        if (request.transactionId != null) return Mono.just(request)
+        val acq = request.acqReference?.takeIf { it.isNotBlank() } ?: return Mono.just(request)
+        return db.sql(
+            """
+            SELECT TRANSACTION_ID, SESSION_ID
+            FROM ASOP_TRANSACTIONS
+            WHERE METADATA->>'acqReference' = :acq
+            ORDER BY CREATED_AT ASC
+            LIMIT 1
+            """.trimIndent()
+        )
+            .bind("acq", acq)
+            .map { row, _ ->
+                row.get("transaction_id", UUID::class.java) to row.get("session_id", UUID::class.java)
+            }
+            .first()
+            .map { (txId, sessId) ->
+                request.copy(transactionId = txId, sessionId = request.sessionId ?: sessId)
+            }
+            .defaultIfEmpty(request)
+    }
 
     fun get(paymentId: UUID): Mono<PaymentResponse> =
         payments.findActiveById(paymentId).map { toResponse(it) }

@@ -46,13 +46,12 @@ class ShiftReportRepository(
                 SELECT t.SESSION_ID, t.PATH_ID, t.VEHICLE_ID
                 FROM ASOP_SESSIONS t
                 WHERE t.PARENT_SESSION_ID = sh.SESSION_ID
-                ORDER BY t.CREATED_AT ASC
+                ORDER BY t.STARTED_AT ASC
                 LIMIT 1
             ) tr ON TRUE
             WHERE sh.SESSION_TYPE_ID = '00000000-0000-0000-0000-000000000601'
               AND sh.STARTED_AT >= :dateFrom::date
               AND sh.STARTED_AT <  (:dateTo::date + INTERVAL '1 day')
-              AND sh.DELETED_AT IS NULL
         ),
         tx AS (
             SELECT
@@ -69,16 +68,29 @@ class ShiftReportRepository(
                 -- Сумма без скидки: используем appliedTariff/regTariff из метаданных? В отчёте это SUM bp.amount?
                 -- В исходном XLS: "Сумма безнал (без скидки)" — 15785.0 для 451 безнал. Иногда бывает > безнал.
                 -- Попробуем взять MAX(p.AMOUNT_WITHOUT_DISCOUNT) или сумму? Либо NULL не трогаем — часто равна full fare.
-                COALESCE(SUM(bp.AMOUNT_WITHOUT_DISCOUNT) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL AND bp.AMOUNT_WITHOUT_DISCOUNT IS NOT NULL), 0) AS cashless_amount_without_discount,
-                COUNT(*) FILTER (WHERE bp.PAYMENT_ID IS NULL AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901') AS cash_count,
-                COALESCE(SUM(COALESCE((t.METADATA->>'amount')::numeric, 0)) FILTER (WHERE bp.PAYMENT_ID IS NULL AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901'), 0) AS cash_amount
+                COALESCE(SUM(NULL::numeric) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL), 0) AS cashless_amount_without_discount,
+                COUNT(*) FILTER (WHERE bp.PAYMENT_ID IS NULL AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901' AND COALESCE((t.METADATA->>'tripsDebited')::numeric, 0) = 0 AND COALESCE((t.METADATA->>'tripsAfter')::numeric, 0) = 0) AS cash_count,
+                COALESCE(SUM(COALESCE((t.METADATA->>'amount')::numeric, t.AMOUNT, 0)) FILTER (WHERE bp.PAYMENT_ID IS NULL AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901' AND COALESCE((t.METADATA->>'tripsDebited')::numeric, 0) = 0 AND COALESCE((t.METADATA->>'tripsAfter')::numeric, 0) = 0), 0) AS cash_amount
             FROM ASOP_TRANSACTIONS t
             JOIN ASOP_SESSIONS tr ON tr.SESSION_ID = t.SESSION_ID
+            -- Связка платежа: TRANSACTION_ID (backfill/resolve в payment-service), fallback по
+            -- acqReference для непривязанных (отчёт пришёл раньше транзакции) — только на первую
+            -- транзакцию с этим acq, чтобы дубликаты не задвоили безнал.
             LEFT JOIN LATERAL (
-                SELECT p.PAYMENT_ID, p.AMOUNT, p.AMOUNT_WITHOUT_DISCOUNT
+                SELECT p.PAYMENT_ID, p.AMOUNT
                 FROM ASOP_BANK_PAYMENTS p
-                WHERE p.TRANSACTION_ID = t.TRANSACTION_ID AND p.PAYMENT_TYPE = 'FARE' AND p.DELETED_AT IS NULL
-                ORDER BY p.CREATED_AT DESC
+                WHERE p.PAYMENT_TYPE = 'FARE' AND p.DELETED_AT IS NULL
+                  AND (p.TRANSACTION_ID = t.TRANSACTION_ID
+                       OR (p.TRANSACTION_ID IS NULL
+                           AND t.METADATA->>'acqReference' IS NOT NULL
+                           AND p.ACQUIRER_REFERENCE = t.METADATA->>'acqReference'
+                           AND NOT EXISTS (
+                               SELECT 1 FROM ASOP_TRANSACTIONS t2
+                               WHERE t2.METADATA->>'acqReference' = t.METADATA->>'acqReference'
+                                 AND t2.CREATED_AT < t.CREATED_AT
+                           )))
+                ORDER BY CASE WHEN p.TRANSACTION_ID = t.TRANSACTION_ID THEN 0 ELSE 1 END,
+                         p.CREATED_AT DESC
                 LIMIT 1
             ) bp ON TRUE
             WHERE t.TRANSACTION_TYPE_ID IN ('00000000-0000-0000-0000-000000000801', '00000000-0000-0000-0000-000000000803')

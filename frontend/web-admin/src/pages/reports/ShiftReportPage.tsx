@@ -7,7 +7,8 @@ import { getTerminals } from '../../api/terminals';
 import type { Terminal } from '../../types';
 import { getShiftReport, type ShiftReportParams } from '../../api/reports-shifts';
 import { useGlobalFilter } from '../../contexts/GlobalFilterContext';
-import { formatDateTime, formatMoney } from './columns';
+import { SHIFT_REPORT_COLUMNS, formatDateTime, formatMoney, formatPct, type CellKind } from './columns';
+import { downloadShiftExcelXml } from './excelXml';
 
 function isoToday(): string {
   const d = new Date();
@@ -31,6 +32,8 @@ export function ShiftReportPage() {
   const [driverId, setDriverId] = useState('');
   const [applied, setApplied] = useState(false);
 
+  // Дефолты берём из правой панели глобального фильтра (регион/перевозчик),
+  // но только пока пользователь не выбрал свои значения.
   const [touched, setTouched] = useState({ region: false, carrier: false });
   useEffect(() => {
     if (!touched.region && globalFilter.regionId) {
@@ -47,13 +50,35 @@ export function ShiftReportPage() {
   }, [globalFilter.carrierId, touched.carrier]);
 
   const regionsQuery = useQuery({ queryKey: ['regions'], queryFn: getRegions });
-  const organizersQuery = useQuery({ queryKey: ['organizers', regionId], queryFn: () => getOrganizers(regionId || undefined), enabled: true });
-  const carriersQuery = useQuery({ queryKey: ['carriers', regionId], queryFn: () => getCarriers(regionId || undefined) });
-  const routesQuery = useQuery({ queryKey: ['routes', regionId], queryFn: () => getRoutes(regionId ? { regionId } : {}) });
-  const pathsQuery = useQuery({ queryKey: ['paths', regionId], queryFn: () => getPaths(regionId ? { regionId } : {}) });
-  const vehiclesQuery = useQuery({ queryKey: ['vehicles', regionId, carrierId], queryFn: () => getVehicles({ regionId: regionId || undefined, carrierId: carrierId || undefined }) });
-  const terminalsQuery = useQuery({ queryKey: ['terminals', carrierId], queryFn: () => getTerminals(carrierId || undefined, regionId || undefined) });
-  const usersQuery = useQuery({ queryKey: ['admin-users', regionId, carrierId], queryFn: () => getAdminUsers({ regionId: regionId || undefined, carrierId: carrierId || undefined }) });
+  const organizersQuery = useQuery({
+    queryKey: ['organizers', regionId],
+    queryFn: () => getOrganizers(regionId || undefined),
+    enabled: true,
+  });
+  const carriersQuery = useQuery({
+    queryKey: ['carriers', regionId],
+    queryFn: () => getCarriers(regionId || undefined),
+  });
+  const routesQuery = useQuery({
+    queryKey: ['routes', regionId],
+    queryFn: () => getRoutes(regionId ? { regionId } : {}),
+  });
+  const pathsQuery = useQuery({
+    queryKey: ['paths', regionId],
+    queryFn: () => getPaths(regionId ? { regionId } : {}),
+  });
+  const vehiclesQuery = useQuery({
+    queryKey: ['vehicles', regionId, carrierId],
+    queryFn: () => getVehicles({ regionId: regionId || undefined, carrierId: carrierId || undefined }),
+  });
+  const terminalsQuery = useQuery({
+    queryKey: ['terminals', carrierId],
+    queryFn: () => getTerminals(carrierId || undefined, regionId || undefined),
+  });
+  const usersQuery = useQuery({
+    queryKey: ['admin-users', regionId, carrierId],
+    queryFn: () => getAdminUsers({ regionId: regionId || undefined, carrierId: carrierId || undefined }),
+  });
 
   const params: ShiftReportParams = useMemo(
     () => ({
@@ -69,7 +94,9 @@ export function ShiftReportPage() {
       terminalId: terminalId || undefined,
       driverId: driverId || undefined,
     }),
-    [dateFrom, dateTo, regionId, organizerId, carrierId, routeId, pathId, vehicleId, terminalId, driverId, applied]
+    // applied — «заморозка» фильтров до нажатия «Построить отчёт»
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dateFrom, dateTo, regionId, organizerId, carrierId, routeId, pathId, vehicleId, terminalId, driverId, applied],
   );
 
   const reportQuery = useQuery({
@@ -110,193 +137,263 @@ export function ShiftReportPage() {
     setVehicleId('');
   }
 
-  function pct(v: string | number): string {
-    const n = typeof v === 'number' ? v : Number(v);
-    if (Number.isNaN(n)) return String(v);
-    return `${n.toFixed(2)}%`;
+  function formatCell(kind: CellKind, value: string | number | null): string {
+    if (value === null || value === undefined) return '';
+    if (kind === 'money') return formatMoney(value);
+    if (kind === 'datetime') return formatDateTime(String(value));
+    if (kind === 'percent') return formatPct(value);
+    return String(value);
+  }
+
+  function driverName(u: AdminUser): string {
+    return `${u.lastNameInitial}.`;
   }
 
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Отчёт по сменам</h1>
+        <h1>Отчёты</h1>
+        <p className="page-subtitle">Отчёт по сменам: транзакции, безнал/наличные, итоги по группам</p>
       </div>
 
-      <div className="filter-panel">
-        <div className="filter-row">
-          <div className="filter-field">
-            <label>Дата с</label>
-            <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setApplied(false); }} />
-          </div>
-          <div className="filter-field">
-            <label>Дата по</label>
-            <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setApplied(false); }} />
+      <div className="filters-panel">
+        <div className="filters-row">
+          <label className="field">
+            <span className="field-label">Период с</span>
+            <input type="date" value={dateFrom} max={dateTo} onChange={(e) => setDateFrom(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">по</span>
+            <input type="date" value={dateTo} min={dateFrom} onChange={(e) => setDateTo(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="field-label">Регион</span>
+            <select
+              value={regionId}
+              onChange={(e) => {
+                setRegionId(e.target.value);
+                setCarrierId('');
+                setOrganizerId('');
+                setTouched((t) => ({ ...t, region: true }));
+                resetDependents();
+              }}
+            >
+              <option value="">Все</option>
+              {(regionsQuery.data ?? []).map((r) => (
+                <option key={r.id} value={r.id}>{r.municipalDivision}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Организатор</span>
+            <select
+              value={organizerId}
+              onChange={(e) => {
+                setOrganizerId(e.target.value);
+                setRouteId('');
+                setPathId('');
+              }}
+            >
+              <option value="">Все</option>
+              {(organizersQuery.data ?? []).map((o) => (
+                <option key={o.id} value={o.id}>{o.organizerName}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Перевозчик</span>
+            <select
+              value={carrierId}
+              onChange={(e) => {
+                setCarrierId(e.target.value);
+                setTerminalId('');
+                setTouched((t) => ({ ...t, carrier: true }));
+                resetDependents();
+              }}
+            >
+              <option value="">Все</option>
+              {(carriersQuery.data ?? []).map((c) => (
+                <option key={c.id} value={c.id}>{c.carrierName}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Маршрут</span>
+            <select value={routeId} onChange={(e) => { setRouteId(e.target.value); setPathId(''); }}>
+              <option value="">Все</option>
+              {(routesQuery.data ?? [])
+                .filter((r: Route) => !organizerId || r.organizerId === organizerId)
+                .map((r: Route) => (
+                  <option key={r.id} value={r.id}>
+                    {r.routeNumber} {r.routeName}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="filters-row">
+          <label className="field">
+            <span className="field-label">Путь</span>
+            <select value={pathId} onChange={(e) => setPathId(e.target.value)}>
+              <option value="">Все</option>
+              {(pathsQuery.data ?? [])
+                .filter((p: Path) => !routeId || p.routeId === routeId)
+                .map((p: Path) => (
+                  <option key={p.id} value={p.id}>{p.pathName}</option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">ТС</span>
+            <select value={vehicleId} onChange={(e) => setVehicleId(e.target.value)}>
+              <option value="">Все</option>
+              {(vehiclesQuery.data ?? []).map((v: Vehicle) => (
+                <option key={v.id} value={v.id}>{v.vehicleNumber} {v.vehicleName}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Терминал</span>
+            <select value={terminalId} onChange={(e) => setTerminalId(e.target.value)}>
+              <option value="">Все</option>
+              {(terminalsQuery.data ?? []).map((t: Terminal) => (
+                <option key={t.id} value={t.id}>{t.terminalNumber ?? t.terminalSerial}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Водитель</span>
+            <select value={driverId} onChange={(e) => setDriverId(e.target.value)}>
+              <option value="">Все</option>
+              {(usersQuery.data ?? []).map((u: AdminUser) => (
+                <option key={u.id} value={u.id}>{u.firstName} {driverName(u)}</option>
+              ))}
+            </select>
+          </label>
+          <div className="field field-actions">
+            <button className="btn btn-primary" onClick={() => setApplied(true)} disabled={reportQuery.isFetching}>
+              {reportQuery.isFetching ? 'Загрузка…' : 'Построить отчёт'}
+            </button>
+            <button
+              className="btn"
+              disabled={!report || rows.length === 0}
+              onClick={() => report && downloadShiftExcelXml(report)}
+            >
+              Выгрузить в Excel
+            </button>
           </div>
         </div>
 
-        <div className="filter-row">
-          <div className="filter-field">
-            <label>Регион</label>
-            <select value={regionId} onChange={(e) => { setRegionId(e.target.value); setTouched((t) => ({ ...t, region: true })); setCarrierId(''); resetDependents(); setApplied(false); }}>
-              <option value="">Все</option>
-              {regionsQuery.data?.map((r: any) => (<option key={r.regionId} value={r.regionId}>{r.regionName}</option>))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label>Организатор</label>
-            <select value={organizerId} onChange={(e) => { setOrganizerId(e.target.value); setApplied(false); }}>
-              <option value="">Все</option>
-              {organizersQuery.data?.map((o: any) => (<option key={o.organizerId} value={o.organizerId}>{o.organizerName}</option>))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label>Перевозчик</label>
-            <select value={carrierId} onChange={(e) => { setCarrierId(e.target.value); setTouched((t) => ({ ...t, carrier: true })); resetDependents(); setApplied(false); }}>
-              <option value="">Все</option>
-              {carriersQuery.data?.map((c: any) => (<option key={c.carrierId} value={c.carrierId}>{c.carrierName}</option>))}
-            </select>
-          </div>
-        </div>
-
-        <div className="filter-row">
-          <div className="filter-field">
-            <label>Маршрут</label>
-            <select value={routeId} onChange={(e) => { setRouteId(e.target.value); setPathId(''); setApplied(false); }}>
-              <option value="">Все</option>
-              {(routesQuery.data as Route[] | undefined)?.map((rt: Route) => (<option key={rt.id} value={rt.id}>{rt.routeNumber} {rt.routeName}</option>))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label>Путь</label>
-            <select value={pathId} onChange={(e) => { setPathId(e.target.value); setVehicleId(''); setApplied(false); }}>
-              <option value="">Все</option>
-              {(pathsQuery.data as Path[] | undefined)?.map((p: Path) => (<option key={p.id} value={p.id}>{p.pathName}</option>))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label>Транспортное средство</label>
-            <select value={vehicleId} onChange={(e) => { setVehicleId(e.target.value); setApplied(false); }}>
-              <option value="">Все</option>
-              {(vehiclesQuery.data as Vehicle[] | undefined)?.map((v: Vehicle) => (<option key={v.id} value={v.id}>{v.vehicleNumber} {v.vehicleName}</option>))}
-            </select>
-          </div>
-        </div>
-
-        <div className="filter-row">
-          <div className="filter-field">
-            <label>Терминал</label>
-            <select value={terminalId} onChange={(e) => { setTerminalId(e.target.value); setApplied(false); }}>
-              <option value="">Все</option>
-              {(terminalsQuery.data as Terminal[] | undefined)?.map((t: Terminal) => (<option key={t.id} value={t.id}>{t.terminalNumber || t.terminalSerial}</option>))}
-            </select>
-          </div>
-          <div className="filter-field">
-            <label>Водитель</label>
-            <select value={driverId} onChange={(e) => { setDriverId(e.target.value); setApplied(false); }}>
-              <option value="">Все</option>
-              {(usersQuery.data as AdminUser[] | undefined)?.map((u: AdminUser) => (<option key={u.id} value={u.id}>{u.firstName} {u.lastNameInitial}</option>))}
-            </select>
-          </div>
-        </div>
-
-        <div className="filter-actions">
-          <button className="btn btn-primary" onClick={() => setApplied(true)}>Построить отчёт</button>
-          <button className="btn btn-secondary" onClick={() => { setApplied(false); }}>Сбросить фильтры</button>
-        </div>
+        <p className="hint">
+          Группировка и сортировка: организатор → перевозчик → маршрут → смена. Итоги по каждой группе —
+          в блоке «Итоги по группам» под сводкой.
+        </p>
       </div>
 
-      {applied && reportQuery.isFetching && <p>Загрузка…</p>}
-      {applied && reportQuery.isError && <div className="alert alert-error">Не удалось построить отчёт</div>}
+      {applied && report && (
+        <>
+          <div className="report-summary">
+            <h2 className="report-title">{report.title}</h2>
+            <div className="report-stats">
+              <span>Смен: <b>{report.totalRows}</b></span>
+              <span>Транзакций: <b>{report.grandTotalTransactions}</b></span>
+              <span>Безнал: <b>{formatMoney(report.grandTotalCashlessAmount)} ₽</b></span>
+              <span>Наличными: <b>{formatMoney(report.grandTotalCashAmount)} ₽</b></span>
+              {report.totalRows > report.rows.length && (
+                <span className="hint">
+                  Показана первая {report.rows.length} строк из {report.totalRows} — сузьте период или фильтры
+                </span>
+              )}
+            </div>
+          </div>
 
-      {applied && grouped.length > 0 && (
-        <details className="report-totals">
-          <summary>Итоги по группам ({grouped.length})</summary>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Уровень</th>
-                <th>Группировка</th>
-                <th className="num">Смен</th>
-                <th className="num">Транзакций</th>
-                <th className="num">Сумма безнал</th>
-                <th className="num">Сумма наличными</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grouped.map((g) => (
-                <tr key={`${g.level}-${g.key}`} className={`total-row total-level-${g.level}`}>
-                  <td>{g.levelName}</td>
-                  <td>{g.label}</td>
-                  <td className="num">{g.shifts}</td>
-                  <td className="num">{g.transactions}</td>
-                  <td className="num">{formatMoney(g.cashless)}</td>
-                  <td className="num">{formatMoney(g.cash)}</td>
+          {reportQuery.isError && (
+            <div className="alert alert-error">
+              Не удалось построить отчёт: {(reportQuery.error as Error)?.message}
+            </div>
+          )}
+
+          {grouped.length > 0 && (
+            <details className="report-totals">
+              <summary>Итоги по группам ({grouped.length})</summary>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Уровень</th>
+                    <th>Группировка</th>
+                    <th className="num">Смен</th>
+                    <th className="num">Транзакций</th>
+                    <th className="num">Сумма безнал</th>
+                    <th className="num">Сумма наличными</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {grouped.map((g) => (
+                    <tr key={`${g.level}-${g.key}`} className={`total-row total-level-${g.level}`}>
+                      <td>{g.levelName}</td>
+                      <td>{g.label}</td>
+                      <td className="num">{g.shifts}</td>
+                      <td className="num">{g.transactions}</td>
+                      <td className="num">{formatMoney(g.cashless)}</td>
+                      <td className="num">{formatMoney(g.cash)}</td>
+                    </tr>
+                  ))}
+                  <tr className="total-row total-grand">
+                    <td colSpan={3}>ИТОГО</td>
+                    <td className="num">{report.grandTotalTransactions}</td>
+                    <td className="num">{formatMoney(report.grandTotalCashlessAmount)}</td>
+                    <td className="num">{formatMoney(report.grandTotalCashAmount)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </details>
+          )}
+
+          <div className="table-scroll report-table-scroll">
+            <table className="data-table report-table">
+              <thead>
+                <tr>
+                  {SHIFT_REPORT_COLUMNS.map((c) => (
+                    <th
+                      key={c.header}
+                      style={{ minWidth: c.width }}
+                      className={c.kind === 'money' || c.kind === 'num' || c.kind === 'percent' ? 'num' : undefined}
+                    >
+                      {c.header}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-              <tr className="total-row total-grand">
-                <td colSpan={3}>ИТОГО</td>
-                <td className="num">{report?.grandTotalTransactions}</td>
-                <td className="num">{formatMoney(report?.grandTotalCashlessAmount)}</td>
-                <td className="num">{formatMoney(report?.grandTotalCashAmount)}</td>
-              </tr>
-            </tbody>
-          </table>
-        </details>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.shiftId}>
+                    {SHIFT_REPORT_COLUMNS.map((c) => (
+                      <td
+                        key={c.header}
+                        className={c.kind === 'money' || c.kind === 'num' || c.kind === 'percent' ? 'num' : undefined}
+                      >
+                        {formatCell(c.kind, c.get(r))}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={SHIFT_REPORT_COLUMNS.length} className="empty-cell">
+                      За выбранный период смен не найдено
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
-      {applied && rows.length > 0 && (
-        <div className="table-scroll report-table-scroll">
-          <table className="data-table report-table">
-            <thead>
-              <tr>
-                <th>ID смены</th>
-                <th>Перевозчик</th>
-                <th>Маршрут</th>
-                <th>Транспортное средство</th>
-                <th>Серийный номер терминала</th>
-                <th>Дата открытия смены</th>
-                <th>Дата закрытия смены</th>
-                <th className="num">Количество транзакций</th>
-                <th className="num">Успешных по картам</th>
-                <th className="num">Неуспешных по картам</th>
-                <th className="num">Доля неуспешных</th>
-                <th className="num">Сумма безнал</th>
-                <th className="num">Сумма безнал (без скидки)</th>
-                <th className="num">Количество безнал</th>
-                <th className="num">Безнал, доля</th>
-                <th className="num">Сумма наличными</th>
-                <th className="num">Количество наличными</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.shiftId}>
-                  <td>{r.shiftId}</td>
-                  <td>{r.carrierName}</td>
-                  <td>{r.routeNumber} {r.routeName}</td>
-                  <td>{r.vehicleNumber} {r.vehicleName}</td>
-                  <td>{r.terminalSerial || r.terminalNumber}</td>
-                  <td>{formatDateTime(r.shiftStartedAt)}</td>
-                  <td>{formatDateTime(r.shiftClosedAt)}</td>
-                  <td className="num">{r.transactionsCount}</td>
-                  <td className="num">{r.successfulCardTransactions}</td>
-                  <td className="num">{r.failedCardTransactions}</td>
-                  <td className="num">{pct(r.failedSharePct)}</td>
-                  <td className="num">{formatMoney(r.cashlessAmount)}</td>
-                  <td className="num">{formatMoney(r.cashlessAmountWithoutDiscount)}</td>
-                  <td className="num">{r.cashlessCount}</td>
-                  <td className="num">{pct(r.cashlessSharePct)}</td>
-                  <td className="num">{formatMoney(r.cashAmount)}</td>
-                  <td className="num">{r.cashCount}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {!applied && (
+        <p className="hint">Задайте период и фильтры, затем нажмите «Построить отчёт».</p>
       )}
-
-      {applied && rows.length === 0 && <p>За выбранный период операций не найдено</p>}
-      {!applied && <p className="hint">Задайте период и фильтры, затем нажмите «Построить отчёт».</p>}
     </div>
   );
 }
