@@ -214,7 +214,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 
 ## 15. Отчёты (web-admin) ✅
 
-Три отчёта в card-service через gateway (`ServiceRegistry["reports"]` → card-service:8086), без Kafka. Подробно — `AGENTS.md` раздел «Отчёты» и `doc/context.md` раздел «Отчёты (reports)».
+Четыре отчёта в card-service через gateway (`ServiceRegistry["reports"]` → card-service:8086), без Kafka. Подробно — `AGENTS.md` раздел «Отчёты» и `doc/context.md` раздел «Отчёты (reports)».
 
 - [x] **Реестр операций регистрации проезда** — `GET /api/v1/reports/trip-registrations` (29 колонок, итоги 5 уровней GROUPING SETS, dateFrom/dateTo + scope-фильтры + offset/limit), страница `/reports/trip-registrations` + SpreadsheetML-выгрузка.
 - [x] **Отчёт по сменам** — `GET /api/v1/reports/shifts` (20 колонок, итоги 4 уровней), страница `/reports/shifts`; «морда» и фильтры перенесены с страницы реестра (class `filters-panel`/`filters-row`/`field`), исправлены dropdown'ы региона/организатора/перевозчика (в типах поля `id`, а не `regionId`/`carrierId`).
@@ -223,4 +223,5 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **Семантика наличных/первого рейса в отчёте смен** — `tripsDebited=0 AND tripsAfter=0`, первый рейс по `STARTED_AT`, soft-deleted смены включены.
 - [x] **seed-data-report-demo.sql** — 16 транзакций (включая 4 наличных и отклонённую `…0902`), 3 банковских платежа.
 - [x] **Сводный по льготам** — `GET /api/v1/reports/benefit-trips` (8 колонок, зерно регион+категория, итоги 2 уровней, возмещение = тариф × доля скидки, льгота из `metadata.benefitId` + серверный fallback по payer-карте), страница `/reports/benefit-trips` (`BenefitReportPage`, `api/reports-benefit.ts`, `BENEFIT_REPORT_COLUMNS`, `downloadBenefitExcelXml`). Проверено на демо: 2 категории / 18 поездок / 490.50; фикс `REGION_NAME` (колонки нет в `ASOP_REGIONS` → `COALESCE(MUNICIPAL_DIVISION, ADMIN_DIVISION)`).
+- [x] **Список смен** — `GET /api/v1/reports/shift-list` (25 колонок = 23 из внешнего CSV + ТК кол-во/сумма; строка на смену, разбивка оплат БК/МФК/ТК/Нал + итого, открытые смены включаются), страница `/reports/shift-list` (`ShiftListReportPage`, `api/reports-shift-list.ts`, `SHIFT_LIST_REPORT_COLUMNS`, `downloadShiftListExcelXml`). Bucket-приоритет `is_bank` → льгота → `ride_like` → Нал (решение 2026-10-07: эквайринг льготника — БК). Проверено на демо: 5 смен, БК 22/1364, МФК 14/384.5, ТК 6/372, Нал 0, Итого 42/2120.5 (42 = 47 строк реестра − 4 `metadata.declined=true` − 1 результат `…0902`).
 - [ ] **Дальнейшее** — сверка/возвраты по платежам в UI, выгрузка в XLSX (сейчас SpreadsheetML `.xml`), drill-down «строка отчёта → карточка транзакции».

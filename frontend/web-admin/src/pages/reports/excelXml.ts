@@ -1,12 +1,15 @@
 import type { TripRegistrationReport, TripRegistrationReportRow } from '../../api/reports';
 import type { ShiftReport } from '../../api/reports-shifts';
 import type { BenefitReport } from '../../api/reports-benefit';
+import type { ShiftListReport } from '../../api/reports-shift-list';
 import {
   BENEFIT_REPORT_COLUMNS,
   REPORT_COLUMNS,
+  SHIFT_LIST_REPORT_COLUMNS,
   SHIFT_REPORT_COLUMNS,
   formatPct,
   type BenefitReportColumn,
+  type ShiftListReportColumn,
   type ShiftReportColumn,
 } from './columns';
 
@@ -391,6 +394,107 @@ export function downloadBenefitExcelXml(report: BenefitReport): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `Сводный-льготники_${report.dateFrom}_${report.dateTo}.xml`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ===== Список смен =====
+
+/** 1-based индекс первой агрегатной колонки («БК кол-во») — после неё идут все 10 итогов. */
+const SHIFT_LIST_AGG_COLUMN_INDEX = SHIFT_LIST_REPORT_COLUMNS.findIndex((c) => c.header === 'БК кол-во') + 1;
+
+function shiftListHeaderRow(): string {
+  const cells = SHIFT_LIST_REPORT_COLUMNS.map((c) => cell(c.header, 's-header')).join('');
+  const widths = SHIFT_LIST_REPORT_COLUMNS.map((c) => `<Column ss:Width="${c.width}"/>`).join('');
+  return `${widths}\n   <Row ss:Height="32">${cells}</Row>`;
+}
+
+function shiftListDetailRows(report: ShiftListReport): string {
+  return report.rows
+    .map((row) => {
+      const cells = SHIFT_LIST_REPORT_COLUMNS.map((c: ShiftListReportColumn) => typedCell(c.get(row), c.kind)).join('');
+      return `<Row>${cells}</Row>`;
+    })
+    .join('\n   ');
+}
+
+/** Лист «Итоги»: один уровень — агрегаты четырёх групп оплат + суммарные кол-во/сумма. */
+function shiftListTotalsSheet(report: ShiftListReport): string {
+  const t = report.totals;
+  const head =
+    `<Row>${cell('Группа', 's-header')}${cell('Кол-во', 's-header')}${cell('Сумма', 's-header')}</Row>`;
+  const rows = [
+    ['БК', t.bkCount, t.bkSum],
+    ['МФК', t.mfkCount, t.mfkSum],
+    ['ТК', t.tkCount, t.tkSum],
+    ['Нал', t.cashCount, t.cashSum],
+    ['Итого', t.totalCount, t.totalSum],
+  ] as const;
+  const body = rows
+    .map(
+      ([label, count, sum]) =>
+        `<Row>${cell(label, label === 'Итого' ? 's-total' : undefined)}${cellNumber(count, label === 'Итого' ? 's-total' : undefined)}${cellNumber(sum, label === 'Итого' ? 's-total-money' : 's-money')}</Row>`,
+    )
+    .join('\n   ');
+  const shifts =
+    `<Row>${cell('Смен в выборке', 's-total')}${cellNumber(t.shiftsCount, 's-total')}<Cell/></Row>`;
+  return ` <Worksheet ss:Name="Итоги">
+  <Table>
+   <Column ss:Width="200"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="130"/>
+   ${head}
+   ${body}
+   ${shifts}
+  </Table>
+ </Worksheet>`;
+}
+
+export function buildShiftListExcelXml(report: ShiftListReport): string {
+  const titleRow = `<Row>${cell(report.title, 's-title')}</Row>`;
+  const t = report.totals;
+  // ИТОГО: объединённая ячейка на 15 контекстных колонок + 10 агрегатных числовых ячеек.
+  const agg = [t.bkCount, t.bkSum, t.mfkCount, t.mfkSum, t.tkCount, t.tkSum, t.cashCount, t.cashSum, t.totalCount, t.totalSum];
+  const isSum = [false, true, false, true, false, true, false, true, false, true];
+  const grandRow =
+    `<Row>` +
+    `<Cell ss:MergeAcross="${SHIFT_LIST_AGG_COLUMN_INDEX - 2}" ss:StyleID="s-total">` +
+    `<Data ss:Type="String">${esc(`ИТОГО — смен: ${report.totalRows}`)}</Data></Cell>` +
+    agg
+      .map((v, i) => `<Cell ss:StyleID="${isSum[i] ? 's-total-money' : 's-total'}"><Data ss:Type="Number">${Number(v) || 0}</Data></Cell>`)
+      .join('') +
+    `</Row>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+${STYLES}
+ <Worksheet ss:Name="Смены">
+  <Table>
+   ${titleRow}
+   ${shiftListHeaderRow()}
+   ${shiftListDetailRows(report)}
+   <Row ss:Height="6"/>
+   ${grandRow}
+  </Table>
+ </Worksheet>
+${shiftListTotalsSheet(report)}
+</Workbook>`;
+}
+
+export function downloadShiftListExcelXml(report: ShiftListReport): void {
+  const xml = `﻿${buildShiftListExcelXml(report)}`;
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Список-смен_${report.dateFrom}_${report.dateTo}.xml`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

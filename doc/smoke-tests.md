@@ -735,9 +735,9 @@ $PSQL "SELECT session_type_code, status FROM asop_sessions
 
 ---
 
-## Scenario 8: Отчёты (реестр поездок + отчёт по сменам + сводный по льготам)
+## Scenario 8: Отчёты (реестр поездок + отчёт по сменам + сводный по льготам + список смен)
 
-**Goal:** Три отчёта card-service отдают агрегаты по демо-данным, карта в формате `СХЕМА:*ПОСЛ4`, дубликатов «платёж ↔ транзакция» нет.
+**Goal:** Четыре отчёта card-service отдают агрегаты по демо-данным, карта в формате `СХЕМА:*ПОСЛ4`, дубликатов «платёж ↔ транзакция» нет.
 
 ### Pre-conditions
 
@@ -784,12 +784,27 @@ $CS 'wget -qO- --no-check-certificate \
 # → {"totalRows":2,"grandTotalTrips":18,"grandTotalCompensation":490.5,"grandTripsWithoutRate":0}
 # Возмещение = тариф × доля скидки; 13 из 18 поездок находятся серверным fallback'ом
 # (metadata.benefitId отсутствует → ASOP_TRANSACTION_CARDS → ASOP_CARDS → ASOP_USER_BENEFITS)
+
+# 6. Список смен (5 смен: БК 22/1364, МФК 14/384.5, ТК 6/372, Нал 0/0, Итого 42/2120.5)
+$CS 'wget -qO- --no-check-certificate \
+  "https://localhost:8086/api/v1/reports/shift-list?dateFrom=2026-01-01&dateTo=2026-12-31&limit=50"' \
+  | jq '{totalRows, totals: {shiftsCount: .totals.shiftsCount, bkCount: .totals.bkCount,
+        bkSum: .totals.bkSum, mfkCount: .totals.mfkCount, mfkSum: .totals.mfkSum,
+        tkCount: .totals.tkCount, tkSum: .totals.tkSum, cashCount: .totals.cashCount,
+        cashSum: .totals.cashSum, totalCount: .totals.totalCount, totalSum: .totals.totalSum}}'
+# → 5 смен, БК 22/1364, МФК 14/384.5, ТК 6/372, Нал 0/0, Итого 42/2120.5
+# 42 = 47 строк реестра − 4 metadata.declined=true − 1 результат …0902
+# Bucket-приоритет: is_bank → БК; иначе льгота → МФК; иначе ride_like → ТК; иначе Нал
+# Суммы строк = totals (пер-сменные суммы сходятся); открытые смены включаются (durationText=NULL)
+# Фильтры carrierId/regionId/organizerId/driverId → 200; dateTo < dateFrom → 400; без токена → 401
+# Регресс: любой фильтр раньше падал 500 'syntax error at or near "AND"' (conditions() без WHERE TRUE)
 ```
 
 ### Web-admin
 
 `Отчёты → Реестр поездок` (`/reports/trip-registrations`), `Отчёты → Отчёт по сменам`
-(`/reports/shifts`) и `Отчёты → Сводный, льготники` (`/reports/benefit-trips`):
+(`/reports/shifts`), `Отчёты → Список смен` (`/reports/shift-list`) и
+`Отчёты → Сводный, льготники` (`/reports/benefit-trips`):
 «Построить отчёт» → строки как выше; «Выгрузить в Excel» →
 SpreadsheetML `.xml` (листы «Строки» + «Итоги»). Визуальная проверка наличных: две смены
 ГУП «Мосгортранс» возвращают `cashAmount=124.00` каждая (итого 248.00).

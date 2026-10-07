@@ -1,6 +1,7 @@
 import type { TripRegistrationReportRow } from '../../api/reports';
 import type { ShiftReportRow } from '../../api/reports-shifts';
 import type { BenefitReportRow } from '../../api/reports-benefit';
+import type { ShiftListRow } from '../../api/reports-shift-list';
 
 export type CellKind = 'text' | 'center' | 'money' | 'datetime' | 'num' | 'percent';
 
@@ -25,6 +26,13 @@ export interface BenefitReportColumn {
   kind: CellKind;
   /** `index` — номер строки (с 1), нужен колонке «№ п/п». */
   get: (row: BenefitReportRow, index: number) => string | number | null;
+}
+
+export interface ShiftListReportColumn {
+  header: string;
+  width: number;
+  kind: CellKind;
+  get: (row: ShiftListRow) => string | number | null;
 }
 
 
@@ -142,3 +150,35 @@ function perTrip(r: BenefitReportRow): string | null {
   if (Number.isNaN(total)) return null;
   return (total / r.tripsCount).toFixed(2);
 }
+
+/**
+ * Колонки отчёта «Список смен» (25 колонок, порядок фиксирован):
+ * 23 колонки внешнего CSV + ТК кол-во/ТК сумма (после МФК, перед Нал).
+ */
+export const SHIFT_LIST_REPORT_COLUMNS: ShiftListReportColumn[] = [
+  { header: 'Перевозчик', width: 200, kind: 'text', get: (r) => r.carrierName },
+  { header: 'ID смены', width: 260, kind: 'text', get: (r) => r.shiftId },
+  { header: 'ФИО водителя', width: 190, kind: 'text', get: (r) => r.driverName },
+  { header: 'Начало смены', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.shiftStartedAt) },
+  { header: 'Конец смены', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.shiftClosedAt) },
+  { header: 'Длительность', width: 100, kind: 'center', get: (r) => r.durationText },
+  { header: 'SN терминала', width: 140, kind: 'text', get: (r) => r.terminalSerial },
+  { header: 'ГРЗ', width: 110, kind: 'text', get: (r) => r.vehicleNumber },
+  { header: 'Тип ТС', width: 100, kind: 'text', get: (r) => r.vehicleTypeName },
+  { header: 'Маршрут', width: 220, kind: 'text', get: (r) => join(r.routeNumber, r.routeName) },
+  { header: 'Организатор', width: 180, kind: 'text', get: (r) => r.organizerName },
+  { header: 'Территория', width: 170, kind: 'text', get: (r) => r.territoryNames },
+  { header: 'Тип маршрута', width: 110, kind: 'center', get: (r) => r.routeCategoryLabel ?? '—' },
+  { header: 'Начало маршрута', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.routeStartedAt) },
+  { header: 'Конец маршрута', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.routeEndedAt) },
+  { header: 'БК кол-во', width: 95, kind: 'num', get: (r) => r.bkCount },
+  { header: 'БК сумма', width: 110, kind: 'money', get: (r) => r.bkSum },
+  { header: 'МФК кол-во', width: 100, kind: 'num', get: (r) => r.mfkCount },
+  { header: 'МФК сумма', width: 110, kind: 'money', get: (r) => r.mfkSum },
+  { header: 'ТК кол-во', width: 95, kind: 'num', get: (r) => r.tkCount },
+  { header: 'ТК сумма', width: 110, kind: 'money', get: (r) => r.tkSum },
+  { header: 'Нал. кол-во', width: 105, kind: 'num', get: (r) => r.cashCount },
+  { header: 'Нал. Сумма', width: 110, kind: 'money', get: (r) => r.cashSum },
+  { header: 'Итого кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
+  { header: 'Итого сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
+];
