@@ -1,5 +1,6 @@
 import type { TripRegistrationReportRow } from '../../api/reports';
 import type { ShiftReportRow } from '../../api/reports-shifts';
+import type { BenefitReportRow } from '../../api/reports-benefit';
 
 export type CellKind = 'text' | 'center' | 'money' | 'datetime' | 'num' | 'percent';
 
@@ -17,6 +18,15 @@ export interface ShiftReportColumn {
   kind: CellKind;
   get: (row: ShiftReportRow) => string | number | null;
 }
+
+export interface BenefitReportColumn {
+  header: string;
+  width: number;
+  kind: CellKind;
+  /** `index` — номер строки (с 1), нужен колонке «№ п/п». */
+  get: (row: BenefitReportRow, index: number) => string | number | null;
+}
+
 
 const pad = (n: number) => n.toString().padStart(2, '0');
 
@@ -111,3 +121,24 @@ export const REPORT_COLUMNS: ReportColumn[] = [
   { header: 'Дата факта фискализации', width: 160, kind: 'datetime', get: (r) => formatDateTime(r.fiscalConfirmedAt) },
   { header: 'RRN', width: 180, kind: 'text', get: (r) => r.rrn },
 ];
+
+/** Колонки сводного отчёта «Сводный, льготники» (7 колонок, порядок фиксирован). */
+export const BENEFIT_REPORT_COLUMNS: BenefitReportColumn[] = [
+  { header: '№ п/п', width: 60, kind: 'num', get: (_r, index) => index + 1 },
+  { header: 'Регион', width: 170, kind: 'text', get: (r) => r.regionName },
+  { header: 'Код льготной категории', width: 150, kind: 'text', get: (r) => r.benefitCode },
+  { header: 'Льготная категория', width: 340, kind: 'text', get: (r) => r.benefitName },
+  { header: 'Фактическое количество поездок', width: 160, kind: 'num', get: (r) => r.tripsCount },
+  { header: 'Поездок без ставки', width: 130, kind: 'num', get: (r) => r.tripsWithoutRate },
+  // Сырое число: форматирование — при рендере и в Excel, чтобы ячейка уходила числом.
+  { header: 'Возмещение на поездку', width: 140, kind: 'money', get: (r) => perTrip(r) },
+  { header: 'Сумма возмещения', width: 140, kind: 'money', get: (r) => r.compensation },
+];
+
+/** Среднее возмещение на поездку (тариф × доля), 0 поездок → null. */
+function perTrip(r: BenefitReportRow): string | null {
+  if (!r.tripsCount) return null;
+  const total = Number(r.compensation);
+  if (Number.isNaN(total)) return null;
+  return (total / r.tripsCount).toFixed(2);
+}

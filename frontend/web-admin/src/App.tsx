@@ -53,6 +53,7 @@ import { LiveMapPage } from './pages/LiveMapPage';
 import { RouteEditorPage } from './pages/routes/RouteEditorPage';
 import { TripRegistrationReportPage } from './pages/reports/TripRegistrationReportPage';
 import { ShiftReportPage } from './pages/reports/ShiftReportPage';
+import { BenefitReportPage } from './pages/reports/BenefitReportPage';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -138,6 +139,7 @@ function AppRoutes() {
         <Route path="live-map" element={<LiveMapPage />} />
         <Route path="reports/trip-registrations" element={<TripRegistrationReportPage />} />
         <Route path="reports/shifts" element={<ShiftReportPage />} />
+        <Route path="reports/benefit-trips" element={<BenefitReportPage />} />
         <Route path="route-editor" element={<RouteEditorPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>

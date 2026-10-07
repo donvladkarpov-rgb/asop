@@ -735,9 +735,9 @@ $PSQL "SELECT session_type_code, status FROM asop_sessions
 
 ---
 
-## Scenario 8: Отчёты (реестр поездок + отчёт по сменам)
+## Scenario 8: Отчёты (реестр поездок + отчёт по сменам + сводный по льготам)
 
-**Goal:** Два отчёта card-service отдают агрегаты по демо-данным, карта в формате `СХЕМА:*ПОСЛ4`, дубликатов «платёж ↔ транзакция» нет.
+**Goal:** Три отчёта card-service отдают агрегаты по демо-данным, карта в формате `СХЕМА:*ПОСЛ4`, дубликатов «платёж ↔ транзакция» нет.
 
 ### Pre-conditions
 
@@ -776,11 +776,20 @@ $PSQL -c "SELECT COUNT(*) FROM (SELECT METADATA->>'acqReference' FROM ASOP_TRANS
 # → 0
 $PSQL -c "SELECT COUNT(*) FROM ASOP_BANK_PAYMENTS WHERE TRANSACTION_ID IS NULL AND DELETED_AT IS NULL;"
 # → 0
+
+# 5. Сводный, льготники (2 группы: Москва/STUDENT_МОС 12 поездок/318.00, Крым/LARGE_FAMILY_КРЫ 6/172.50)
+$CS 'wget -qO- --no-check-certificate \
+  "https://localhost:8086/api/v1/reports/benefit-trips?dateFrom=2026-10-05&dateTo=2026-10-07&limit=10"' \
+  | jq '{totalRows, grandTotalTrips, grandTotalCompensation, grandTripsWithoutRate}'
+# → {"totalRows":2,"grandTotalTrips":18,"grandTotalCompensation":490.5,"grandTripsWithoutRate":0}
+# Возмещение = тариф × доля скидки; 13 из 18 поездок находятся серверным fallback'ом
+# (metadata.benefitId отсутствует → ASOP_TRANSACTION_CARDS → ASOP_CARDS → ASOP_USER_BENEFITS)
 ```
 
 ### Web-admin
 
-`Отчёты → Реестр поездок` (`/reports/trip-registrations`) и `Отчёты → Отчёт по сменам`
-(`/reports/shifts`): «Построить отчёт» → строки как выше; «Выгрузить в Excel» →
+`Отчёты → Реестр поездок` (`/reports/trip-registrations`), `Отчёты → Отчёт по сменам`
+(`/reports/shifts`) и `Отчёты → Сводный, льготники` (`/reports/benefit-trips`):
+«Построить отчёт» → строки как выше; «Выгрузить в Excel» →
 SpreadsheetML `.xml` (листы «Строки» + «Итоги»). Визуальная проверка наличных: две смены
 ГУП «Мосгортранс» возвращают `cashAmount=124.00` каждая (итого 248.00).

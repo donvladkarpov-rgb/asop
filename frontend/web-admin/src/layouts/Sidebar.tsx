@@ -19,6 +19,7 @@ const monitoringItems = [
 const reportItems = [
   { to: '/reports/trip-registrations', label: 'Реестр поездок', icon: '📄' },
   { to: '/reports/shifts', label: 'Отчёт по сменам', icon: '📄' },
+  { to: '/reports/benefit-trips', label: 'Сводный, льготники', icon: '📄' },
 ];
 
 const contractorItems = [
