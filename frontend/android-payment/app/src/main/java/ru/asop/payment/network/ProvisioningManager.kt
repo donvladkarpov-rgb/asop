@@ -61,7 +61,15 @@ class ProvisioningManager(
     }
 
     suspend fun provision() {
-        if (certManager.hasCertificate()) return
+        // Всегда перевыпускаем сертификат (и выставляем paired=true), а НЕ выходим рано при
+        // наличии сертификата. Причины:
+        //  1) после `docker compose down -v` Root/Intermediate CA генерируются заново — старый
+        //     сертификат (выданный прежним CA) становится невалидным, gateway его не примет
+        //     на mTLS /api/v1/payment/** → отчёт платежа падает, ASOP_BANK_PAYMENTS не заполняется;
+        //  2) ранний return не восстанавливал флаг DistributionConfig.paired → ReportWorker
+        //     вечно держал отчёт в DEFERRED (store-and-forward).
+        // cert-sign идемпотентен (upsert ASOP_DISTRIBUTOR_TERMINALS по terminalSerial), так что
+        // повторный запуск просто обновляет существующую строку и перевыпускает сертификат.
         withContext(Dispatchers.IO) {
             try {
                 val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
