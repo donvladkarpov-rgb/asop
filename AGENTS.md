@@ -27,6 +27,7 @@
 - **`org.gradle.configuration-cache=false`** — breaks Kotlin compilation (ClasspathSnapshotProperties). Do not enable.
 - **No backend tests** — `./gradlew test` runs zero backend tests. Android — 2 unit-теста (VCM1).
 - **CI workflow**: `.github/workflows/ci.yml` — backend `clean build`, Android `assembleDebug`, web-admin typecheck.
+- **Postgres connections (важно)**: в `docker-compose.yml` у `postgres` — `command: ["postgres", "-c", "max_connections=200"]`; глобальный пул R2DBC задан через якорь `x-jvm-opts` (`-Dspring.r2dbc.pool.initial-size=1 -Dspring.r2dbc.pool.max-size=5`), Keycloak — `KC_DB_POOL_MAX_SIZE=10`. Без этих лимитов 12 сервисов с дефолтным пулом R2DBC (`initial/max-size=10`) = 120 коннектов > `max_connections=100` → Postgres отдаёт `FATAL: sorry, too many clients already` → Keycloak не может взять коннект и token endpoint отвечает **500** → gateway `RootAuthController` мапит на **401** (симптом: «не могу авторизоваться с терминала для активации root-админа — 401»). Диагностика: `docker compose logs keycloak | grep 'too many clients'` + `SELECT count(*) FROM pg_stat_activity`.
 
 ## Target device
 

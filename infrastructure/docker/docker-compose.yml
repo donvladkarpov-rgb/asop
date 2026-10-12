@@ -5,6 +5,8 @@ x-jvm-opts: &jvm-opts
     -Djavax.net.ssl.trustStoreType=PKCS12
     -Dspring.data.redis.host=redis
     -Dspring.data.redis.port=6379
+    -Dspring.r2dbc.pool.initial-size=1
+    -Dspring.r2dbc.pool.max-size=5
     -XX:+UseContainerSupport
     -XX:MaxRAMPercentage=75.0
     -Dfile.encoding=UTF-8
@@ -15,6 +17,7 @@ services:
   postgres:
     mem_limit: 1024m
     image: postgis/postgis:14-3.4
+    command: ["postgres", "-c", "max_connections=200"]
     environment:
       POSTGRES_DB: asop
       POSTGRES_USER: asop
@@ -124,6 +127,8 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres/asop
       KC_DB_USERNAME: asop
       KC_DB_PASSWORD: asop
+      KC_DB_POOL_MIN_SIZE: "2"
+      KC_DB_POOL_MAX_SIZE: "10"
       KC_HOSTNAME: localhost
       KC_PROXY: edge
       KC_HTTPS_PORT: 8443
