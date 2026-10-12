@@ -2,6 +2,7 @@ package ru.asop.admin.controller
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -17,6 +18,7 @@ import reactor.core.publisher.Mono
 import ru.asop.admin.model.ConfigParamEntity
 import ru.asop.admin.repository.ConfigParamRepository
 import ru.asop.common.util.UuidUtils
+import java.time.Instant
 import java.util.UUID
 
 data class ConfigParamRequest(
@@ -101,16 +103,30 @@ class ConfigParamController(
                 if (duplicate) {
                     Mono.just(ResponseEntity.status(HttpStatus.CONFLICT).body<ConfigParamResponse>(null))
                 } else {
-                    val entity = ConfigParamEntity(
-                        paramId = UuidUtils.newId(),
-                        regionId = request.regionId,
-                        organizerId = request.organizerId,
-                        carrierId = request.carrierId,
-                        cardsDistributorId = request.cardsDistributorId,
-                        krsId = request.krsId,
-                        params = objectMapper.writeValueAsString(request.params)
+                    val id = UuidUtils.newId()
+                    val now = Instant.now()
+                    // Raw SQL: PARAMS — JSONB, явный CAST(:params AS jsonb) (иначе String → varchar → ошибка).
+                    var spec = template.databaseClient.sql(
+                        """
+                        INSERT INTO ASOP_CONFIG_PARAMS
+                          (param_id, region_id, organizer_id, carrier_id, cards_distributor_id, krs_id,
+                           params, created_at, updated_at)
+                        VALUES (:id, :regionId, :organizerId, :carrierId, :cardsDistributorId, :krsId,
+                           CAST(:params AS jsonb), :createdAt, :updatedAt)
+                        """.trimIndent()
                     )
-                    template.insert(entity).map { ResponseEntity.status(HttpStatus.CREATED).body(it.toResponse()) }
+                        .bind("id", id)
+                        .bind("params", objectMapper.writeValueAsString(request.params))
+                        .bind("createdAt", now)
+                        .bind("updatedAt", now)
+                    spec = bindUuidNullable(spec, "regionId", request.regionId)
+                    spec = bindUuidNullable(spec, "organizerId", request.organizerId)
+                    spec = bindUuidNullable(spec, "carrierId", request.carrierId)
+                    spec = bindUuidNullable(spec, "cardsDistributorId", request.cardsDistributorId)
+                    spec = bindUuidNullable(spec, "krsId", request.krsId)
+                    spec.fetch().rowsUpdated()
+                        .then(repository.findById(id))
+                        .map { ResponseEntity.status(HttpStatus.CREATED).body(it.toResponse()) }
                 }
             }
     }
@@ -118,28 +134,46 @@ class ConfigParamController(
     @PutMapping("/{id}")
     fun update(@PathVariable id: UUID, @RequestBody request: ConfigParamRequest): Mono<ResponseEntity<ConfigParamResponse>> {
         return repository.findById(id)
-            .flatMap { existing ->
-                val updated = existing.copy(
-                    regionId = request.regionId,
-                    organizerId = request.organizerId,
-                    carrierId = request.carrierId,
-                    cardsDistributorId = request.cardsDistributorId,
-                    krsId = request.krsId,
-                    params = objectMapper.writeValueAsString(request.params)
+            .filter { it.deletedAt == null }
+            .flatMap {
+                var spec = template.databaseClient.sql(
+                    """
+                    UPDATE ASOP_CONFIG_PARAMS SET
+                      region_id = :regionId, organizer_id = :organizerId, carrier_id = :carrierId,
+                      cards_distributor_id = :cardsDistributorId, krs_id = :krsId,
+                      params = CAST(:params AS jsonb), updated_at = :updatedAt
+                    WHERE param_id = :id AND deleted_at IS NULL
+                    """.trimIndent()
                 )
-                repository.save(updated).map { ResponseEntity.ok(it.toResponse()) }
+                    .bind("id", id)
+                    .bind("params", objectMapper.writeValueAsString(request.params))
+                    .bind("updatedAt", Instant.now())
+                spec = bindUuidNullable(spec, "regionId", request.regionId)
+                spec = bindUuidNullable(spec, "organizerId", request.organizerId)
+                spec = bindUuidNullable(spec, "carrierId", request.carrierId)
+                spec = bindUuidNullable(spec, "cardsDistributorId", request.cardsDistributorId)
+                spec = bindUuidNullable(spec, "krsId", request.krsId)
+                spec.fetch().rowsUpdated().then(repository.findById(id))
+                    .map { ResponseEntity.ok(it.toResponse()) }
             }
             .defaultIfEmpty(ResponseEntity.notFound().build())
     }
 
     @DeleteMapping("/{id}")
     fun delete(@PathVariable id: UUID): Mono<ResponseEntity<Void>> {
-        return repository.findById(id)
-            .flatMap { existing ->
-                repository.save(existing.copy(deletedAt = java.time.Instant.now()))
-                    .thenReturn(ResponseEntity.noContent().build<Void>())
+        val now = Instant.now()
+        // Raw SQL (вместо repository.save): не трогаем PARAMS (JSONB) — только soft-delete.
+        return template.databaseClient.sql(
+            "UPDATE ASOP_CONFIG_PARAMS SET deleted_at = :now, updated_at = :now " +
+                "WHERE param_id = :id AND deleted_at IS NULL"
+        )
+            .bind("id", id)
+            .bind("now", now)
+            .fetch().rowsUpdated()
+            .map { updated ->
+                if (updated > 0) ResponseEntity.noContent().build<Void>()
+                else ResponseEntity.notFound().build()
             }
-            .defaultIfEmpty(ResponseEntity.notFound().build())
     }
 
     /**
@@ -211,6 +245,13 @@ class ConfigParamController(
             entity.cardsDistributorId == request.cardsDistributorId &&
             entity.krsId == request.krsId)
     }
+
+    private fun bindUuidNullable(
+        spec: DatabaseClient.GenericExecuteSpec,
+        name: String,
+        value: UUID?
+    ): DatabaseClient.GenericExecuteSpec =
+        if (value != null) spec.bind(name, value) else spec.bindNull(name, UUID::class.java)
 
     private fun nowJson(e: ConfigParamEntity): MutableMap<String, Any?> = jsonToMap(e.params)
 

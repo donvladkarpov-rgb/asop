@@ -2,6 +2,7 @@ package ru.asop.admin.controller
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
+import org.springframework.r2dbc.core.DatabaseClient
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.DeleteMapping
@@ -19,6 +20,7 @@ import ru.asop.admin.config.DeltaSupport
 import ru.asop.admin.model.TerminalProfileEntity
 import ru.asop.admin.repository.TerminalProfileRepository
 import ru.asop.common.util.UuidUtils
+import java.time.Instant
 import java.util.UUID
 
 data class TerminalProfileRequest(
@@ -84,13 +86,34 @@ class TerminalProfileController(
     @PostMapping
     fun create(@RequestBody request: TerminalProfileRequest): Mono<ResponseEntity<TerminalProfileResponse>> {
         validate(request)
+        val id = UuidUtils.newId()
+        val now = Instant.now()
+        // Raw SQL (вместо template.insert): PROFILE_PARAMS — JSONB, явный CAST(:profileParams AS jsonb)
+        // иначе String биндится как varchar → «column ... is of type jsonb but expression is of type character varying».
         val entity = TerminalProfileEntity(
-            profileId = UuidUtils.newId(),
+            profileId = id,
             profileName = request.profileName,
             profileParams = request.profileParams?.let { objectMapper.writeValueAsString(it) },
-            isBase = request.isBase
+            isBase = request.isBase,
+            createdAt = now,
+            updatedAt = now
         )
-        return clearOtherBases(entity).then(template.insert(entity))
+        var spec = template.databaseClient.sql(
+            """
+            INSERT INTO ASOP_TERMINAL_PROFILES
+              (profile_id, profile_name, profile_params, is_base, created_at, updated_at)
+            VALUES (:id, :profileName, CAST(:profileParams AS jsonb), :isBase, :createdAt, :updatedAt)
+            """.trimIndent()
+        )
+            .bind("id", id)
+            .bind("profileName", request.profileName)
+            .bind("isBase", request.isBase)
+            .bind("createdAt", now)
+            .bind("updatedAt", now)
+        spec = bindNullable(spec, "profileParams", request.profileParams?.let { objectMapper.writeValueAsString(it) })
+        return clearOtherBases(entity)
+            .then(spec.fetch().rowsUpdated())
+            .then(repository.findById(id))
             .map { ResponseEntity.status(HttpStatus.CREATED).body(it.toResponse()) }
     }
 
@@ -98,13 +121,26 @@ class TerminalProfileController(
     fun update(@PathVariable id: UUID, @RequestBody request: TerminalProfileRequest): Mono<ResponseEntity<TerminalProfileResponse>> {
         validate(request)
         return repository.findById(id)
+            .filter { it.deletedAt == null }
             .flatMap { existing ->
-                val updated = existing.copy(
-                    profileName = request.profileName,
-                    profileParams = request.profileParams?.let { objectMapper.writeValueAsString(it) },
-                    isBase = request.isBase
+                var spec = template.databaseClient.sql(
+                    """
+                    UPDATE ASOP_TERMINAL_PROFILES SET
+                      profile_name = :profileName,
+                      profile_params = CAST(:profileParams AS jsonb),
+                      is_base = :isBase,
+                      updated_at = :updatedAt
+                    WHERE profile_id = :id AND deleted_at IS NULL
+                    """.trimIndent()
                 )
-                clearOtherBases(updated).then(repository.save(updated))
+                    .bind("id", id)
+                    .bind("profileName", request.profileName)
+                    .bind("isBase", request.isBase)
+                    .bind("updatedAt", Instant.now())
+                spec = bindNullable(spec, "profileParams", request.profileParams?.let { objectMapper.writeValueAsString(it) })
+                clearOtherBases(existing.copy(profileName = request.profileName, isBase = request.isBase))
+                    .then(spec.fetch().rowsUpdated())
+                    .then(repository.findById(id))
                     .map { ResponseEntity.ok(it.toResponse()) }
             }
             .defaultIfEmpty(ResponseEntity.notFound().build())
@@ -117,7 +153,15 @@ class TerminalProfileController(
                 if (existing.isBase && existing.deletedAt == null) {
                     Mono.error(IllegalArgumentException("Нельзя удалить базовый профиль терминала"))
                 } else {
-                    repository.save(existing.copy(deletedAt = java.time.Instant.now()))
+                    val now = Instant.now()
+                    // Raw SQL (вместо repository.save): не трогаем PROFILE_PARAMS (JSONB) — soft-delete.
+                    template.databaseClient.sql(
+                        "UPDATE ASOP_TERMINAL_PROFILES SET deleted_at = :now, updated_at = :now " +
+                            "WHERE profile_id = :id AND deleted_at IS NULL"
+                    )
+                        .bind("id", id)
+                        .bind("now", now)
+                        .fetch().rowsUpdated()
                         .thenReturn(ResponseEntity.noContent().build<Void>())
                 }
             }
@@ -138,6 +182,13 @@ class TerminalProfileController(
                 "WHERE IS_BASE = TRUE AND DELETED_AT IS NULL AND PROFILE_ID <> :profileId"
         ).bind("profileId", self.profileId).then()
     }
+
+    private fun bindNullable(
+        spec: DatabaseClient.GenericExecuteSpec,
+        name: String,
+        value: String?
+    ): DatabaseClient.GenericExecuteSpec =
+        if (value != null) spec.bind(name, value) else spec.bindNull(name, String::class.java)
 
     private fun TerminalProfileEntity.toResponse() = TerminalProfileResponse(
         profileId = profileId,
