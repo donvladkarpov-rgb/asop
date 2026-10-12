@@ -31,6 +31,14 @@ class BifitAdapter(private val objectMapper: ObjectMapper) : FiscalizerAdapter {
     }
 
     override fun receiptUrl(receiptId: UUID, baseUrl: String?, customUrl: String?): String {
-        return "https://fp.bifit.com/processing-api/receipts/$receiptId"
+        // Промпт 017: страница чека = baseApiUrl (хост ОФД) + /processing-api/receipts/{id}.
+        // В dev seed baseApiUrl=http://mock-fiscal:8089 → URL указывает на mock-ОФД;
+        // в prod host-root Bifit даёт https://fp.bifit.com/processing-api/receipts/{id}.
+        val base = (customUrl ?: baseUrl)?.trimEnd('/')
+        return if (!base.isNullOrBlank()) {
+            "$base/processing-api/receipts/$receiptId"
+        } else {
+            "https://fp.bifit.com/processing-api/receipts/$receiptId"
+        }
     }
 }

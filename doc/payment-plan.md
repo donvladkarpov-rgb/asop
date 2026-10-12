@@ -343,11 +343,13 @@ distributor fiscalizer`, ретраи, `CommandResult` COMPLETED/FAILED), gatewa
 (общий для терминала и дистрибьютора) + admin CRUD + web-admin страница «Фискализация». Дистрибьюторские
 фискализаторы тянутся JSON-pull'ом (`/sync/distributor/fiscalizers/delta`), в proto-delta не входят.
 
-**Android-часть (промпт 017 §10) реализована**: терминал — банковская оплата проезда (`recordBankPayment`)
+**Android-часть (промпт 017) реализована**: терминал — банковская оплата проезда (`recordBankPayment`)
 ставит в офлайн-очередь `FISCAL_RECEIPT` и показывает QR ~3 с (офлайн-`FiscalQrResolver` из дельты, ZXing;
 NFC заблокирован); дистрибьютор — после успешной записи поездок `FiscalReceiptRequest(source=DISTRIBUTOR,
 transactionId=null, cardsDistributorId, acqReference)` + QR ~3 с (`FiscalizerProvider.resolveUrl`, тапы
-игнорируются). Dev-ОФД — контейнер `mock-fiscal` (чек доходит до `CONFIRMED`). Осталось: **NFC-запись чека на
-DESFire/MIFARE (промпт 017 §10)**, monthly-отчёты (`ASOP_FISCAL_MONTHLY_REPORTS`), поллинг статуса чека с
+игнорируются). URL чека строится из `baseApiUrl` фискализатора (в dev указывает на mock-ОФД).
+Dev-ОФД — контейнер `mock-fiscal`: чек доходит до `CONFIRMED`, **сохраняется в памяти по `receiptId` и
+показывается по URL** `GET /processing-api/receipts/{receiptId}` (dev-индекс `GET /receipts`).
+Осталось: monthly-отчёты (`ASOP_FISCAL_MONTHLY_REPORTS`), поллинг статуса чека с
 терминала (QR оптимистичен). Подробно — `AGENTS.md` раздел «Фискализация» и `doc/context.md` раздел 8;
 прогон — `doc/smoke-tests.md` «Smoke Test: Фискализация».

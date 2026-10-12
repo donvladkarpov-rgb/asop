@@ -226,7 +226,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **Список смен** — `GET /api/v1/reports/shift-list` (25 колонок = 23 из внешнего CSV + ТК кол-во/сумма; строка на смену, разбивка оплат БК/МФК/ТК/Нал + итого, открытые смены включаются), страница `/reports/shift-list` (`ShiftListReportPage`, `api/reports-shift-list.ts`, `SHIFT_LIST_REPORT_COLUMNS`, `downloadShiftListExcelXml`). Bucket-приоритет `is_bank` → льгота → `ride_like` → Нал (решение 2026-10-07: эквайринг льготника — БК). Проверено на демо: 5 смен, БК 22/1364, МФК 14/384.5, ТК 6/372, Нал 0, Итого 42/2120.5 (42 = 47 строк реестра − 4 `metadata.declined=true` − 1 результат `…0902`).
 - [ ] **Дальнейшее** — сверка/возвраты по платежам в UI, выгрузка в XLSX (сейчас SpreadsheetML `.xml`), drill-down «строка отчёта → карточка транзакции».
 
-## 16. Фискализация (промпт 017) — реализовано (QR терминала и дистрибьютора), осталось: NFC-запись чека + monthly-отчёты
+## 16. Фискализация (промпт 017) — реализовано (QR терминала и дистрибьютора + dev mock-ОФД с показом чека по URL), осталось: monthly-отчёты + поллинг статуса чека
 
 Регистрация расчётов в ОФД через фискального посредника (Bifit). Подробно — `AGENTS.md` раздел «Фискализация» и `doc/context.md` раздел 8 «Фискализация (промпт 017)».
 
@@ -238,8 +238,7 @@ _См. также `infrastructure/docker/todo.md` — задачи по Docker �
 - [x] **web-admin** — страница «Фискализация» (`/fiscalization`): CRUD фискализаторов/связей/токенов, `api/fiscalization.ts`.
 - [x] **Android-терминал** — банковская оплата проезда (`recordBankPayment`) ставит в офлайн-очередь `FISCAL_RECEIPT` (отдельный `receiptId` UUIDv7) и показывает QR ~3 с (`FiscalQrResolver` из дельты, ZXing); NFC заблокирован во время handoff'а и показа QR.
 - [x] **Android-дистрибьютор** — `fiscalizersDelta`/`distributorFiscalizersDelta` (JSON-pull в `ProvisionSyncManager` → `SyncStore`), `FiscalizerProvider.resolveUrl`, после успешной записи поездок — `FiscalReceiptRequest(source=DISTRIBUTOR, transactionId=null, cardsDistributorId, acqReference)` + QR ~3 с; тапы игнорируются.
-- [x] **Dev-инфраструктура** — контейнер `mock-fiscal` (`python:3.12-alpine`, 8089, `/health` + регистрация чека) в docker-compose; seed `BIFIT.BASE_API_URL = http://mock-fiscal:8089` → чек доходит до `CONFIRMED`.
-- [x] **Техдолг** — удалены мёртвые `FiscalService.kt`/`FiscalReceiptResponse.kt`; `FiscalCommandConsumer` публикует `COMPLETED` при успехе/`RETRY` и `FAILED` при финальном `CANCELLED`.
-- [ ] **NFC-запись чека на DESFire/MIFARE** (промпт 017 §10) — НЕ реализована (QR покрывает сценарий «пассажир видит чек»).
+- [x] **Dev-инфраструктура** — контейнер `mock-fiscal` (`python:3.12-alpine`, 8089, `/health` + регистрация чека) в docker-compose; seed `BIFIT.BASE_API_URL = http://mock-fiscal:8089` → чек доходит до `CONFIRMED`. **Чек сохраняется в памяти mock-ОФД по `receiptId` и показывается по URL страницы чека** `GET /processing-api/receipts/{receiptId}` (те же пути, что у Bifit — prompt_017.md; 404 если не найден); dev-индекс — `GET /receipts`.
+- [x] **Техдолг** — удалены мёртвые `FiscalService.kt`/`FiscalReceiptResponse.kt`; `FiscalCommandConsumer` публикует `COMPLETED` при успехе/`RETRY` и `FAILED` при финальном `CANCELLED`; URL чека (QR и `FISCAL_URL`) строится из `baseApiUrl` фискализатора (в dev указывает на mock-ОФД).
 - [ ] **`ASOP_FISCAL_MONTHLY_REPORTS`** — структура есть, агрегация не реализована.
 - [ ] **Поллинг статуса чека с терминала** — `GET /fiscal/receipts/{id}/status` JWT-only; QR оптимистичен.

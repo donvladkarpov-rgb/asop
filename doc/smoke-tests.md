@@ -887,6 +887,12 @@ $CS 'wget -qO- --no-check-certificate \
   "https://localhost:8090/api/v1/fiscal/receipts/<RECEIPT_ID>/status"'
 # → {"receiptId":"…","status":"CONFIRMED","fiscalUrl":null,"receiptNumber":"…"}
 
+# Страница чека в dev-ОФД (mock-fiscal хранит чек в памяти по receiptId и показывает по URL —
+# те же пути, что у Bifit, prompt_017.md; QR терминала/дистрибьютора строится из baseApiUrl=http://mock-fiscal:8089):
+curl -s -o /tmp/mock-receipt.html -w "%{http_code}\n" "http://localhost:8089/processing-api/receipts/$RECEIPT_ID"
+# → 200, HTML «КАССОВЫЙ ЧЕК» (receiptNumber/fn/fs из регистрации; 404 для неизвестного id)
+curl -s http://localhost:8089/receipts   # dev-индекс сохранённых чеков ($RECEIPT_ID в списке)
+
 # Дедуп по приоритету receiptId → transactionId → acqReference: повторная доставка той же
 # команды (тот же RECEIPT_ID) не создаёт дубль. Авто-чек по payment-событию с тем же acqReference — тоже нет.
 ```
@@ -894,7 +900,7 @@ $CS 'wget -qO- --no-check-certificate \
 ### Ожидаемый результат и известные пробелы
 
 - Успешный путь (`CONFIRMED`) — mock-fiscal контейнер жив (docker-compose `mock-fiscal`); `receiptNumber`/`fiscalSign` из ответа.
-- **Dev-ОФД**: `infrastructure/docker/mock-fiscal/server.py` (`python:3.12-alpine`, plain HTTP 8089, `/health` + регистрация чека `…/registration/receipts/token` → `receiptNumber`/`fn`/`fs`). Для prod нужен реальный URL Bifit (seed `BIFIT.BASE_API_URL`), а не `http://mock-fiscal:8089`.
+- **Dev-ОФД**: `infrastructure/docker/mock-fiscal/server.py` (`python:3.12-alpine`, plain HTTP 8089, `/health` + регистрация чека `…/registration/receipts/token` → `receiptNumber`/`fn`/`fs`). **Кассовый чек сохраняется в памяти по `receiptId` (Idempotency-Key) и показывается по URL** `GET /processing-api/receipts/{receiptId}` (HTML-страница чека, 404 если не найден); dev-индекс — `GET /receipts`. Чеки теряются при рестарте контейнера. Для prod нужен реальный URL Bifit (seed `BIFIT.BASE_API_URL`), а не `http://mock-fiscal:8089`.
 - **Семантика событий**: `FiscalCommandConsumer` публикует `COMPLETED` в `asop.fiscal.events` при успехе/`RETRY` и `FAILED` при финальном `CANCELLED` (событие = факт обработки команды, не результат ОФД) — итоговый результат смотреть в `ASOP_FISCAL_RECEIPTS.STATUS`.
 - Ретраи: `FiscalRetryScheduler` (`fiscal.retry-enabled`) раз в `fixedDelay` досылает `PENDING` старше 1 мин
   и просроченные `RETRY` (экспоненциальный backoff, `fiscal.retry-interval-ms`).
