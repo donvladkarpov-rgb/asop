@@ -8,6 +8,11 @@ server {
     listen       443 ssl;
     server_name  localhost;
 
+    # Docker embedded DNS — nginx резолвит upstream'ы динамически (на каждый запрос,
+    # с кэшем 10с). Без этого при пересоздании backend-контейнера (новый IP в asop-net)
+    # nginx держал бы закэшированный старый IP → connect() refused → 502.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
     ssl_certificate     /certs/web-admin.crt;
     ssl_certificate_key /certs/web-admin.key;
 
@@ -15,7 +20,8 @@ server {
     index  index.html;
 
     location /api/ {
-        proxy_pass https://gateway-service:8080;
+        set $gateway_upstream gateway-service:8080;
+        proxy_pass https://$gateway_upstream;
         proxy_ssl_verify off;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -24,7 +30,8 @@ server {
     }
 
     location /realms/ {
-        proxy_pass https://gateway-service:8080;
+        set $gateway_upstream gateway-service:8080;
+        proxy_pass https://$gateway_upstream;
         proxy_ssl_verify off;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -33,7 +40,8 @@ server {
     }
 
     location /resources/ {
-        proxy_pass https://keycloak:8443;
+        set $keycloak_upstream keycloak:8443;
+        proxy_pass https://$keycloak_upstream;
         proxy_ssl_verify off;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
