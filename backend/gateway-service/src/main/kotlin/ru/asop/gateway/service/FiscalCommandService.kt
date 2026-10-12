@@ -48,11 +48,10 @@ class FiscalCommandService(
     fun requestReceipt(request: FiscalReceiptRequest, principal: Principal?, seq: Long = 0L): Mono<UUID> {
         return Mono.fromCallable {
             val eventId = UuidUtils.newId()
-            val receiptId = UuidUtils.newId()
             val correlationId = UuidUtils.newId()
 
             val event = FiscalReceiptRequestedEvent(
-                receiptId = receiptId,
+                receiptId = request.receiptId ?: UuidUtils.newId(),
                 transactionId = request.transactionId,
                 carrierId = request.carrierId,
                 carrierFiscalizerId = null,
@@ -61,6 +60,8 @@ class FiscalCommandService(
                 sessionId = request.sessionId,
                 cardsDistributorId = request.cardsDistributorId,
                 source = request.source ?: "TERMINAL",
+                acqReference = request.acqReference,
+                rrn = request.rrn,
                 requestedAt = Instant.now(),
                 correlationId = correlationId
             )

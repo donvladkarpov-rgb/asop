@@ -9,7 +9,8 @@ import java.util.UUID
  */
 data class FiscalReceiptRequestedEvent(
     val receiptId: UUID,
-    val transactionId: UUID,
+    /** NULL для дистрибьюторских чеков и терминальных до резолва транзакции (промпт 017). */
+    val transactionId: UUID?,
     val carrierId: UUID?,
     val carrierFiscalizerId: UUID?,
     val amount: java.math.BigDecimal,
@@ -17,6 +18,9 @@ data class FiscalReceiptRequestedEvent(
     val sessionId: UUID? = null,
     val cardsDistributorId: UUID? = null,
     val source: String = "TERMINAL",
+    /** Ссылка эквайрера (RRN/acqReference) — общий ключ дедупа с авто-контуром по payment-событию. */
+    val acqReference: String? = null,
+    val rrn: String? = null,
     val requestedAt: Instant,
 
     override val aggregateType: String = "FiscalReceipt",

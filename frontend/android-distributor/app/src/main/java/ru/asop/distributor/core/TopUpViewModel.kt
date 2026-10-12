@@ -11,6 +11,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import ru.asop.distributor.BuildConfig
+import ru.asop.distributor.network.DistributorSyncApi
+import ru.asop.distributor.network.models.FiscalReceiptRequest
 import ru.asop.nfc.AsopCardType
 import ru.asop.nfc.Vcm1CardAuth
 
@@ -18,7 +21,8 @@ import ru.asop.nfc.Vcm1CardAuth
  * Флоу пополнения у дистрибьютора (bank_card_api.md §4.1, целевой флоу):
  * карта дистрибьютора (auth) → сумма + способ (нал/карта) →
  * «карта»: банковская карта пассажира (только HTTP /pay в app-payment, MIFARE локально) →
- * MIFARE пассажира → запись поездок (read+write в одной сессии).
+ * MIFARE пассажира → запись поездок (read+write в одной сессии) →
+ * фискальный чек (промпт 017 §10): POST /sync/fiscal/receipts (source=DISTRIBUTOR) + QR ~3 с.
  *
  * Дистрибьютор НЕ читает банковскую карту (EMV) — только MIFARE. Не-MIFARE на шаге
  * «банк-карта» → HTTP /pay в app-payment (пассажир тапает карту повторно на FTSDK).
@@ -26,7 +30,9 @@ import ru.asop.nfc.Vcm1CardAuth
 class TopUpViewModel(
     private val keys: KeyProvider,
     private val tariffs: TariffProvider,
-    private val payments: PaymentClient
+    private val payments: PaymentClient,
+    private val fiscalizers: FiscalizerProvider,
+    private val syncApi: DistributorSyncApi
 ) {
 
     enum class Step {
@@ -34,6 +40,8 @@ class TopUpViewModel(
     }
 
     enum class Method { CASH, CARD }
+
+    data class FiscalQr(val receiptId: String, val url: String)
 
     data class UiState(
         val step: Step = Step.IDLE,
@@ -49,7 +57,9 @@ class TopUpViewModel(
         val passengerUid: String? = null,
         val passengerTrips: Int? = null,
         val newTrips: Int? = null,
-        val lastAmount: Double? = null
+        val lastAmount: Double? = null,
+        val acqReference: String? = null,
+        val fiscalQr: FiscalQr? = null
     )
 
     var state by mutableStateOf(UiState())
@@ -57,6 +67,10 @@ class TopUpViewModel(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var passengerSession: Vcm1CardAuth.Session? = null
+
+    companion object {
+        private const val FISCAL_QR_DISPLAY_MS = 3000L
+    }
 
     fun reset() {
         passengerSession?.close()
@@ -91,7 +105,7 @@ class TopUpViewModel(
         state = state.copy(
             step = Step.MIFARE_WRITE, method = Method.CASH, amount = amount,
             message = "Приложите MIFARE пассажира для записи поездок",
-            payError = null, payStatus = null
+            payError = null, payStatus = null, acqReference = null
         )
     }
 
@@ -162,6 +176,7 @@ class TopUpViewModel(
             when (result.status) {
                 "APPROVED" -> state = state.copy(
                     step = Step.MIFARE_WRITE, payStatus = "APPROVED",
+                    acqReference = result.acqReference,
                     message = "Оплачено. Приложите MIFARE пассажира для записи поездок"
                 )
                 else -> state = state.copy(
@@ -192,6 +207,12 @@ class TopUpViewModel(
                 val written = session.updateTrips(newTrips)
                 session.close()
                 passengerSession = null
+                if (written) {
+                    // Промпт 017 §10: фискализация продажи дистрибьютора (нал или карта).
+                    // Только после успешной записи поездок — повторный тап при неудаче не
+                    // создаст двойной чек (запись повторяется, но fiscalize вызывается один раз).
+                    fiscalize(amount, state.acqReference)
+                }
                 state = state.copy(
                     step = if (written) Step.DONE else Step.MIFARE_WRITE,
                     message = if (written) "Пополнение успешно" else "Запись не удалась — приложите карту ещё раз",
@@ -204,6 +225,41 @@ class TopUpViewModel(
             } else {
                 val fail = result.outcome as Vcm1CardAuth.Outcome.Failed
                 state = state.copy(step = Step.MIFARE_WRITE, payError = "Пассажир: ${fail.details}")
+            }
+        }
+    }
+
+    /**
+     * Промпт 017 §10: запрос фискального чека дистрибьютора + показ QR ~3 с.
+     * `source=DISTRIBUTOR`, `transactionId` отсутствует (у дистрибьютора нет серверной
+     * транзакции) — fiscal-service резолвит фискализатора по `cardsDistributorId`.
+     * Сбой сети/сервера не ломает флоу: sale уже завершён, QR показан оптимистично.
+     */
+    private fun fiscalize(amount: Double, acqReference: String?) {
+        scope.launch {
+            try {
+                val receiptId = UuidCreator.getTimeOrderedEpoch().toString()
+                val cardsDistributorId = BuildConfig.DISTRIBUTOR_CARDS_DISTRIBUTOR_ID
+                val request = FiscalReceiptRequest(
+                    receiptId = receiptId,
+                    amount = amount,
+                    description = "Пополнение транспортной карты",
+                    cardsDistributorId = cardsDistributorId.ifBlank { null },
+                    source = "DISTRIBUTOR",
+                    acqReference = acqReference
+                )
+                val url = fiscalizers.resolveUrl(cardsDistributorId, receiptId)
+                state = state.copy(fiscalQr = FiscalQr(receiptId, url))
+                val resp = runCatching { syncApi.requestFiscalReceipt(request) }.getOrNull()
+                if (resp != null && !resp.isSuccessful) {
+                    Log.w("TopUp", "fiscal HTTP ${resp.code()}: ${resp.errorBody()?.string()}")
+                }
+                kotlinx.coroutines.delay(FISCAL_QR_DISPLAY_MS)
+                if (state.fiscalQr?.receiptId == receiptId) {
+                    state = state.copy(fiscalQr = null)
+                }
+            } catch (e: Exception) {
+                Log.w("TopUp", "fiscalize failed: ${e.message}")
             }
         }
     }

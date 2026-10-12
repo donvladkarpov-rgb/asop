@@ -98,11 +98,17 @@ data class DebtRecoverRequest(
 
 @JsonClass(generateAdapter = true)
 data class FiscalReceiptRequest(
-    @Json(name = "transactionId") val transactionId: String,
+    /** Клиентский receiptId (UUIDv7) — нужен для офлайн-построения fiscalUrl/QR (промпт 017 §10). */
+    @Json(name = "receiptId") val receiptId: String,
     @Json(name = "amount") val amount: Double,
     @Json(name = "description") val description: String? = null,
     @Json(name = "regionId") val regionId: String? = null,
     @Json(name = "carrierId") val carrierId: String? = null,
+    @Json(name = "sessionId") val sessionId: String? = null,
+    @Json(name = "source") val source: String = "TERMINAL",
+    /** Ссылка эквайрера — общий ключ дедупа с авто-контуром фискализации по payment-событию. */
+    @Json(name = "acqReference") val acqReference: String? = null,
+    @Json(name = "rrn") val rrn: String? = null,
     @Json(name = "timezone") val timezone: String? = null,
     @Json(name = "cardId") val cardId: String? = null  // VCM1 (промпт 008)
 )

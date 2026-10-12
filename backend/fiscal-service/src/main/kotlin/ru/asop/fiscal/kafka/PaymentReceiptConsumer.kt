@@ -64,6 +64,9 @@ class PaymentReceiptConsumer(
 
         receipts.findByTransactionId(transactionId)
             .switchIfEmpty(
+                event.acquirerReference?.let { receipts.findByAcqReference(it) } ?: Mono.empty()
+            )
+            .switchIfEmpty(
                 resolver.resolve(sessionId)
                     .mapNotNull { ctx -> ctx }
                     .flatMap { ctx -> insertReceipt(event, transactionId, ctx) }
@@ -87,6 +90,7 @@ class PaymentReceiptConsumer(
             FiscalReceiptEntity(
                 receiptId = UuidUtils.newId(),
                 transactionId = transactionId,
+                acqReference = event.acquirerReference,
                 carrierId = ctx.carrierId,
                 carrierFiscalizerId = ctx.carrierFiscalizerId,
                 status = "PENDING",

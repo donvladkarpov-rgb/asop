@@ -757,7 +757,7 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 
 ## Фискализация (промпт 017)
 
-Регистрация расчётов в ОФД через фискального посредника. Серверный контур готов; Android-часть (QR/NFC) — нет. Подробно — `doc/context.md` раздел 8 «Фискализация (промпт 017)» и `doc/smoke-tests.md` «Smoke Test: Фискализация».
+Регистрация расчётов в ОФД через фискального посредника. Серверный контур + Android-часть (QR чека у терминала и дистрибьютора) готовы; NFC-запись чека на карту (промпт 017 §10) и monthly-отчёты — НЕ реализованы. Подробно — `doc/context.md` раздел 8 «Фискализация (промпт 017)» и `doc/smoke-tests.md` «Smoke Test: Фискализация».
 
 ### DB (7 таблиц)
 
@@ -765,7 +765,7 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 - **`ASOP_CARRIER_FISCALIZERS`** — привязка перевозчика: `CARRIER_FISCALIZER_ID` PK, `CARRIER_ID`, `FISCALIZER_ID`, `CONTRACT_ID` (NOT NULL, FK `ASOP_CONTRACTS`), `CUSTOM_API_URL` (перекрывает `BASE_API_URL`), `IS_PRIMARY`/`IS_ACTIVE`, `SETTINGS JSONB`, `VERSION`/`DELETED_AT`. UNIQUE `(CARRIER_ID, FISCALIZER_ID)`, partial `idx_cf_primary`. **Дельта филтруется** по carrier/region.
 - **`ASOP_DISTRIBUTOR_FISCALIZERS`** — то же для дистрибьютора карт (`CARDS_DISTRIBUTOR_ID`, UNIQUE `(CARDS_DISTRIBUTOR_ID, FISCALIZER_ID)`). **В orchestrator-delta НЕ входит** — тянется дистрибьюторским JSON-pull'ом.
 - **`ASOP_FISCALIZER_TOKENS`** — токены доступа: `TOKEN_ID` PK, `CARRIER_FISCALIZER_ID` XOR `DISTRIBUTOR_FISCALIZER_ID` (CHECK `chk_ft_link`; FK только на carrier), `TOKEN_ENCRYPTED BYTEA` (AES-GCM), `TOKEN_HINT`, `VALID_FROM`/`VALID_UNTIL` (CHECK `chk_ft_dates`), `STATUS ∈ ACTIVE|EXPIRED|REVOKED`. **Без `VERSION`/`DELETED_AT`** — на терминал/дистрибьютор НЕ синкаются (административный ресурс). Индекс активных `idx_ft_active`.
-- **`ASOP_FISCAL_RECEIPTS`** — чеки: `RECEIPT_ID` PK (он же Idempotency-Key), `TRANSACTION_ID NOT NULL` (FK `ASOP_TRANSACTIONS`), `CARRIER_ID`/`CARDS_DISTRIBUTOR_ID`/`CARRIER_FISCALIZER_ID`/`DISTRIBUTOR_FISCALIZER_ID` nullable, `SOURCE ∈ TERMINAL|DISTRIBUTOR`, `PAYMENT_TYPE` (default CARD), `RECEIPT_NUMBER`/`FISCAL_SIGN`, `STATUS ∈ PENDING|SENT|CONFIRMED|RETRY|FAILED|CANCELLED`, `ATTEMPT_COUNT`/`MAX_ATTEMPTS` (default 10), `LAST_ATTEMPT_AT`/`NEXT_RETRY_AT`, `LAST_ERROR_MESSAGE`, `RECEIPT_DATA`/`REQUEST_PAYLOAD`/`RESPONSE_DATA JSONB`, `FISCAL_URL`, `CONFIRMED_AT`.
+- **`ASOP_FISCAL_RECEIPTS`** — чеки: `RECEIPT_ID` PK (он же Idempotency-Key = клиентский UUIDv7 терминала/дистрибьютора, см. ниже), `TRANSACTION_ID` **nullable** (FK `ASOP_TRANSACTIONS`; NULL для дистрибьюторских чеков и терминальных до резолва), `ACQ_REFERENCE VARCHAR(100)` (ссылка эквайрера — общий ключ дедупа с авто-контуром, индекс `idx_fr_acq`), `CARRIER_ID`/`CARDS_DISTRIBUTOR_ID`/`CARRIER_FISCALIZER_ID`/`DISTRIBUTOR_FISCALIZER_ID` nullable, `SOURCE ∈ TERMINAL|DISTRIBUTOR`, `PAYMENT_TYPE` (default CARD), `RECEIPT_NUMBER`/`FISCAL_SIGN`, `STATUS ∈ PENDING|SENT|CONFIRMED|RETRY|FAILED|CANCELLED`, `ATTEMPT_COUNT`/`MAX_ATTEMPTS` (default 10), `LAST_ATTEMPT_AT`/`NEXT_RETRY_AT`, `LAST_ERROR_MESSAGE`, `RECEIPT_DATA`/`REQUEST_PAYLOAD`/`RESPONSE_DATA JSONB`, `FISCAL_URL`, `CONFIRMED_AT`.
 - **`ASOP_FISCAL_RECEIPT_ATTEMPTS`** — журнал попыток: `ATTEMPT_ID` PK, `RECEIPT_ID` FK CASCADE, `ATTEMPT_NUMBER` (UNIQUE `(RECEIPT_ID, ATTEMPT_NUMBER)`), `TOKEN_ID` (FK, **= linkId, не tokenId**), `REQUEST_PAYLOAD`/`RESPONSE_PAYLOAD`, `HTTP_STATUS`, `SUCCESS`, `ERROR_MESSAGE`, `ATTEMPTED_AT`, `DURATION_MS`.
 - **`ASOP_FISCAL_MONTHLY_REPORTS`** — структура есть, функционально не реализована.
 
@@ -778,20 +778,29 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 ### gateway
 
 - `ServiceRegistry`: `fiscalizers`/`carrier-fiscalizers`/`distributor-fiscalizers`/`fiscalizer-tokens` → admin:8091; `fiscal` → fiscal-service:8090.
-- `FiscalCommandController` — `POST /api/v1/sync/fiscal/receipts` (mTLS async) → `FiscalCommandService.requestReceipt` (пробрасывает `carrierId`, `sessionId`, `cardsDistributorId`, `source` (default `TERMINAL`), `regionId`/`timezone` в Kafka headers; `X-Event-Seq` для watermark) → Kafka `asop.fiscal.commands`.
+- `FiscalCommandController` — `POST /api/v1/sync/fiscal/receipts` (mTLS async, **общий для терминала и дистрибьютора**) → `FiscalCommandService.requestReceipt` (пробрасывает клиентский `receiptId ?: new UUIDv7`, `transactionId` (nullable), `carrierId`, `sessionId`, `cardsDistributorId`, `source` (default `TERMINAL`), `acqReference`/`rrn`, `regionId`/`timezone` в Kafka headers; `X-Event-Seq` для watermark) → Kafka `asop.fiscal.commands`.
 - `DistributorSyncController` — `fiscalizers`/`distributor-fiscalizers` delta для дистрибьюторских приложений (JSON-pull, прямые mTLS `/api/v1/sync/distributor/**`).
+
+### Android (терминал + дистрибьютор): офлайн-QR чека (промпт 017 §10)
+
+- **Терминал** (feitian, `android-terminal`): банковская оплата проезда (EMV-handoff в `SessionFlowViewModel.recordBankPayment`) **дополнительно** ставит в офлайн-очередь `PendingEventEntity` c `eventType=FISCAL_RECEIPT` (peer-событие к транзакции, отдельный `receiptId` UUIDv7) и показывает QR фискального чека **~3 с** (`FiscalQrState` в State VM, `FiscalQrImage` в `OpenTripScreen`, ZXing-рендер без сети). `fiscalUrl` строится **офлайн** из справочников дельты: `FiscalQrResolver` (`asop_carrier_fiscalizers` → `asop_fiscalizers`, ключи camelCase из payload_json; BIFIT и неизвестный → фиксированный шаблон `https://fp.bifit.com/processing-api/receipts/{receiptId}`, иначе `baseUrl + /processing-api/receipts/{id}`). DAO: `ReferenceRowDao.findActiveCarrierFiscalizerRow` / `findFiscalizerRowById` (LIKE по payload_json).
+- **NFC-блок**: во время handoff'а **и** показа QR (`State.nfcBlocked = bankPayment?.handingOff == true || fiscalQr != null`) терминальный reader и воркер `NfcTagBus`-опроса приостановлены — чужой tap не закроет QR и не помешает app-payment.
+- **Дистрибьютор** (`android-distributor`, standalone): `DistributorSyncApi` получил `fiscalizersDelta`/`distributorFiscalizersDelta` (`/api/v1/sync/distributor/*` mTLS) + `requestFiscalReceipt` (тот же `/api/v1/sync/fiscal/receipts`). `SyncStore` хранит `fiscalizers_json`/`distr_fiscalizers_json` + курсоры версий; `ProvisionSyncManager` пулит их (distributor-fiscalizers — с фильтром `cardsDistributorId` из BuildConfig); `FiscalizerProvider.resolveUrl(cardsDistributorId, receiptId)` строит fiscalUrl. `TopUpViewModel` после **успешной записи поездок** (`scanMifareWrite`, `written=true`) шлёт `FiscalReceiptRequest(source=DISTRIBUTOR, transactionId=null, cardsDistributorId=…, acqReference…)` и показывает QR ~3 с (`state.fiscalQr`), тапы в это время игнорируются (`MainActivity.onTagDiscovered`). Чек в fiscal-service создаётся и шлётся в ОФД **даже при недоступности сервера** — QR оптимистичный, ошибка не ломает флоу (логируется).
+- **Дедуп терминал vs авто-контур**: `FiscalReceiptService.handleRequested` дедуплицирует по приоритету `receiptId → transactionId → acqReference`; `PaymentReceiptConsumer` (авто-чек по payment-событию) проверяет `findByTransactionId` → `findByAcqReference` перед созданием. Кто бы ни пришёл первым — чек один.
 
 ### fiscal-service (порт 8090)
 
 - **Входы**: `FiscalCommandConsumer` (`asop.fiscal.commands`, `FiscalReceiptRequestedEvent`) и `PaymentReceiptConsumer` (`asop.payment.events`, авто-по-оплате; создаёт чек и сразу шлёт `source=TERMINAL`).
-- **`FiscalReceiptService.handleRequested`**: идемпотентность по `RECEIPT_ID` (`findById(...).flatMap { Mono.empty() }`), `template.insert(FiscalReceiptEntity)` (не `save()` — non-null UUID), `resolveContext` → `insertReceipt` → `send`.
+- **`FiscalReceiptService.handleRequested`**: **дедуп по приоритету** `receiptId` (клиентский UUIDv7, `findById`) → `transactionId` → `acqReference` (`findByAcqReference`), `switchIfEmpty`-цепочкой; иначе `resolveContext` → `insertReceipt` → `send`. `insertReceipt` пишет `template.insert(FiscalReceiptEntity)` (не `save()` — non-null UUID) с `ACQ_REFERENCE`.
+- **`FiscalCommandConsumer` (статусы событий)**: при финальном `CANCELLED` публикует `FAILED` в `asop.fiscal.events`, при успехе/`RETRY` — `COMPLETED` c payload `{receiptId, status}` (событие = факт обработки команды, не результат ОФД).
 - **`resolveContext`**: если `carrierId != null` или `cardsDistributorId != null` — берёт их напрямую; иначе (TERMINAL + `sessionId`) — `FiscalContextResolver.resolve(sessionId)`: `ASOP_SESSIONS.TID_ID → ASOP_TIDS → ASOP_CONTRACTS (contractor_type=BANK, ACTIVE, в датах) → ASOP_CARRIER_FISCALIZERS (is_active, ORDER BY is_primary DESC LIMIT 1)`.
-- **`resolveAdapter`**: `carrierMono` (`findActive(carrierId)`) → `distributorMono` (`findActive(cardsDistributorId)`), иначе ошибка. `buildResolved` берёт `FiscalizerAdapterRegistry.get(fiscalizerCode)` (Map `providerCode → adapter`), `baseUrl = customApiUrl ?: baseApiUrl`, токен через `FiscalizerTokenRepository.findActiveForLink(linkId)` → `TokenCipher.decrypt`, `defaultIfEmpty(empty)`.
+- **`resolveAdapter`**: `carrierMono` (`findActive(carrierId)`) → `distributorMono` (`findActive(cardsDistributorId)`), иначе ошибка. `buildResolved` берёт `FiscalizerAdapterRegistry.get(fiscalizerCode)` (Map `providerCode → adapter`), `baseUrl = customApiUrl ?: baseApiUrl`, токен через `FiscalizerTokenRepository.findActiveForLink(linkId)` → `TokenCipher.decrypt`, `defaultIfEmpty(empty)`. Дистрибьюторский чек (`transactionId=null`, `source=DISTRIBUTOR`) идёт по `distributorMono` без резолва транзакции.
 - **`post`**: `webClient.post().uri(base + adapter.registrationPath())`, header `Connector-Token: String(token)`, `Idempotency-Key: receiptId`, body = JSON из `adapter.buildRequest(ctx)` (= `receiptData` as-is для Bifit). `parseResponse` → success (`status in 200..299`) → `finishAttempt` (CONFIRMED/RETRY/CANCELLED + запись в attempts).
 - **Ретраи**: `retryDue()` → `FiscalReceiptRepository.findDueForRetry(now, now-1мин)` (**PENDING старше 1 мин ИЛИ просроченный RETRY**), backoff = `min(retryInterval * 2^(attempt-1), 3600с)`; при `ATTEMPT_COUNT >= MAX_ATTEMPTS` → `CANCELLED`. `FiscalRetryScheduler` (`@Scheduled(fixedDelay)`, `fiscal.retry-enabled`).
 - **`GET /api/v1/fiscal/receipts/{receiptId}/status`** (fiscal-api `FiscalApi`) → `FiscalReceiptStatusDto { receiptId, status, fiscalUrl, receiptNumber, confirmedAt }`.
 - **Адаптеры** (`adapter/`): `FiscalizerAdapter` (default `registrationPath() = /processing-api/protected/documents/registration/receipts/token`), `BifitAdapter` (`providerCode="BIFIT"`, `buildRequest` пробрасывает `fiscalContext`, `parseResponse` читает `receiptNumber`/`number` + `fiscalSign`/`fs`/`fn`, `receiptUrl = https://fp.bifit.com/processing-api/receipts/{id}`), `FiscalizerAdapterRegistry` (Map по `providerCode`).
 - **Конфиг**: `fiscal.max-attempts` (10), `fiscal.retry-interval-ms` (30000), `fiscal.retry-enabled`, `fiscal.token-secret`. Свой `WebClientConfig`.
+- **Dev mock-ОФД**: контейнер `mock-fiscal` (`python:3.12-alpine`, `infrastructure/docker/mock-fiscal/server.py`, plain HTTP 8089) в docker-compose; seed `BIFIT.BASE_API_URL = http://mock-fiscal:8089` → чек реально доходит до `CONFIRMED` (сценарий регистрации чека + `/health`). Старый `MockFiscalController` из тестов удалён вместе с мёртвым `FiscalService.kt`. Для prod нужен реальный URL Bifit вместо заглушки.
 
 ### orchestrator / proto / web-admin
 
@@ -802,10 +811,11 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 
 ### Известные пробелы (не реализовано)
 
-- **Android-терминал/дистрибьютор**: QR-код чека (экран 3 с) и NFC-запись чека на DESFire/MIFARE (промпт 017 §10) НЕ реализованы.
-- **Distributor receipt flow** end-to-end в fiscal-service не доведён (consumer/`source=DISTRIBUTOR` есть, полный путь дистрибьютор→чек не протестирован).
-- **Dev**: seed `BIFIT.BASE_API_URL = http://mock-fiscal:8089`; `MockFiscalController` (тот же registration path, возвращает `receiptNumber`/`fn`/`fs`) лежит в `backend/fiscal-service/src/test/` — **в прод-JAR не упакован**, в Docker сервиса `mock-fiscal` нет → чек уходит в `RETRY` (см. smoke-тест). Для прод нужен реальный URL Bifit или поднятый mock-стенд.
-- **Техдолг**: мёртвый код `FiscalService.kt` + `FiscalReceiptRequest/Response` в fiscal-service; `FiscalCommandConsumer` публикует `COMPLETED` в `asop.fiscal.events` даже когда чек лёг в `RETRY`/`CANCELLED` (событие = факт обработки команды, не результат ОФД).
+- **NFC-запись чека** на DESFire/MIFARE (промпт 017 §10) — НЕ реализована (QR покрывает сценарий «пассажир видит чек»; запись на карту — отдельный флоу).
+- **Distributor receipt flow** end-to-end: реализован (QR + `source=DISTRIBUTOR`), но e2e-прогон на железе не выполнен.
+- **`ASOP_FISCAL_MONTHLY_REPORTS`** — структура есть, агрегация не реализована.
+- **`GET /fiscal/receipts/{id}/status`** — JWT-only (терминал по mTLS не достучится): QR терминала оптимистичен, поллинг статуса чека не реализован.
+- **Dev**: mock-ОФД (`mock-fiscal` контейнер) закрывает регистрацию чека до `CONFIRMED`; для prod нужен реальный URL Bifit (seed `BIFIT.BASE_API_URL`), а не `http://mock-fiscal:8089`.
 
 ## GPS-трекинг, live-карта и пассажирское приложение (промпт 014/015+)
 

@@ -1,5 +1,6 @@
 package ru.asop.terminal.ui.screen
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -31,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -153,6 +156,25 @@ fun TripCascadePicker(
                                 textAlign = TextAlign.Center
                             )
                         }
+                    }
+                    // Промпт 017 §10: QR фискального чека. Появляется сразу после успешной
+                    // оплаты (receiptId сгенерирован офлайн), живёт ~3 с; NFC-чтение на это
+                    // время приостановлено (см. SessionFlowViewModel.State.nfcBlocked).
+                    state.fiscalQr?.let { qr ->
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "Фискальный чек",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        FiscalQrImage(url = qr.url)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Чек: ${qr.receiptId.take(8)}…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
                 Box(
@@ -350,4 +372,49 @@ private fun parsePathPayload(json: String): Pair<String, String> {
     val id = obj.optString("pathId", obj.optString("id"))
     val name = obj.optString("pathName", "—")
     return id to name
+}
+
+/**
+ * Промпт 017 §10: QR-код фискального чека. Картинка рендерится локально из URL через
+ * ZXing (без сети) — fiscalUrl строится офлайн по receiptId.
+ */
+@Composable
+private fun FiscalQrImage(url: String) {
+    val bitmap = remember(url) {
+        runCatching {
+            val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(
+                url,
+                com.google.zxing.BarcodeFormat.QR_CODE,
+                512,
+                512
+            )
+            val bmp = android.graphics.Bitmap.createBitmap(
+                matrix.width,
+                matrix.height,
+                android.graphics.Bitmap.Config.ARGB_8888
+            )
+            val black = android.graphics.Color.BLACK
+            val white = android.graphics.Color.WHITE
+            for (x in 0 until matrix.width) {
+                for (y in 0 until matrix.height) {
+                    bmp.setPixel(x, y, if (matrix.get(x, y)) black else white)
+                }
+            }
+            bmp
+        }.getOrNull()
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "QR фискального чека",
+            modifier = Modifier.size(220.dp)
+        )
+    } else {
+        Text(
+            url,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center
+        )
+    }
 }

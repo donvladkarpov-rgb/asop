@@ -118,6 +118,9 @@ dependencies {
     // Общая NFC/VCM1-библиотека (composite build, ../android-nfc)
     implementation("ru.asop.nfc:asop-nfc-lib:0.1.0")
 
+    // QR фискального чека (промпт 017 §10)
+    implementation("com.google.zxing:core:3.5.3")
+
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")

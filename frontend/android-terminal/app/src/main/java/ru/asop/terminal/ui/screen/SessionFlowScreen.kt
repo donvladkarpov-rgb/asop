@@ -65,7 +65,8 @@ fun SessionFlowScreen(
 
     // Промпт 016 §3.6: пока идёт handoff банковской карты (REQUESTED/PROCESSING),
     // терминал гасит свой reader и НЕ арм'ит его — NFC нужен app-payment единолично.
-    val handingOff = state.bankPayment?.handingOff == true
+    // Промпт 017 §10: то же во время показа QR фискального чека (fiscalQr != null).
+    val handingOff = state.nfcBlocked
 
     LaunchedEffect(Unit) {
         viewModel.setKind(initialKind)

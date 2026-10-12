@@ -24,7 +24,7 @@ interface FiscalizerAdapter {
 
 data class FiscalContext(
     val receiptId: UUID,
-    val transactionId: UUID,
+    val transactionId: UUID? = null,
     val total: java.math.BigDecimal? = null,
     val fiscalContext: Map<String, Any?> = emptyMap()
 )

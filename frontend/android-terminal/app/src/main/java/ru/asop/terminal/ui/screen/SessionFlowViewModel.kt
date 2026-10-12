@@ -30,6 +30,7 @@ import ru.asop.terminal.db.entity.PendingEventEntity
 import ru.asop.terminal.db.entity.SessionEntity
 import ru.asop.terminal.db.entity.TripPaymentEntity
 import ru.asop.terminal.network.SyncApi
+import ru.asop.terminal.network.models.FiscalReceiptRequest
 import ru.asop.terminal.network.models.SessionCloseRequest
 import ru.asop.terminal.network.models.SessionOpenRequest
 import ru.asop.terminal.network.models.TransactionCompleteRequest
@@ -39,6 +40,7 @@ import ru.asop.terminal.nfc.TonePlayer
 import ru.asop.nfc.Vcm1CardAuth
 import ru.asop.terminal.payment.PaymentHandoff
 import ru.asop.terminal.payment.PaymentHttpClient
+import ru.asop.terminal.payment.FiscalQrResolver
 import ru.asop.terminal.util.JsonUtil
 import ru.asop.terminal.worker.EventTypes
 import javax.inject.Inject
@@ -66,6 +68,7 @@ class SessionFlowViewModel @Inject constructor(
     private val syncPreferences: SyncPreferences,
     @Suppress("unused") private val syncApi: SyncApi,
     private val workScheduler: ru.asop.terminal.worker.WorkScheduler,
+    private val fiscalQrResolver: FiscalQrResolver,
     private val terminalDao: ReferenceRowDao = referenceRowDao
 ) : AndroidViewModel(application) {
 
@@ -103,6 +106,16 @@ class SessionFlowViewModel @Inject constructor(
             get() = phase == BankPaymentPhase.REQUESTED || phase == BankPaymentPhase.PROCESSING
     }
 
+    /**
+     * Промпт 017 §10: QR фискального чека, показывается ~3 с после успешной банковской
+     * оплаты проезда. URL строится офлайн по клиентскому [receiptId] (fiscal-service
+     * асинхронно создаёт чек и шлёт в ОФД — терминал не ждёт ответа).
+     */
+    data class FiscalQrState(
+        val receiptId: String,
+        val url: String
+    )
+
     companion object {
         /**
          * Роли, которым разрешено открывать/закрывать смены и рейсы:
@@ -132,6 +145,9 @@ class SessionFlowViewModel @Inject constructor(
 
         /** Владелец NFC-шины на время handoff'а банковской карты (промпт 016 §3.6). */
         private const val BANK_BUS_OWNER = "payment"
+
+        /** Промпт 017 §10: сколько держать QR фискального чека на экране. */
+        private const val FISCAL_QR_DISPLAY_MS = 3000L
     }
 
     data class CardTapInfo(
@@ -176,7 +192,9 @@ class SessionFlowViewModel @Inject constructor(
         val passengerRouteLabel: String? = null,
         val passengerDriverLabel: String? = null,
         // Промпт 016 §3.6: handoff банковской карты в app-payment (режим A).
-        val bankPayment: BankPaymentState? = null
+        val bankPayment: BankPaymentState? = null,
+        // Промпт 017 §10: QR фискального чека после успешной банковской оплаты.
+        val fiscalQr: FiscalQrState? = null
     ) {
         val canConfirmOpenShift: Boolean
             get() = cardStep == CardStep.AUTH_OK && submitState == SubmitState.IDLE
@@ -186,6 +204,14 @@ class SessionFlowViewModel @Inject constructor(
                 openShift != null &&
                 tripTidId != null &&
                 tripVehicleId != null && tripPathId != null
+
+        /**
+         * Промпт 016/017: пока идёт handoff банковской карты или показан QR чека —
+         * NFC-чтение приостановлено (иначе QR закроется чужим tap'ом, а app-payment
+         * не получит эквайер).
+         */
+        val nfcBlocked: Boolean
+            get() = bankPayment?.handingOff == true || fiscalQr != null
     }
 
     fun setTripTid(id: String?, label: String?) {
@@ -288,6 +314,9 @@ class SessionFlowViewModel @Inject constructor(
                 if (!screenVisible) continue
                 if (state.value.cardStep == CardStep.WAITING_TAP ||
                     state.value.cardStep == CardStep.IDLE) {
+                    // Промпт 017 §10: во время показа QR фискального чека (как и во время
+                    // handoff'а) NFC-чтение приостановлено — иначе чужой tap закроет QR.
+                    if (state.value.nfcBlocked) continue
                     // Ревью-фикс: если другой экран (TopUp) заявил права на NfcTagBus — не трогаем.
                     // consumeIfNotClaimed — атомарная проверка+изъятие (isClaimed()+consume() имели TOCTOU-окно).
                     val pending = NfcTagBus.consumeIfNotClaimed()
@@ -1059,9 +1088,58 @@ class SessionFlowViewModel @Inject constructor(
                 )
                 workScheduler.enqueueOneShotSync()
                 _state.update { it.copy(submitState = SubmitState.IDLE) }
+
+                // Промпт 017 §10: офлайн-фискализация чека проезда. Терминал сам генерирует
+                // receiptId (UUIDv7) → сразу строит fiscalUrl для QR; запрос уходит в очередь
+                // (SyncWorker → gateway → Kafka → fiscal-service → ОФД). Серверный авто-контур
+                // по payment-событию дедуплицирует по acqReference — двойного чека не будет.
+                enqueueFiscalReceipt(trip, result)
             } catch (e: Exception) {
                 android.util.Log.e("SessionFlowVM", "recordBankPayment failed", e)
                 _state.update { it.copy(submitState = SubmitState.IDLE) }
+            }
+        }
+    }
+
+    /**
+     * Промпт 017 §10: поставить запрос фискализации чека проезда в офлайн-очередь и показать
+     * QR. Ошибка фискализации НЕ должна ломать UX (проезд уже оплачен): любые сбои логируются.
+     */
+    private fun enqueueFiscalReceipt(trip: SessionEntity, result: PaymentHandoff.Result) {
+        viewModelScope.launch {
+            try {
+                val receiptId = UuidCreator.getTimeOrderedEpoch().toString()
+                val fiscalRequest = FiscalReceiptRequest(
+                    receiptId = receiptId,
+                    amount = result.amount,
+                    description = "Оплата проезда",
+                    regionId = trip.regionId,
+                    carrierId = trip.carrierId,
+                    sessionId = trip.id,
+                    source = "TERMINAL",
+                    acqReference = result.acqReference,
+                    rrn = result.rrn,
+                    timezone = trip.timezone
+                )
+                pendingEventDao.insert(
+                    PendingEventEntity(
+                        id = receiptId,
+                        topic = "asop.fiscal.commands",
+                        payload = JsonUtil.encode(fiscalRequest),
+                        eventType = EventTypes.FISCAL_RECEIPT,
+                        pathParam = null,
+                        seq = syncPreferences.nextSeq()
+                    )
+                )
+                val url = fiscalQrResolver.resolveUrl(trip.carrierId, receiptId)
+                _state.update { it.copy(fiscalQr = FiscalQrState(receiptId, url)) }
+                workScheduler.enqueueOneShotSync()
+                kotlinx.coroutines.delay(FISCAL_QR_DISPLAY_MS)
+                _state.update { st ->
+                    if (st.fiscalQr?.receiptId == receiptId) st.copy(fiscalQr = null) else st
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("SessionFlowVM", "enqueueFiscalReceipt failed", e)
             }
         }
     }

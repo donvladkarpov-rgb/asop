@@ -1506,7 +1506,9 @@ CREATE INDEX idx_ft_distributor ON ASOP_FISCALIZER_TOKENS (DISTRIBUTOR_FISCALIZE
 CREATE TABLE ASOP_FISCAL_RECEIPTS
 (
     RECEIPT_ID            UUID           NOT NULL,
-    TRANSACTION_ID        UUID           NOT NULL,
+    -- NULL допустим: дистрибьюторские чеки и терминальные чеки до резолва транзакции.
+    TRANSACTION_ID        UUID,
+    ACQ_REFERENCE         VARCHAR(100),  -- RRN/ссылка эквайрера — общий ключ дедупа terminal/auto-path
     CARRIER_ID            UUID,
     CARDS_DISTRIBUTOR_ID  UUID,
     CARRIER_FISCALIZER_ID UUID,
@@ -1537,6 +1539,7 @@ CREATE TABLE ASOP_FISCAL_RECEIPTS
 );
 COMMENT ON TABLE ASOP_FISCAL_RECEIPTS IS 'Фискальные чеки. Retry-механизм при ошибках.';
 CREATE INDEX idx_fr_transaction ON ASOP_FISCAL_RECEIPTS (TRANSACTION_ID);
+CREATE INDEX idx_fr_acq ON ASOP_FISCAL_RECEIPTS (ACQ_REFERENCE);
 CREATE INDEX idx_fr_carrier ON ASOP_FISCAL_RECEIPTS (CARRIER_ID);
 CREATE INDEX idx_fr_status ON ASOP_FISCAL_RECEIPTS (STATUS);
 CREATE INDEX idx_fr_retry_queue ON ASOP_FISCAL_RECEIPTS (NEXT_RETRY_AT) WHERE STATUS = 'RETRY';

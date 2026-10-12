@@ -10,6 +10,7 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import retrofit2.converter.scalars.ScalarsConverterFactory
 import ru.asop.distributor.cert.AsopKeyManager
 import ru.asop.distributor.cert.CertManager
+import ru.asop.distributor.core.FiscalizerProvider
 import ru.asop.distributor.core.KeyProvider
 import ru.asop.distributor.core.PaymentClient
 import ru.asop.distributor.core.TariffProvider
@@ -100,5 +101,6 @@ class AppGraph(context: Context) {
 
     val keyProvider: KeyProvider by lazy { KeyProvider(syncStore, cryptor) }
     val tariffProvider: TariffProvider by lazy { TariffProvider(syncStore) }
+    val fiscalizerProvider: FiscalizerProvider by lazy { FiscalizerProvider(syncStore) }
     val paymentClient: PaymentClient = PaymentClient()
 }

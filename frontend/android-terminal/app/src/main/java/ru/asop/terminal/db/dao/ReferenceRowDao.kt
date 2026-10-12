@@ -97,6 +97,37 @@ interface ReferenceRowDao {
     suspend fun firstUserCarrierRow(userId: String): String?
 
     /**
+     * Промпт 017 §10: активная привязка фискализатора к перевозчику (asop_carrier_fiscalizers).
+     * payload JSON: {"carrierFiscalizerId":"...","carrierId":"...","fiscalizerId":"...",
+     * "customApiUrl":"...","isPrimary":true,"isActive":true,...}.
+     * Используется [ru.asop.terminal.payment.FiscalQrResolver].
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_carrier_fiscalizers'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"carrierId": "' || :carrierId || '"%'
+          AND payload_json LIKE '%"isActive": true%'
+        LIMIT 1
+    """)
+    suspend fun findActiveCarrierFiscalizerRow(carrierId: String): String?
+
+    /**
+     * Промпт 017 §10: справочник фискализаторов (asop_fiscalizers) по fiscalizerId.
+     * payload JSON: {"fiscalizerId":"...","fiscalizerCode":"BIFIT","baseApiUrl":"..."}.
+     */
+    @Query("""
+        SELECT payload_json
+        FROM reference_rows
+        WHERE table_name = 'asop_fiscalizers'
+          AND deleted_at IS NULL
+          AND payload_json LIKE '%"fiscalizerId": "' || :fiscalizerId || '"%'
+        LIMIT 1
+    """)
+    suspend fun findFiscalizerRowById(fiscalizerId: String): String?
+
+    /**
      * Промпт 011: TID-пулы для перевозчика. payload JSON содержит
      * `{"tidId":"...","carrierId":"...","tidValue":"...","status":"UNUSED","isValid":true}`.
      * Сортировка на клиенте по payloadJson.tidValue (Room не знает schema payload_json).

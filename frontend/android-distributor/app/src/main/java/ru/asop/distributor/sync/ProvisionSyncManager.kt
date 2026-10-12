@@ -147,9 +147,39 @@ class ProvisionSyncManager(
             maxKeysVersion ?: store.lastKeysVersion(),
             maxTariffsVersion ?: store.lastTariffsVersion()
         )
+
+        // Промпт 017: фискализаторы — глобальный словарь + привязка дистрибьютора.
+        var maxFiscalizersVersion = -1L
+        var maxDistrFiscalizersVersion = -1L
+
+        val fiscalizersResp = syncApi.fiscalizersDelta(store.lastFiscalizersVersion())
+        if (!fiscalizersResp.isSuccessful) return Result.Fail("fiscalizers/delta HTTP ${fiscalizersResp.code()}")
+        val fiscalizers = fiscalizersResp.body() ?: emptyList()
+        store.mergeFiscalizers(fiscalizers)
+        maxFiscalizersVersion = fiscalizers.map { it.version ?: 0L }.maxOrNull() ?: -1L
+
+        val cardsDistributorId = BuildConfig.DISTRIBUTOR_CARDS_DISTRIBUTOR_ID
+        if (cardsDistributorId.isNotBlank()) {
+            val dfResp = syncApi.distributorFiscalizersDelta(
+                versionSince = store.lastDistributorFiscalizersVersion(),
+                cardsDistributorId = cardsDistributorId
+            )
+            if (!dfResp.isSuccessful) return Result.Fail("distributor-fiscalizers/delta HTTP ${dfResp.code()}")
+            val dfRows = dfResp.body() ?: emptyList()
+            store.mergeDistributorFiscalizers(dfRows)
+            maxDistrFiscalizersVersion =
+                dfRows.map { it.version ?: 0L }.maxOrNull() ?: -1L
+        }
+
+        val prevFisc = store.lastFiscalizersVersion()
+        val prevDistrFisc = store.lastDistributorFiscalizersVersion()
+        store.setFiscalizersVersion(
+            if (maxFiscalizersVersion >= 0) maxFiscalizersVersion else prevFisc,
+            if (maxDistrFiscalizersVersion >= 0) maxDistrFiscalizersVersion else prevDistrFisc
+        )
         store.markSyncedAt(System.currentTimeMillis())
 
-        Log.i(TAG, "sync done: terminal=$terminalId, keys=${store.keys().size}, tariffs=${store.tariffs().size}")
+        Log.i(TAG, "sync done: terminal=$terminalId, keys=${store.keys().size}, tariffs=${store.tariffs().size}, fiscalizers=${store.fiscalizers().size}, distrFiscalizers=${store.distributorFiscalizers().size}")
         return Result.Ok(
             distributorTerminalId = terminalId,
             keysCount = store.keys().size,

@@ -15,6 +15,9 @@ interface FiscalReceiptRepository : ReactiveCrudRepository<FiscalReceiptEntity, 
     @Query("SELECT * FROM ASOP_FISCAL_RECEIPTS WHERE TRANSACTION_ID = :transactionId LIMIT 1")
     fun findByTransactionId(transactionId: UUID): Mono<FiscalReceiptEntity>
 
+    @Query("SELECT * FROM ASOP_FISCAL_RECEIPTS WHERE ACQ_REFERENCE = :acqReference LIMIT 1")
+    fun findByAcqReference(acqReference: String): Mono<FiscalReceiptEntity>
+
     @Query(
         "SELECT * FROM ASOP_FISCAL_RECEIPTS " +
             "WHERE (STATUS = 'PENDING' AND CREATED_AT <= :staleBefore) " +

@@ -35,7 +35,18 @@ class FiscalCommandConsumer(
                 "FiscalReceiptRequested" -> {
                     val event = objectMapper.treeToValue(node, FiscalReceiptRequestedEvent::class.java)
                     service.handleRequested(event)
-                        .doOnSuccess { publishComplete(eventId, mapOf("receiptId" to event.receiptId.toString())) }
+                        .doOnSuccess { receipt ->
+                            // Промпт 017 §4/semantics: COMPLETED = команда обработана. Если все
+                            // попытки исчерпаны (CANCELLED) — это FAILED, а не мнимая успешность.
+                            if (receipt.status == "CANCELLED") {
+                                publishFailed(eventId, receipt.lastErrorMessage ?: "Fiscal receipt cancelled")
+                            } else {
+                                publishComplete(eventId, mapOf(
+                                    "receiptId" to receipt.receiptId.toString(),
+                                    "status" to receipt.status
+                                ))
+                            }
+                        }
                         .doOnError { e -> publishFailed(eventId, e.message ?: "error") }
                         .subscribe()
                 }

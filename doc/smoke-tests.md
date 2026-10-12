@@ -811,19 +811,21 @@ SpreadsheetML `.xml` (листы «Строки» + «Итоги»). Визуа�
 
 ## Smoke Test: Фискализация (промпт 017)
 
-**Goal:** команда `POST /sync/fiscal/receipts` доезжает до ОФД: создаётся `ASOP_FISCAL_RECEIPTS` +
-`ASOP_FISCAL_RECEIPT_ATTEMPTS`, чек отправляется (CONFIRMED или RETRY при недоступном ОФД),
-статус отдаётся по `GET /api/v1/fiscal/receipts/{receiptId}/status`.
+**Goal:** команда `POST /sync/fiscal/receipts` (общая для терминала и дистрибьютора) доезжает до ОФД:
+создаётся `ASOP_FISCAL_RECEIPTS` + `ASOP_FISCAL_RECEIPT_ATTEMPTS`, чек отправляется в dev-ОФД
+(`mock-fiscal` контейнер) и доходит до `CONFIRMED`, статус отдаётся по
+`GET /api/v1/fiscal/receipts/{receiptId}/status`.
 
 ### Pre-conditions
 
 ```bash
+docker compose -f infrastructure/docker/docker-compose.yml up -d --build mock-fiscal   # dev-ОФД (порт 8089)
 PSQL="docker exec -i -e PGPASSWORD=asop docker-postgres-1 psql -U asop -d asop"
 $PSQL < infrastructure/docker/seed-data.sql   # seed: BIFIT + carrier 1403 + token
 ```
 
 Seed (см. `seed-data.sql`):
-- `ASOP_FISCALIZERS` — `aa6c31f0-…` `BIFIT`, `BASE_API_URL=http://mock-fiscal:8089` (dev-заглушка, НЕ в проде)
+- `ASOP_FISCALIZERS` — `aa6c31f0-…` `BIFIT`, `BASE_API_URL=http://mock-fiscal:8089` (dev-заглушка, НЕ в проде — для prod заменить на реальный URL Bifit)
 - `ASOP_CARRIER_FISCALIZERS` — `2a01bb62-…`, carrier `00000000-…1403` (ГУП «Крымавтотранс»), BIFIT, `IS_PRIMARY/IS_ACTIVE=true`
 - `ASOP_FISCALIZER_TOKENS` — `fd4a6ea4-…` активный токен этой связи
 
@@ -834,11 +836,13 @@ mTLS-креденшал — Шаг 0 сценария «Driver Session workflow�
 ```bash
 CARRIER="00000000-0000-0000-0000-000000001403"
 TXN_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+RECEIPT_ID="$(uuidgen | tr 'A-Z' 'a-z')"   # клиентский UUIDv7 терминала/дистрибьютора (офлайн-QR)
 
-# 1. Запрос фискального чека (mTLS async). carrierId передаём явно,
-#    чтобы resolveContext не требовал session→TID→BANK-contract.
+# 1. Запрос фискального чека (mTLS async). receiptId — клиентский (дедуп по нему),
+#    carrierId передаём явно, чтобы resolveContext не требовал session→TID→BANK-contract.
 EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/fiscal/receipts" \
   -H 'Content-Type: application/json' -d "{
+    \"receiptId\": \"$RECEIPT_ID\",
     \"transactionId\": \"$TXN_ID\",
     \"amount\": 55.00,
     \"description\": \"Оплата проезда\",
@@ -849,41 +853,49 @@ EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/fiscal/receipts" \
 
 # 2. Дожидаемся терминального статуса события (COMPLETED/FAILED)
 poll "$EV" | jq -r '.state'    # → COMPLETED
+
+# 2b. Дистрибьюторский чек (source=DISTRIBUTOR, transactionId=null, cardsDistributorId):
+DV="00000000-0000-0000-0000-112000000300"   # BuildConfig.DISTRIBUTOR_CARDS_DISTRIBUTOR_ID (сид Крыма)
+curl -sk $MTLS -X POST "$BASE/api/v1/sync/fiscal/receipts" -H 'Content-Type: application/json' -d "{
+    \"receiptId\": \"$(uuidgen)\",
+    \"amount\": 200.00,
+    \"description\": \"Пополнение транспортной карты\",
+    \"cardsDistributorId\": \"$DV\",
+    \"source\": \"DISTRIBUTOR\"
+  }"
+# → 202 Accepted; чек резолвится по ASOP_DISTRIBUTOR_FISCALIZERS (без транзакции)
 ```
 
 ### Verification
 
 ```bash
-# Чек создан (RECEIPT_ID = Idempotency-Key), статус CONFIRMED при живом ОФД,
-# иначе RETRY (mock-fiscal:8089 в Docker по умолчанию не поднят):
+# Чек создан (RECEIPT_ID = Idempotency-Key), при живом mock-fiscal статус CONFIRMED:
 $PSQL "SELECT RECEIPT_ID, CARRIER_ID, SOURCE, STATUS, ATTEMPT_COUNT, LAST_ERROR_MESSAGE
-       FROM ASOP_FISCAL_RECEIPTS WHERE TRANSACTION_ID='$TXN_ID';"
-# → TERMINAL | PENDING→CONFIRMED/RETRY | 1
+       FROM ASOP_FISCAL_RECEIPTS WHERE RECEIPT_ID='$RECEIPT_ID';"
+# → TERMINAL | PENDING→CONFIRMED | 1
 
 # Журнал попыток отправки (FK CASCADE), http-status/duration:
 $PSQL "SELECT a.ATTEMPT_NUMBER, a.HTTP_STATUS, a.SUCCESS, a.ERROR_MESSAGE
        FROM ASOP_FISCAL_RECEIPT_ATTEMPTS a
        JOIN ASOP_FISCAL_RECEIPTS r ON r.RECEIPT_ID=a.RECEIPT_ID
-       WHERE r.TRANSACTION_ID='$TXN_ID';"
+       WHERE r.RECEIPT_ID='$RECEIPT_ID';"
+# → 1 | 200 | true | NULL
 
 # Статус через fiscal-service (sync):
 CS="docker exec docker-fiscal-service-1 sh -c"
 $CS 'wget -qO- --no-check-certificate \
   "https://localhost:8090/api/v1/fiscal/receipts/<RECEIPT_ID>/status"'
-# → {"receiptId":"…","status":"CONFIRMED|RETRY","fiscalUrl":null,"receiptNumber":"…"}
+# → {"receiptId":"…","status":"CONFIRMED","fiscalUrl":null,"receiptNumber":"…"}
 
-# Идемпотентность: повторная доставка той же команды (тот же RECEIPT_ID) не создаёт дубль
-# (handleRequested: receiptRepository.findById(...).flatMap { Mono.empty() }).
+# Дедуп по приоритету receiptId → transactionId → acqReference: повторная доставка той же
+# команды (тот же RECEIPT_ID) не создаёт дубль. Авто-чек по payment-событию с тем же acqReference — тоже нет.
 ```
 
 ### Ожидаемый результат и известные пробелы
 
-- Успешный путь (`CONFIRMED`) — при доступном ОФД; `receiptNumber`/`fiscalSign` из ответа.
-- **Dev-заглушка**: seed-URL `http://mock-fiscal:8089` в Docker не поднят (`MockFiscalController` лежит в
-  `src/test`, в JAR не упакован) → отправка падает по connection refused, чек уходит в `RETRY`
-  (до `fiscal.max-attempts`, затем `CANCELLED`), в `LAST_ERROR_MESSAGE` — причина.
-- **Внимание (техдолг)**: `FiscalCommandConsumer` публикует `COMPLETED` в `asop.fiscal.events` даже когда
-  чек фактически в `RETRY`/`CANCELLED` (событие отражает только факт обработки команды, не результат ОФД) —
-  итоговый результат смотреть в `ASOP_FISCAL_RECEIPTS.STATUS`.
+- Успешный путь (`CONFIRMED`) — mock-fiscal контейнер жив (docker-compose `mock-fiscal`); `receiptNumber`/`fiscalSign` из ответа.
+- **Dev-ОФД**: `infrastructure/docker/mock-fiscal/server.py` (`python:3.12-alpine`, plain HTTP 8089, `/health` + регистрация чека `…/registration/receipts/token` → `receiptNumber`/`fn`/`fs`). Для prod нужен реальный URL Bifit (seed `BIFIT.BASE_API_URL`), а не `http://mock-fiscal:8089`.
+- **Семантика событий**: `FiscalCommandConsumer` публикует `COMPLETED` в `asop.fiscal.events` при успехе/`RETRY` и `FAILED` при финальном `CANCELLED` (событие = факт обработки команды, не результат ОФД) — итоговый результат смотреть в `ASOP_FISCAL_RECEIPTS.STATUS`.
 - Ретраи: `FiscalRetryScheduler` (`fiscal.retry-enabled`) раз в `fixedDelay` досылает `PENDING` старше 1 мин
   и просроченные `RETRY` (экспоненциальный backoff, `fiscal.retry-interval-ms`).
+- **Android (QR)**: терминал — QR чека ~3 с после банковской оплаты проезда (офлайн, ZXing); дистрибьютор — QR после успешной записи поездок (`source=DISTRIBUTOR`). Статус чека с терминала не поллится (`GET /status` JWT-only) — QR оптимистичен.

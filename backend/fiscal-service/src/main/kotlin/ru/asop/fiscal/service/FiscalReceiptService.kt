@@ -43,14 +43,22 @@ class FiscalReceiptService(
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
-    fun handleRequested(event: FiscalReceiptRequestedEvent): Mono<Void> {
+    /**
+     * Идемпотентная обработка запроса фискализации (промпт 017 §5/§7).
+     *
+     * Дедуп по трём ключам в порядке приоритета: receiptId (клиентский UUIDv7, для офлайн-QR)
+     * → transactionId → acqReference. acqReference — общий ключ с авто-контуром
+     * [ru.asop.fiscal.kafka.PaymentReceiptConsumer] (payment-событие), поэтому банковская
+     * оплата НЕ фискализируется дважды, кто бы ни пришёл первым.
+     */
+    fun handleRequested(event: FiscalReceiptRequestedEvent): Mono<FiscalReceiptEntity> {
         return receiptRepository.findById(event.receiptId)
-            .flatMap { Mono.empty<Void>() }
+            .switchIfEmpty(event.transactionId?.let { receiptRepository.findByTransactionId(it) } ?: Mono.empty())
+            .switchIfEmpty(event.acqReference?.let { receiptRepository.findByAcqReference(it) } ?: Mono.empty())
             .switchIfEmpty(
                 resolveContext(event)
                     .flatMap { ctx -> insertReceipt(event, ctx) }
                     .flatMap { send(it) }
-                    .then()
             )
     }
 
@@ -74,6 +82,7 @@ class FiscalReceiptService(
         val entity = FiscalReceiptEntity(
             receiptId = event.receiptId,
             transactionId = event.transactionId,
+            acqReference = event.acqReference,
             carrierId = ctx.first,
             cardsDistributorId = event.cardsDistributorId,
             carrierFiscalizerId = ctx.second,

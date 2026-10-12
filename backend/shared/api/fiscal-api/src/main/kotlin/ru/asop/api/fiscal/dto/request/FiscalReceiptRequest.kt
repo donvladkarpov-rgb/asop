@@ -6,8 +6,14 @@ import java.math.BigDecimal
 import java.util.UUID
 
 data class FiscalReceiptRequest(
-    @field:NotNull
-    val transactionId: UUID,
+    /**
+     * Клиентский receiptId (UUIDv7), генерируется терминалом/дистрибьютором для офлайн-QR
+     * (fiscalUrl = template(receiptId)). Если не передан — генерирует gateway (промпт 017 §5/§10).
+     */
+    val receiptId: UUID? = null,
+
+    /** NULL для дистрибьюторских чеков и терминальных до резолва транзакции в fiscal-service. */
+    val transactionId: UUID? = null,
 
     @field:NotNull
     @field:Positive
@@ -25,6 +31,11 @@ data class FiscalReceiptRequest(
 
     /** TERMINAL | DISTRIBUTOR. */
     val source: String? = null,
+
+    /** Ссылка эквайрера — общий ключ дедупа с авто-контуром фискализации по payment-событию. */
+    val acqReference: String? = null,
+
+    val rrn: String? = null,
 
     val timezone: String? = null
 )

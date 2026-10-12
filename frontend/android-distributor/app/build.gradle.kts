@@ -69,6 +69,9 @@ dependencies {
     // Общая NFC/VCM1-библиотека (composite build, ../asop-nfc-lib)
     implementation("ru.asop.nfc:asop-nfc-lib:0.1.0")
 
+    // QR фискального чека (промпт 017 §10)
+    implementation("com.google.zxing:core:3.5.3")
+
     val composeBom = platform("androidx.compose:compose-bom:2024.10.00")
     implementation(composeBom)
     implementation("androidx.compose.material3:material3")

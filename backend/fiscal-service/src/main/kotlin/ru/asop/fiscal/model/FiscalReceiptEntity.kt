@@ -9,7 +9,8 @@ import java.util.UUID
 data class FiscalReceiptEntity(
     @Id
     val receiptId: UUID,
-    val transactionId: UUID,
+    val transactionId: UUID? = null,
+    val acqReference: String? = null,
     val carrierId: UUID? = null,
     val cardsDistributorId: UUID? = null,
     val carrierFiscalizerId: UUID? = null,

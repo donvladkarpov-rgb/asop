@@ -7,12 +7,16 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -31,8 +35,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
@@ -61,7 +67,13 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        vm = TopUpViewModel(graph.keyProvider, graph.tariffProvider, graph.paymentClient)
+        vm = TopUpViewModel(
+            graph.keyProvider,
+            graph.tariffProvider,
+            graph.paymentClient,
+            graph.fiscalizerProvider,
+            graph.distributorSyncApi
+        )
         nfc = NfcAdapter.getDefaultAdapter(this)
 
         setContent {
@@ -144,7 +156,11 @@ class MainActivity : ComponentActivity(), NfcAdapter.ReaderCallback {
     }
 
     override fun onTagDiscovered(tag: Tag) {
-        if (::vm.isInitialized) vm.onTag(tag)
+        if (!::vm.isInitialized) return
+        // Промпт 017 §10: во время показа QR фискального чека (и ожидания оплаты)
+        // тапы игнорируются — QR живёт ~3 с, чужой тап не должен его закрыть.
+        if (vm.state.step == TopUpViewModel.Step.PAYING || vm.state.fiscalQr != null) return
+        vm.onTag(tag)
     }
 }
 
@@ -233,6 +249,26 @@ private fun DistributorContent(
             }
         }
 
+        // Промпт 017 §10: QR фискального чека (после успешного пополнения, ~3 с).
+        state.fiscalQr?.let { qr ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(12.dp).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("Фискальный чек", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    FiscalQrImage(url = qr.url)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Чек: ${qr.receiptId.take(8)}…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
         when (state.step) {
             TopUpViewModel.Step.IDLE -> {
                 Text("Шаг 1: приложите карту дистрибьютора (DISTRIBUTOR_ADMIN / DISTRIBUTOR_DISPATCHER)")
@@ -306,5 +342,50 @@ private fun DistributorContent(
                 Button(onClick = { vm.reset() }) { Text("Новый клиент") }
             }
         }
+    }
+}
+
+/**
+ * Промпт 017 §10: QR-код фискального чека. Картинка рендерится локально из URL через
+ * ZXing (без сети) — fiscalUrl строится офлайн по receiptId.
+ */
+@Composable
+private fun FiscalQrImage(url: String) {
+    val bitmap = remember(url) {
+        runCatching {
+            val matrix = com.google.zxing.qrcode.QRCodeWriter().encode(
+                url,
+                com.google.zxing.BarcodeFormat.QR_CODE,
+                512,
+                512
+            )
+            val bmp = android.graphics.Bitmap.createBitmap(
+                matrix.width,
+                matrix.height,
+                android.graphics.Bitmap.Config.ARGB_8888
+            )
+            val black = android.graphics.Color.BLACK
+            val white = android.graphics.Color.WHITE
+            for (x in 0 until matrix.width) {
+                for (y in 0 until matrix.height) {
+                    bmp.setPixel(x, y, if (matrix.get(x, y)) black else white)
+                }
+            }
+            bmp
+        }.getOrNull()
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = "QR фискального чека",
+            modifier = Modifier.size(220.dp)
+        )
+    } else {
+        Text(
+            url,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center
+        )
     }
 }

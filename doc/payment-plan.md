@@ -332,15 +332,22 @@ payment-service (новый модуль, порт ~809x)
 
 Проверено: `./gradlew assembleDebug` (frontend/android-payment) — BUILD SUCCESSFUL.
 
-## Статус 2026-10-12 — серверный контур фискализации (промпт 017)
+## Статус 2026-10-12 — фискализация (промпт 017): серверный контур + Android QR
 
-Добавлен серверный контур регистрации расчётов в ОФД через фискального посредника (BIFIT): справочники
-фискализаторов (глобальный `ASOP_FISCALIZERS` + привязки `ASOP_CARRIER_FISCALIZERS`/`ASOP_DISTRIBUTOR_FISCALIZERS`
-+ AES-GCM токены `ASOP_FISCALIZER_TOKENS`), журнал чеков `ASOP_FISCAL_RECEIPTS`/`ASOP_FISCAL_RECEIPT_ATTEMPTS`,
-fiscal-service (adapter registry, `BifitAdapter`, контекст-резолвер `session→TID→BANK-договор→carrier fiscalizer`,
-ретраи), gateway `POST /sync/fiscal/receipts` + admin CRUD + web-admin страница «Фискализация». Дистрибьюторские
+Серверный контур: справочники фискализаторов (глобальный `ASOP_FISCALIZERS` + привязки
+`ASOP_CARRIER_FISCALIZERS`/`ASOP_DISTRIBUTOR_FISCALIZERS` + AES-GCM токены `ASOP_FISCALIZER_TOKENS`), журнал
+чеков `ASOP_FISCAL_RECEIPTS`/`ASOP_FISCAL_RECEIPT_ATTEMPTS` (nullable `TRANSACTION_ID`, `ACQ_REFERENCE` +
+дедуп по приоритету `receiptId → transactionId → acqReference`), fiscal-service (adapter registry,
+`BifitAdapter`, контекст-резолвер `session→TID→BANK-договор→carrier fiscalizer` / `cardsDistributorId →
+distributor fiscalizer`, ретраи, `CommandResult` COMPLETED/FAILED), gateway `POST /sync/fiscal/receipts`
+(общий для терминала и дистрибьютора) + admin CRUD + web-admin страница «Фискализация». Дистрибьюторские
 фискализаторы тянутся JSON-pull'ом (`/sync/distributor/fiscalizers/delta`), в proto-delta не входят.
 
-Подробно — `AGENTS.md` раздел «Фискализация» и `doc/context.md` раздел 8. **Android-часть (QR 3 с + NFC-запись
-чека, промпт 017 §10) и полный distributor-receipt-flow не реализованы**; seed-URL BIFIT указывает на dev-заглушку
-`mock-fiscal` (см. `doc/smoke-tests.md` «Smoke Test: Фискализация»).
+**Android-часть (промпт 017 §10) реализована**: терминал — банковская оплата проезда (`recordBankPayment`)
+ставит в офлайн-очередь `FISCAL_RECEIPT` и показывает QR ~3 с (офлайн-`FiscalQrResolver` из дельты, ZXing;
+NFC заблокирован); дистрибьютор — после успешной записи поездок `FiscalReceiptRequest(source=DISTRIBUTOR,
+transactionId=null, cardsDistributorId, acqReference)` + QR ~3 с (`FiscalizerProvider.resolveUrl`, тапы
+игнорируются). Dev-ОФД — контейнер `mock-fiscal` (чек доходит до `CONFIRMED`). Осталось: **NFC-запись чека на
+DESFire/MIFARE (промпт 017 §10)**, monthly-отчёты (`ASOP_FISCAL_MONTHLY_REPORTS`), поллинг статуса чека с
+терминала (QR оптимистичен). Подробно — `AGENTS.md` раздел «Фискализация» и `doc/context.md` раздел 8;
+прогон — `doc/smoke-tests.md` «Smoke Test: Фискализация».
