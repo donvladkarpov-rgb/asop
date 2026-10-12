@@ -115,6 +115,65 @@ export interface CardsDistributor {
   contracts?: Contract[];
 }
 
+/** Фискализатор/ОФД (ASOP_FISCALIZERS) — глобальный справочник. */
+export interface Fiscalizer {
+  fiscalizerId: string;
+  fiscalizerCode: string;
+  fiscalizerName: string;
+  baseApiUrl?: string | null;
+  description?: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  version?: number;
+}
+
+/** Настройки фискализации перевозчика (ASOP_CARRIER_FISCALIZERS). */
+export interface CarrierFiscalizer {
+  carrierFiscalizerId: string;
+  carrierId: string;
+  fiscalizerId: string;
+  contractId: string;
+  customApiUrl?: string | null;
+  isPrimary: boolean;
+  isActive: boolean;
+  settings: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  version?: number;
+}
+
+/** Настройки фискализации дистрибьютора карт (ASOP_DISTRIBUTOR_FISCALIZERS). */
+export interface DistributorFiscalizer {
+  distributorFiscalizerId: string;
+  cardsDistributorId: string;
+  fiscalizerId: string;
+  contractId: string;
+  customApiUrl?: string | null;
+  isPrimary: boolean;
+  isActive: boolean;
+  settings: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+  version?: number;
+}
+
+/** Токен доступа к API фискализатора (ASOP_FISCALIZER_TOKENS). Plaintext не отдаётся. */
+export interface FiscalizerToken {
+  tokenId: string;
+  carrierFiscalizerId?: string | null;
+  distributorFiscalizerId?: string | null;
+  tokenHint?: string | null;
+  validFrom: string;
+  validUntil: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Contract {
   id: string;
   contractorType?: string;

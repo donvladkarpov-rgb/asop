@@ -19,5 +19,12 @@ data class FiscalReceiptRequest(
 
     val carrierId: UUID? = null,
 
+    val sessionId: UUID? = null,
+
+    val cardsDistributorId: UUID? = null,
+
+    /** TERMINAL | DISTRIBUTOR. */
+    val source: String? = null,
+
     val timezone: String? = null
 )

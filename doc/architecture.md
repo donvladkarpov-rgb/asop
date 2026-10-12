@@ -391,6 +391,28 @@ scope (если не root):
 Кэшбэк для cascade-резидентов: ORGANIZER_ADMIN/RGN_ADMIN получают доступ ко всем carrier-сессиям своего организатора / региона.
 Роль читается из `ASOP_ROLES.ROLE_NAME` (колонки `role_code` в схеме нет).
 
+### Фискализация: регистрация чека в ОФД (промпт 017)
+
+```
+Android (mTLS) → POST /sync/fiscal/receipts → Gateway FiscalCommandController
+              → 202 + X-Event-Id → Kafka asop.fiscal.commands
+       ↓
+fiscal-service FiscalCommandConsumer → FiscalReceiptService.handleRequested
+   ├─ INSERT ASOP_FISCAL_RECEIPTS (RECEIPT_ID = Idempotency-Key, source=TERMINAL)
+   ├─ FiscalContextResolver.resolve(sessionId):
+   │     session.tidId → ASOP_TIDS → BANK-договор → ASOP_CARRIER_FISCALIZERS
+   │     (или cardsDistributorId → ASOP_DISTRIBUTOR_FISCALIZERS)
+   └─ FiscalizerAdapterRegistry.pick(providerType) → BifitAdapter.registrationPath()
+         → HTTP POST чека → CONFIRMED / RETRY (NEXT_RETRY_AT)
+       ↓
+FiscalRetryScheduler (fixedDelay) → FiscalReceiptRepository.findDueForRetry
+   (PENDING > 1 мин ИЛИ просроченный RETRY) → повторная отправка до MAX_ATTEMPTS
+       ↓
+asop.fiscal.events → gateway CommandEventConsumer → EventService.complete/fail
+```
+
+Второй вход: `payment-service` после `PaymentAuthorized` публикует `PaymentReceipt` в `asop.payment.events`; `PaymentReceiptConsumer` (fiscal-service) создаёт чек и сразу его отправляет. Токены ОФД (`ASOP_FISCALIZER_TOKENS`, AES-GCM) на терминал не синкаются — только административно. Синхронизация справочников: `asop_fiscalizers` (global) + `asop_carrier_fiscalizers` (filtered) — proto-поля `DeltaChunk` 46/47; дистрибьюторские `asop_distributor_fiscalizers` тянутся JSON-pull'ом. Полное описание — `doc/context.md` раздел 8 «Фискализация (промпт 017)».
+
 ### Заголовки
 - `X-Keycloak-Id`: keycloakId аутентифицированного пользователя (трассировка)
 - `X-Event-Id`: идентификатор события для корреляции команд (используется `CommandEventConsumer` для вызова `EventService.complete/fail`)
@@ -525,6 +547,7 @@ Soft-delete: все ~42 справочные таблицы имеют `DELETED_
   - **UNIQUE partial index** `uq_tc_current_per_terminal ON (TERMINAL_ID) WHERE IS_CURRENT = true` — не более одного активного
 - `ASOP_SESSIONS`, `ASOP_TRANSACTIONS`, `ASOP_CARD_DEBTS` — транзакции
 - `ASOP_AUDIT_TASKS`, `ASOP_AUDIT_BRIGADES`, `ASOP_AUDIT_INSPECTIONS` — КРС
+- `ASOP_FISCALIZERS`, `ASOP_CARRIER_FISCALIZERS`, `ASOP_DISTRIBUTOR_FISCALIZERS`, `ASOP_FISCALIZER_TOKENS`, `ASOP_FISCAL_RECEIPTS`, `ASOP_FISCAL_RECEIPT_ATTEMPTS`, `ASOP_FISCAL_MONTHLY_REPORTS` — фискализация (ОФД), промпт 017
 
 ### Соглашения
 - **Все ID**: UUID v7 через `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`)

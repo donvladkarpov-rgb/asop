@@ -691,6 +691,15 @@ TODO Phase 4.2.b.
 - `ASOP_ORGANIZERS` — организаторы
 - `ASOP_ORGANIZER_TERRITORIES` — привязка организаторов к территориям
 
+**Фискализация (промпт 017):**
+- `ASOP_FISCALIZERS` — словарь фискальных посредников/ОФД (`FISCALIZER_CODE` UNIQUE, `BASE_API_URL` для построения URL чека); глобальный справочник, `VERSION`/`DELETED_AT`
+- `ASOP_CARRIER_FISCALIZERS` — связь перевозчика с фискализатором (`CARRIER_ID`, `FISCALIZER_ID`, `CONTRACT_ID` → `ASOP_CONTRACTS`, `CUSTOM_API_URL`, `IS_PRIMARY`, `IS_ACTIVE`, `SETTINGS JSONB`); дельта фильтруется по перевозчику/региону
+- `ASOP_DISTRIBUTOR_FISCALIZERS` (НОВАЯ) — то же для дистрибьютора карт (`CARDS_DISTRIBUTOR_ID`); в orchestrator-delta не участвует, тянется дистрибьюторским приложением JSON-pull'ом
+- `ASOP_FISCALIZER_TOKENS` — токены доступа к API фискализатора (`CARRIER_FISCALIZER_ID` XOR `DISTRIBUTOR_FISCALIZER_ID`, chk), `TOKEN_ENCRYPTED BYTEA` (AES-GCM), `TOKEN_HINT`; **на терминал/дистрибьютор НЕ синкаются** (физическое удаление, без VERSION)
+- `ASOP_FISCAL_RECEIPTS` — фискальные чеки (`RECEIPT_ID` = Idempotency-Key, `TRANSACTION_ID`, `CARRIER_ID`/`CARDS_DISTRIBUTOR_ID`/`CARRIER_FISCALIZER_ID`/`DISTRIBUTOR_FISCALIZER_ID` nullable, `SOURCE` TERMINAL|DISTRIBUTOR, `STATUS` PENDING/SENT/CONFIRMED/RETRY/FAILED/CANCELLED, `ATTEMPT_COUNT`/`MAX_ATTEMPTS`, `NEXT_RETRY_AT`, `RECEIPT_DATA`/`REQUEST_PAYLOAD`/`RESPONSE_DATA JSONB`, `FISCAL_URL`)
+- `ASOP_FISCAL_RECEIPT_ATTEMPTS` — журнал попыток отправки (FK `RECEIPT_ID` CASCADE, `TOKEN_ID` опц., http-status/duration)
+- `ASOP_FISCAL_MONTHLY_REPORTS` — структура есть, функционально не реализована
+
 ### GPS-трекинг и live-карта (промпт 014/015)
 
 `ASOP_GPS_TRACKING` — трекинг ТС; `SESSION_ID = shift.id`, `GPS_COORD GEOGRAPHY(POINT,4326)`,
@@ -701,6 +710,31 @@ alpha 0.6), watermark-ordering (`X-Terminal-Seq`) и snap-to-route — в sessio
 `/api/v1/public/**` с API-ключом (`ApiKeyHmacFilter`). Потребители: web-admin «Карта ТС» (`/live-map`,
 Leaflet) + «Редактор маршрута» (`/route-editor`, `ROUTE_OBJECT` GeoJSON LineString) и пассажирское
 Android-приложение (`frontend/passenger-app`, osmdroid). Подробно — `doc/gps.md` и `doc/gps_maps.md`.
+
+### Фискализация (промпт 017)
+
+Регистрация наличных/безналичных расчётов в ОФД через фискального посредника (по умолчанию — Bifit).
+
+**Схема (4 таблицы + 1 журнал):**
+- `ASOP_FISCALIZERS` — глобальный словарь ОФД/посредников (`FISCALIZER_CODE` UNIQUE, `PROVIDER_TYPE` (BIFIT/…), `BASE_API_URL`, `IS_ACTIVE`); доставляется на терминал дельтой.
+- `ASOP_CARRIER_FISCALIZERS` — связь перевозчика с фискализатором (`CARRIER_ID`, `FISCALIZER_ID`, `CONTRACT_ID` → `ASOP_CONTRACTS`, `CUSTOM_API_URL`, `IS_PRIMARY`, `IS_ACTIVE`, `SETTINGS JSONB`); дельта фильтруется по региону/перевозчику.
+- `ASOP_DISTRIBUTOR_FISCALIZERS` — то же для дистрибьютора карт (`CARDS_DISTRIBUTOR_ID`); в orchestrator-delta не участвует (дистрибьюторский JSON-pull).
+- `ASOP_FISCALIZER_TOKENS` — токены доступа (`CARRIER_FISCALIZER_ID` XOR `DISTRIBUTOR_FISCALIZER_ID`, chk), `TOKEN_ENCRYPTED BYTEA` (AES-GCM), `TOKEN_HINT`; **на терминал/дистрибьютор не синкаются** (физическое удаление).
+- `ASOP_FISCAL_RECEIPTS` — чеки (`RECEIPT_ID` = Idempotency-Key, `TRANSACTION_ID`, `CARRIER_ID`/`CARDS_DISTRIBUTOR_ID`/`CARRIER_FISCALIZER_ID`/`DISTRIBUTOR_FISCALIZER_ID` nullable, `SOURCE` TERMINAL|DISTRIBUTOR, `STATUS` PENDING/SENT/CONFIRMED/RETRY/FAILED/CANCELLED, `ATTEMPT_COUNT`/`MAX_ATTEMPTS`, `NEXT_RETRY_AT`, `RECEIPT_DATA`/`REQUEST_PAYLOAD`/`RESPONSE_DATA JSONB`, `FISCAL_URL`).
+- `ASOP_FISCAL_RECEIPT_ATTEMPTS` — журнал попыток отправки (FK `RECEIPT_ID` CASCADE, http-status/duration).
+- `ASOP_FISCAL_MONTHLY_REPORTS` — структура есть, функционально не реализована.
+
+**Потоки:**
+- **Запрос с терминала**: `POST /api/v1/sync/fiscal/receipts` (mTLS) → gateway `FiscalCommandController` → Kafka `asop.fiscal.commands` → `fiscal-service` `FiscalCommandConsumer` → `FiscalReceiptService.handleRequested`.
+- **Авто-по-оплате**: `payment-service` после `PaymentAuthorized` кладёт `PaymentReceipt` (`asop.payment.events`) → `PaymentReceiptConsumer` создаёт чек и сразу шлёт его (`source=DISTRIBUTOR`/`TERMINAL`).
+- **Отправка**: `FiscalContextResolver.resolve(sessionId)` → `session.tidId → ASOP_TIDS → BANK-договор → ASOP_CARRIER_FISCALIZERS` (или `cardsDistributorId → ASOP_DISTRIBUTOR_FISCALIZERS`) → `FiscalizerAdapterRegistry` выбирает адаптер (`BifitAdapter`, `registrationPath()` для построения URL) → HTTP POST чека → `CONFIRMED`/`RETRY` (экспоненциально, `fiscal.max-attempts`/`fiscal.retry-interval-ms`).
+- **Ретраи**: `FiscalRetryScheduler` (`fiscal.retry-enabled`) раз в `fixedDelay` берёт `FiscalReceiptRepository.findDueForRetry` (PENDING старше 1 мин ИЛИ просроченный RETRY) и досылает.
+- **Статус**: `GET /api/v1/fiscal/receipts/{receiptId}/status` (fiscal-api) — sync.
+- **События**: `FiscalReceiptProcessedEvent`/`FiscalReceiptFailedEvent` в `asop.fiscal.events` (gateway `CommandEventConsumer` → `EventService`).
+
+**Gateway**: `ServiceRegistry` (`fiscalizers`/`carrier-fiscalizers`/`distributor-fiscalizers`/`fiscalizer-tokens` → admin:8091), `DistributorSyncController` (+ `fiscalizers`/`distributor-fiscalizers` delta). **Orchestrator** `MasterRegistry`: `asop_carrier_fiscalizers` (filtered) + `asop_fiscalizers` (global). **Proto** (backend + Android идентичны): `DeltaChunk.asop_fiscalizers = 46`, `asop_carrier_fiscalizers = 47`; `FiscalizersRow`/`CarrierFiscalizersRow` + `FiscalizersFile`/`CarrierFiscalizersFile`. **admin-service**: CRUD `FiscalizerController`/`CarrierFiscalizerController`/`DistributorFiscalizerController`/`FiscalizerTokenController`, шифрование токена `TokenCipher` (AES-GCM). **web-admin**: страница «Фискализация» (`/fiscalization`).
+
+**Известные пробелы (не реализовано)**: Android-терминал/дистрибьютор — QR-код (3 с) и NFC-запись фискального чека не реализованы; полный distributor-receipt-flow в fiscal-service не доведён; seed-URL BIFIT указывает на `http://mock-fiscal:8089` (dev-заглушка `MockFiscalController` лежит в `src/test`, в прод не упакован). `FiscalCommandConsumer` публикует COMPLETED даже когда чек ушёл в RETRY/CANCELLED.
 
 ### UUID v7
 Генерируется на уровне приложения через `UuidCreator.getTimeOrderedEpoch()` (`UuidUtils.newId()`).
@@ -777,7 +811,7 @@ Liquibase запускается **отдельным Docker-контейнер�
 **Целевое устройство:** Feitian F20 (см. `doc/architecture.md` раздел «Целевое устройство»).
 
 ### Страницы
-`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`, `Sessions` (иерархия смен/рейсов), `UserBenefits`, `LiveMap` (`/live-map`), `RouteEditor` (`/route-editor`), отчёты `/reports/*` (см. «Отчёты» ниже)
+`Login`, `Callback` (OIDC), `Dashboard`, `Users`, `Terminals`, `Cards`, `Carriers`, `Tids`, `CardsDistributors`, `Contracts`, `Regions`, `Territories`, `Organizers`, `Routes`, `FareZones`, `TransportStops`, `Vehicles`, `Paths`, `Schedule`, `Sessions` (иерархия смен/рейсов), `UserBenefits`, `LiveMap` (`/live-map`), `RouteEditor` (`/route-editor`), `Fiscalization` (`/fiscalization`), отчёты `/reports/*` (см. «Отчёты» ниже)
 
 Раздел **"Справочники"** в Sidebar: Regions, Territories, Organizers.
 
@@ -786,6 +820,7 @@ Liquibase запускается **отдельным Docker-контейнер�
 - **TID (пулы)** (`/tids`) — полный sync-CRUD TIDs перевозчиков. Filter по carrierId dropdown. Форма: `carrierId` (обязательно), `tidValue` (VARCHAR(20), обязательно), `status` (UNUSED/ASSIGNED/REVOKED, только для редактирования), `terminalId` (optional, для привязки TID к терминалу). Endpoint: `GET/POST/PUT/DELETE /api/v1/tids` (sync-proxy через gateway в carrier-service, без Kafka — Read/Write-CRUD).
 - **Дистрибьюторы карт** (`/cards-distributors`) — полный CRUD + выбиралка договоров (привязка/отвязка через `PUT /api/v1/contracts/{id}`).
 - **Договоры** (`/contracts`) — полный CRUD. Форма валидирует "только одно поле" (carrierId XOR cardsDistributorId). Поле `attributes` — textarea для JSON.
+- **Фискализация** (`/fiscalization`) — CRUD фискализаторов (`ASOP_FISCALIZERS`), связей перевозчика (`ASOP_CARRIER_FISCALIZERS`) и дистрибьютора (`ASOP_DISTRIBUTOR_FISCALIZERS`), управление токенами (`ASOP_FISCALIZER_TOKENS`, шифрует admin-service). API: `api/fiscalization.ts`. Подробно — раздел «Фискализация (промпт 017)».
 
 ### Отчёты (reports)
 

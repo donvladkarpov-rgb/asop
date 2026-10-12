@@ -14,6 +14,9 @@ data class FiscalReceiptRequestedEvent(
     val carrierFiscalizerId: UUID?,
     val amount: java.math.BigDecimal,
     val description: String? = null,
+    val sessionId: UUID? = null,
+    val cardsDistributorId: UUID? = null,
+    val source: String = "TERMINAL",
     val requestedAt: Instant,
 
     override val aggregateType: String = "FiscalReceipt",

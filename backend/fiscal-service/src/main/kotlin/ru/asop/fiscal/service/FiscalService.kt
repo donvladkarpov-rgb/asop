@@ -7,7 +7,7 @@ import ru.asop.api.fiscal.dto.response.FiscalReceiptResponse
 import ru.asop.fiscal.model.FiscalReceiptEntity
 import ru.asop.fiscal.repository.FiscalReceiptRepository
 import ru.asop.common.util.UuidUtils
-import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 
 @Service
@@ -16,7 +16,7 @@ class FiscalService(
 ) {
 
     fun requestReceipt(request: FiscalReceiptRequest): Mono<FiscalReceiptResponse> {
-        val now = Instant.now()
+        val now = OffsetDateTime.now()
         val entity = FiscalReceiptEntity(
             receiptId = UuidUtils.newId(),
             transactionId = request.transactionId,

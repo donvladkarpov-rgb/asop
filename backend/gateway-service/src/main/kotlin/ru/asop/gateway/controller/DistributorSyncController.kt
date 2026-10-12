@@ -16,7 +16,8 @@ import org.springframework.http.HttpMethod
 /**
  * Синхронный серверный контур для android-distributor (mTLS, chain Order 1).
  * Дистрибьютор НЕ участвует в orchestrator delta-flow (там carrier/region-scope);
- * ему нужны глобальные справочники — ключи ASOP_KEYS и тарифы ASOP_TARIFF_RATES.
+ * ему нужны глобальные справочники — ключи ASOP_KEYS, тарифы ASOP_TARIFF_RATES
+ * и фискализаторы (ASOP_FISCALIZERS + ASOP_DISTRIBUTOR_FISCALIZERS, промпт 017).
  * Pull напрямую с мастеров JSON-/delta (тот же keyset, что использует оркестратор).
  */
 @RestController
@@ -58,6 +59,30 @@ class DistributorSyncController(
         return forward(
             HttpMethod.GET,
             "$base/api/v1/tariff-rates/delta${queryString(exchange)}",
+            null
+        )
+    }
+
+    /** Словарь фискализаторов (admin-service): code/name/base_api_url для построения URL чека. */
+    @GetMapping("/api/v1/sync/distributor/fiscalizers/delta")
+    fun fiscalizersDelta(exchange: ServerWebExchange): Mono<ResponseEntity<String>> {
+        val base = serviceRegistry.getBaseUrl("fiscalizers")
+            ?: return Mono.just(ResponseEntity.notFound().build())
+        return forward(
+            HttpMethod.GET,
+            "$base/api/v1/fiscalizers/delta${queryString(exchange)}",
+            null
+        )
+    }
+
+    /** Настройки фискализации самого дистрибьютора (фильтр cardsDistributorId из query). */
+    @GetMapping("/api/v1/sync/distributor/distributor-fiscalizers/delta")
+    fun distributorFiscalizersDelta(exchange: ServerWebExchange): Mono<ResponseEntity<String>> {
+        val base = serviceRegistry.getBaseUrl("distributor-fiscalizers")
+            ?: return Mono.just(ResponseEntity.notFound().build())
+        return forward(
+            HttpMethod.GET,
+            "$base/api/v1/distributor-fiscalizers/delta${queryString(exchange)}",
             null
         )
     }

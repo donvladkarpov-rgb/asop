@@ -11,8 +11,9 @@ import ru.asop.common.util.UuidUtils
 import ru.asop.fiscal.model.FiscalReceiptEntity
 import ru.asop.fiscal.repository.FiscalReceiptRepository
 import ru.asop.fiscal.service.FiscalContextResolver
+import ru.asop.fiscal.service.FiscalReceiptService
 import ru.asop.kafka.events.payment.PaymentAuthorizedEvent
-import java.time.Instant
+import java.time.OffsetDateTime
 import java.util.UUID
 
 /**
@@ -28,7 +29,8 @@ class PaymentReceiptConsumer(
     private val objectMapper: ObjectMapper,
     private val resolver: FiscalContextResolver,
     private val template: R2dbcEntityTemplate,
-    private val receipts: FiscalReceiptRepository
+    private val receipts: FiscalReceiptRepository,
+    private val service: FiscalReceiptService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -65,6 +67,7 @@ class PaymentReceiptConsumer(
                 resolver.resolve(sessionId)
                     .mapNotNull { ctx -> ctx }
                     .flatMap { ctx -> insertReceipt(event, transactionId, ctx) }
+                    .flatMap { receipt -> service.send(receipt) }
             )
             .subscribe(
                 { _ -> log.debug("Fiscal receipt processed for transaction {}", transactionId) },
@@ -89,8 +92,8 @@ class PaymentReceiptConsumer(
                 status = "PENDING",
                 attemptCount = 0,
                 maxAttempts = 10,
-                createdAt = Instant.now(),
-                updatedAt = Instant.now()
+                createdAt = OffsetDateTime.now(),
+                updatedAt = OffsetDateTime.now()
             )
         )
             .subscribeOn(Schedulers.boundedElastic())

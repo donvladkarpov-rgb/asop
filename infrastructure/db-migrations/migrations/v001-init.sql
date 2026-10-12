@@ -1424,6 +1424,8 @@ CREATE TABLE ASOP_FISCALIZERS
     IS_ACTIVE       BOOLEAN      DEFAULT true,
     CREATED_AT      TIMESTAMPTZ    NOT NULL,
     UPDATED_AT      TIMESTAMPTZ    NOT NULL,
+    DELETED_AT      TIMESTAMPTZ,
+    VERSION         BIGINT,
     CONSTRAINT pk_fiscalizers PRIMARY KEY (FISCALIZER_ID),
     CONSTRAINT uq_fiscalizers_code UNIQUE (FISCALIZER_CODE)
 );
@@ -1435,25 +1437,55 @@ CREATE TABLE ASOP_CARRIER_FISCALIZERS
     CARRIER_FISCALIZER_ID UUID         NOT NULL,  -- UUIDv7
     CARRIER_ID            UUID         NOT NULL,
     FISCALIZER_ID         UUID         NOT NULL,
+    CONTRACT_ID               UUID         NOT NULL,
     CUSTOM_API_URL        VARCHAR(500),
     IS_PRIMARY            BOOLEAN      DEFAULT false,
     IS_ACTIVE             BOOLEAN      DEFAULT true,
     SETTINGS              JSONB,
     CREATED_AT            TIMESTAMPTZ    NOT NULL,
     UPDATED_AT            TIMESTAMPTZ    NOT NULL,
+    DELETED_AT            TIMESTAMPTZ,
+    VERSION               BIGINT,
     CONSTRAINT pk_carrier_fiscalizers PRIMARY KEY (CARRIER_FISCALIZER_ID),
     CONSTRAINT fk_cf_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
     CONSTRAINT fk_cf_fiscalizer FOREIGN KEY (FISCALIZER_ID) REFERENCES ASOP_FISCALIZERS (FISCALIZER_ID),
-    CONSTRAINT uq_carrier_fiscalizer UNIQUE (CARRIER_ID, FISCALIZER_ID)
+    CONSTRAINT uq_carrier_fiscalizer UNIQUE (CARRIER_ID, FISCALIZER_ID),
+    CONSTRAINT fk_cf_contract FOREIGN KEY (CONTRACT_ID) REFERENCES ASOP_CONTRACTS (CONTRACT_ID)
 );
 COMMENT ON TABLE ASOP_CARRIER_FISCALIZERS IS 'Настройки фискализации для конкретного перевозчика.';
 CREATE INDEX idx_cf_carrier ON ASOP_CARRIER_FISCALIZERS (CARRIER_ID);
 CREATE INDEX idx_cf_primary ON ASOP_CARRIER_FISCALIZERS (CARRIER_ID) WHERE IS_PRIMARY = true AND IS_ACTIVE = true;
 
+
+CREATE TABLE ASOP_DISTRIBUTOR_FISCALIZERS
+(
+    DISTRIBUTOR_FISCALIZER_ID UUID         NOT NULL,
+    CARDS_DISTRIBUTOR_ID      UUID         NOT NULL,
+    FISCALIZER_ID             UUID         NOT NULL,
+    CONTRACT_ID               UUID         NOT NULL,
+    CUSTOM_API_URL            VARCHAR(500),
+    IS_PRIMARY                BOOLEAN      DEFAULT false,
+    IS_ACTIVE                 BOOLEAN      DEFAULT true,
+    SETTINGS                  JSONB,
+    CREATED_AT                TIMESTAMPTZ  NOT NULL,
+    UPDATED_AT                TIMESTAMPTZ  NOT NULL,
+    DELETED_AT                TIMESTAMPTZ,
+    VERSION                   BIGINT,
+    CONSTRAINT pk_distributor_fiscalizers PRIMARY KEY (DISTRIBUTOR_FISCALIZER_ID),
+    CONSTRAINT fk_df_distributor FOREIGN KEY (CARDS_DISTRIBUTOR_ID) REFERENCES ASOP_CARDS_DISTRIBUTORS (CARDS_DISTRIBUTOR_ID),
+    CONSTRAINT fk_df_fiscalizer   FOREIGN KEY (FISCALIZER_ID)   REFERENCES ASOP_FISCALIZERS (FISCALIZER_ID),
+    CONSTRAINT fk_df_contract     FOREIGN KEY (CONTRACT_ID)     REFERENCES ASOP_CONTRACTS (CONTRACT_ID),
+    CONSTRAINT uq_distributor_fiscalizer UNIQUE (CARDS_DISTRIBUTOR_ID, FISCALIZER_ID)
+);
+COMMENT ON TABLE ASOP_DISTRIBUTOR_FISCALIZERS IS 'Настройки фискализации для дистрибьютора карт.';
+CREATE INDEX idx_df_distributor ON ASOP_DISTRIBUTOR_FISCALIZERS (CARDS_DISTRIBUTOR_ID);
+CREATE INDEX idx_df_primary ON ASOP_DISTRIBUTOR_FISCALIZERS (CARDS_DISTRIBUTOR_ID) WHERE IS_PRIMARY = true AND IS_ACTIVE = true;
+
 CREATE TABLE ASOP_FISCALIZER_TOKENS
 (
     TOKEN_ID              UUID         NOT NULL,  -- UUIDv7
-    CARRIER_FISCALIZER_ID UUID         NOT NULL,
+    CARRIER_FISCALIZER_ID UUID,
+    DISTRIBUTOR_FISCALIZER_ID UUID,
     TOKEN_ENCRYPTED       BYTEA        NOT NULL,
     TOKEN_HINT            VARCHAR(50),
     VALID_FROM            TIMESTAMPTZ    NOT NULL,
@@ -1463,18 +1495,24 @@ CREATE TABLE ASOP_FISCALIZER_TOKENS
     UPDATED_AT            TIMESTAMPTZ    NOT NULL,
     CONSTRAINT pk_fiscalizer_tokens PRIMARY KEY (TOKEN_ID),
     CONSTRAINT fk_ft_carrier_fiscalizer FOREIGN KEY (CARRIER_FISCALIZER_ID) REFERENCES ASOP_CARRIER_FISCALIZERS (CARRIER_FISCALIZER_ID),
+    CONSTRAINT chk_ft_link CHECK (CARRIER_FISCALIZER_ID IS NOT NULL OR DISTRIBUTOR_FISCALIZER_ID IS NOT NULL),
     CONSTRAINT chk_ft_dates CHECK (VALID_UNTIL > VALID_FROM)
 );
 COMMENT ON TABLE ASOP_FISCALIZER_TOKENS IS 'История токенов доступа к API фискализатора. Токены хранятся в зашифрованном виде.';
 CREATE INDEX idx_ft_carrier_fiscalizer ON ASOP_FISCALIZER_TOKENS (CARRIER_FISCALIZER_ID);
 CREATE INDEX idx_ft_active ON ASOP_FISCALIZER_TOKENS (CARRIER_FISCALIZER_ID, VALID_FROM, VALID_UNTIL) WHERE STATUS = 'ACTIVE';
+CREATE INDEX idx_ft_distributor ON ASOP_FISCALIZER_TOKENS (DISTRIBUTOR_FISCALIZER_ID) WHERE DISTRIBUTOR_FISCALIZER_ID IS NOT NULL;
 
 CREATE TABLE ASOP_FISCAL_RECEIPTS
 (
-    RECEIPT_ID            UUID           NOT NULL,  -- UUIDv7
+    RECEIPT_ID            UUID           NOT NULL,
     TRANSACTION_ID        UUID           NOT NULL,
-    CARRIER_ID            UUID           NOT NULL,
-    CARRIER_FISCALIZER_ID UUID           NOT NULL,
+    CARRIER_ID            UUID,
+    CARDS_DISTRIBUTOR_ID  UUID,
+    CARRIER_FISCALIZER_ID UUID,
+    DISTRIBUTOR_FISCALIZER_ID UUID,
+    SOURCE                VARCHAR(20)    NOT NULL DEFAULT 'TERMINAL' CHECK (SOURCE IN ('TERMINAL', 'DISTRIBUTOR')),
+    PAYMENT_TYPE          VARCHAR(20)    NOT NULL DEFAULT 'CARD',
     RECEIPT_NUMBER        VARCHAR(100),
     FISCAL_SIGN           VARCHAR(100),
     STATUS                VARCHAR(20)    NOT NULL DEFAULT 'PENDING' CHECK (STATUS IN ('PENDING', 'SENT', 'CONFIRMED', 'RETRY', 'FAILED', 'CANCELLED')),
@@ -1484,14 +1522,18 @@ CREATE TABLE ASOP_FISCAL_RECEIPTS
     NEXT_RETRY_AT         TIMESTAMPTZ,
     LAST_ERROR_MESSAGE    VARCHAR(1000),
     RECEIPT_DATA          JSONB,
+    REQUEST_PAYLOAD       JSONB,
     RESPONSE_DATA         JSONB,
+    FISCAL_URL            VARCHAR(500),
     CONFIRMED_AT          TIMESTAMPTZ,
     CREATED_AT            TIMESTAMPTZ      NOT NULL,
     UPDATED_AT            TIMESTAMPTZ      NOT NULL,
     CONSTRAINT pk_fiscal_receipts PRIMARY KEY (RECEIPT_ID),
     CONSTRAINT fk_fr_transaction FOREIGN KEY (TRANSACTION_ID) REFERENCES ASOP_TRANSACTIONS (TRANSACTION_ID),
     CONSTRAINT fk_fr_carrier FOREIGN KEY (CARRIER_ID) REFERENCES ASOP_CARRIERS (CARRIER_ID),
-    CONSTRAINT fk_fr_carrier_fiscalizer FOREIGN KEY (CARRIER_FISCALIZER_ID) REFERENCES ASOP_CARRIER_FISCALIZERS (CARRIER_FISCALIZER_ID)
+    CONSTRAINT fk_fr_cards_distributor FOREIGN KEY (CARDS_DISTRIBUTOR_ID) REFERENCES ASOP_CARDS_DISTRIBUTORS (CARDS_DISTRIBUTOR_ID),
+    CONSTRAINT fk_fr_carrier_fiscalizer FOREIGN KEY (CARRIER_FISCALIZER_ID) REFERENCES ASOP_CARRIER_FISCALIZERS (CARRIER_FISCALIZER_ID),
+    CONSTRAINT fk_fr_distributor_fiscalizer FOREIGN KEY (DISTRIBUTOR_FISCALIZER_ID) REFERENCES ASOP_DISTRIBUTOR_FISCALIZERS (DISTRIBUTOR_FISCALIZER_ID)
 );
 COMMENT ON TABLE ASOP_FISCAL_RECEIPTS IS 'Фискальные чеки. Retry-механизм при ошибках.';
 CREATE INDEX idx_fr_transaction ON ASOP_FISCAL_RECEIPTS (TRANSACTION_ID);
@@ -1500,6 +1542,7 @@ CREATE INDEX idx_fr_status ON ASOP_FISCAL_RECEIPTS (STATUS);
 CREATE INDEX idx_fr_retry_queue ON ASOP_FISCAL_RECEIPTS (NEXT_RETRY_AT) WHERE STATUS = 'RETRY';
 CREATE INDEX idx_fr_monthly_report ON ASOP_FISCAL_RECEIPTS (CARRIER_ID, CREATED_AT);
 CREATE INDEX idx_fr_retry_pending ON ASOP_FISCAL_RECEIPTS (STATUS, NEXT_RETRY_AT) WHERE STATUS = 'RETRY' AND NEXT_RETRY_AT IS NOT NULL;
+CREATE INDEX idx_fr_distributor ON ASOP_FISCAL_RECEIPTS (CARDS_DISTRIBUTOR_ID);
 CREATE INDEX idx_fr_carrier_status ON ASOP_FISCAL_RECEIPTS (CARRIER_ID, STATUS, CREATED_AT);
 
 CREATE TABLE ASOP_FISCAL_RECEIPT_ATTEMPTS
@@ -2147,6 +2190,12 @@ CREATE INDEX IF NOT EXISTS ix_asop_keys_updated_deleted ON asop_keys (UPDATED_AT
 CREATE INDEX IF NOT EXISTS ix_asop_keys_deleted ON asop_keys (DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_terminal_profiles_updated_deleted ON asop_terminal_profiles (UPDATED_AT, DELETED_AT);
 CREATE INDEX IF NOT EXISTS ix_asop_terminal_profiles_deleted ON asop_terminal_profiles (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_fiscalizers_updated_deleted ON asop_fiscalizers (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_fiscalizers_deleted ON asop_fiscalizers (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_carrier_fiscalizers_updated_deleted ON asop_carrier_fiscalizers (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_carrier_fiscalizers_deleted ON asop_carrier_fiscalizers (DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_distributor_fiscalizers_updated_deleted ON asop_distributor_fiscalizers (UPDATED_AT, DELETED_AT);
+CREATE INDEX IF NOT EXISTS ix_asop_distributor_fiscalizers_deleted ON asop_distributor_fiscalizers (DELETED_AT);
 -- Не более одного активного базового профиля (IS_BASE=TRUE, не soft-deleted)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_asop_terminal_profiles_single_base ON asop_terminal_profiles (IS_BASE) WHERE IS_BASE AND DELETED_AT IS NULL;
 
@@ -2339,6 +2388,19 @@ CREATE TRIGGER trg_delta_version_asop_terminal_profiles BEFORE INSERT OR UPDATE 
 CREATE TRIGGER trg_soft_delete_asop_audit_services BEFORE DELETE ON asop_audit_services FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('audit_service_id', 'uuid');
 CREATE TRIGGER trg_touch_updated_asop_audit_services BEFORE INSERT OR UPDATE ON asop_audit_services FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
 CREATE TRIGGER trg_delta_version_asop_audit_services BEFORE INSERT OR UPDATE ON asop_audit_services FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+-- Фискальные справочники — участвуют в дельта-синхронизации (промпт 017: web-admin CRUD + дельта)
+CREATE TRIGGER trg_soft_delete_asop_fiscalizers BEFORE DELETE ON asop_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('fiscalizer_id', 'uuid');
+CREATE TRIGGER trg_touch_updated_asop_fiscalizers BEFORE INSERT OR UPDATE ON asop_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_delta_version_asop_fiscalizers BEFORE INSERT OR UPDATE ON asop_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+CREATE TRIGGER trg_soft_delete_asop_carrier_fiscalizers BEFORE DELETE ON asop_carrier_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('carrier_fiscalizer_id', 'uuid');
+CREATE TRIGGER trg_touch_updated_asop_carrier_fiscalizers BEFORE INSERT OR UPDATE ON asop_carrier_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_delta_version_asop_carrier_fiscalizers BEFORE INSERT OR UPDATE ON asop_carrier_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
+
+CREATE TRIGGER trg_soft_delete_asop_distributor_fiscalizers BEFORE DELETE ON asop_distributor_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_soft_delete('distributor_fiscalizer_id', 'uuid');
+CREATE TRIGGER trg_touch_updated_asop_distributor_fiscalizers BEFORE INSERT OR UPDATE ON asop_distributor_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_touch_updated();
+CREATE TRIGGER trg_delta_version_asop_distributor_fiscalizers BEFORE INSERT OR UPDATE ON asop_distributor_fiscalizers FOR EACH ROW EXECUTE FUNCTION trg_fn_delta_version();
 
 
 -- ============================================================

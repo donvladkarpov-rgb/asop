@@ -808,3 +808,82 @@ $CS 'wget -qO- --no-check-certificate \
 «Построить отчёт» → строки как выше; «Выгрузить в Excel» →
 SpreadsheetML `.xml` (листы «Строки» + «Итоги»). Визуальная проверка наличных: две смены
 ГУП «Мосгортранс» возвращают `cashAmount=124.00` каждая (итого 248.00).
+
+## Smoke Test: Фискализация (промпт 017)
+
+**Goal:** команда `POST /sync/fiscal/receipts` доезжает до ОФД: создаётся `ASOP_FISCAL_RECEIPTS` +
+`ASOP_FISCAL_RECEIPT_ATTEMPTS`, чек отправляется (CONFIRMED или RETRY при недоступном ОФД),
+статус отдаётся по `GET /api/v1/fiscal/receipts/{receiptId}/status`.
+
+### Pre-conditions
+
+```bash
+PSQL="docker exec -i -e PGPASSWORD=asop docker-postgres-1 psql -U asop -d asop"
+$PSQL < infrastructure/docker/seed-data.sql   # seed: BIFIT + carrier 1403 + token
+```
+
+Seed (см. `seed-data.sql`):
+- `ASOP_FISCALIZERS` — `aa6c31f0-…` `BIFIT`, `BASE_API_URL=http://mock-fiscal:8089` (dev-заглушка, НЕ в проде)
+- `ASOP_CARRIER_FISCALIZERS` — `2a01bb62-…`, carrier `00000000-…1403` (ГУП «Крымавтотранс»), BIFIT, `IS_PRIMARY/IS_ACTIVE=true`
+- `ASOP_FISCALIZER_TOKENS` — `fd4a6ea4-…` активный токен этой связи
+
+mTLS-креденшал — Шаг 0 сценария «Driver Session workflow» (`$MTLS`, `$BASE`).
+
+### Steps
+
+```bash
+CARRIER="00000000-0000-0000-0000-000000001403"
+TXN_ID="$(uuidgen | tr 'A-Z' 'a-z')"
+
+# 1. Запрос фискального чека (mTLS async). carrierId передаём явно,
+#    чтобы resolveContext не требовал session→TID→BANK-contract.
+EV="$(curl -sk $MTLS -X POST "$BASE/api/v1/sync/fiscal/receipts" \
+  -H 'Content-Type: application/json' -d "{
+    \"transactionId\": \"$TXN_ID\",
+    \"amount\": 55.00,
+    \"description\": \"Оплата проезда\",
+    \"carrierId\": \"$CARRIER\",
+    \"source\": \"TERMINAL\"
+  }" | jq -r '.eventId')"
+# → 202 Accepted, X-Event-Id=$EV
+
+# 2. Дожидаемся терминального статуса события (COMPLETED/FAILED)
+poll "$EV" | jq -r '.state'    # → COMPLETED
+```
+
+### Verification
+
+```bash
+# Чек создан (RECEIPT_ID = Idempotency-Key), статус CONFIRMED при живом ОФД,
+# иначе RETRY (mock-fiscal:8089 в Docker по умолчанию не поднят):
+$PSQL "SELECT RECEIPT_ID, CARRIER_ID, SOURCE, STATUS, ATTEMPT_COUNT, LAST_ERROR_MESSAGE
+       FROM ASOP_FISCAL_RECEIPTS WHERE TRANSACTION_ID='$TXN_ID';"
+# → TERMINAL | PENDING→CONFIRMED/RETRY | 1
+
+# Журнал попыток отправки (FK CASCADE), http-status/duration:
+$PSQL "SELECT a.ATTEMPT_NUMBER, a.HTTP_STATUS, a.SUCCESS, a.ERROR_MESSAGE
+       FROM ASOP_FISCAL_RECEIPT_ATTEMPTS a
+       JOIN ASOP_FISCAL_RECEIPTS r ON r.RECEIPT_ID=a.RECEIPT_ID
+       WHERE r.TRANSACTION_ID='$TXN_ID';"
+
+# Статус через fiscal-service (sync):
+CS="docker exec docker-fiscal-service-1 sh -c"
+$CS 'wget -qO- --no-check-certificate \
+  "https://localhost:8090/api/v1/fiscal/receipts/<RECEIPT_ID>/status"'
+# → {"receiptId":"…","status":"CONFIRMED|RETRY","fiscalUrl":null,"receiptNumber":"…"}
+
+# Идемпотентность: повторная доставка той же команды (тот же RECEIPT_ID) не создаёт дубль
+# (handleRequested: receiptRepository.findById(...).flatMap { Mono.empty() }).
+```
+
+### Ожидаемый результат и известные пробелы
+
+- Успешный путь (`CONFIRMED`) — при доступном ОФД; `receiptNumber`/`fiscalSign` из ответа.
+- **Dev-заглушка**: seed-URL `http://mock-fiscal:8089` в Docker не поднят (`MockFiscalController` лежит в
+  `src/test`, в JAR не упакован) → отправка падает по connection refused, чек уходит в `RETRY`
+  (до `fiscal.max-attempts`, затем `CANCELLED`), в `LAST_ERROR_MESSAGE` — причина.
+- **Внимание (техдолг)**: `FiscalCommandConsumer` публикует `COMPLETED` в `asop.fiscal.events` даже когда
+  чек фактически в `RETRY`/`CANCELLED` (событие отражает только факт обработки команды, не результат ОФД) —
+  итоговый результат смотреть в `ASOP_FISCAL_RECEIPTS.STATUS`.
+- Ретраи: `FiscalRetryScheduler` (`fiscal.retry-enabled`) раз в `fixedDelay` досылает `PENDING` старше 1 мин
+  и просроченные `RETRY` (экспоненциальный backoff, `fiscal.retry-interval-ms`).

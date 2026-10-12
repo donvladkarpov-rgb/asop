@@ -7,7 +7,9 @@ import org.springframework.kafka.annotation.KafkaListener
 import org.springframework.kafka.core.reactive.ReactiveKafkaProducerTemplate
 import org.springframework.messaging.handler.annotation.Header
 import org.springframework.stereotype.Component
+import reactor.core.publisher.Mono
 import ru.asop.common.kafka.KafkaTopic
+import ru.asop.fiscal.service.FiscalReceiptService
 import ru.asop.kafka.events.CommandResult
 import ru.asop.kafka.events.fiscal.FiscalReceiptRequestedEvent
 import java.util.UUID
@@ -15,31 +17,29 @@ import java.util.UUID
 @Component
 class FiscalCommandConsumer(
     private val objectMapper: ObjectMapper,
-    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>
+    private val kafkaTemplate: ReactiveKafkaProducerTemplate<String, Any>,
+    private val service: FiscalReceiptService
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
     @KafkaListener(topics = ["\${asop.kafka.topics.fiscal-commands}"])
     fun handleCommand(
         json: String,
-        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?,
-        @Header(name = "X-Terminal-Seq", required = false) terminalSeqHeader: ByteArray?
+        @Header(name = "X-Event-Id", required = false) eventIdHeader: ByteArray?
     ) {
         log.debug("Received fiscal command: {}", json.take(200))
         val eventId = parseEventId(eventIdHeader, json)
-        val seq = parseSeq(terminalSeqHeader)
-        log.debug("Fiscal receipt event seq={}", seq)
-
         try {
             val node = objectMapper.readTree(json)
-            val eventType = node.get("eventType")?.asText()
-
-            when (eventType) {
+            when (node.get("eventType")?.asText()) {
                 "FiscalReceiptRequested" -> {
                     val event = objectMapper.treeToValue(node, FiscalReceiptRequestedEvent::class.java)
-                    handleFiscalReceiptRequested(event, eventId)
+                    service.handleRequested(event)
+                        .doOnSuccess { publishComplete(eventId, mapOf("receiptId" to event.receiptId.toString())) }
+                        .doOnError { e -> publishFailed(eventId, e.message ?: "error") }
+                        .subscribe()
                 }
-                else -> log.warn("Unknown fiscal event type: {}", eventType)
+                else -> log.warn("Unknown fiscal event type: {}", node.get("eventType")?.asText())
             }
         } catch (e: Exception) {
             log.error("Failed to deserialize fiscal command: {}", e.message, e)
@@ -47,25 +47,9 @@ class FiscalCommandConsumer(
         }
     }
 
-    private fun handleFiscalReceiptRequested(event: FiscalReceiptRequestedEvent, eventId: UUID) {
-        log.info("Processing FiscalReceiptRequestedEvent: receiptId={}", event.receiptId)
-        publishFailed(
-            eventId,
-            "Fiscal receipt creation not implemented: ASOP_FISCAL_RECEIPTS requires CARRIER_ID and " +
-                "CARRIER_FISCALIZER_ID (NOT NULL). Need carrier resolution from transaction → carrier → fiscalizer. " +
-                "Receipt ID: ${event.receiptId}, Transaction ID: ${event.transactionId}"
-        )
-    }
-
     private fun publishComplete(eventId: UUID, data: Map<String, String>) {
         val json = objectMapper.writeValueAsString(data)
         val result = CommandResult(eventId = eventId, status = "COMPLETED", resultData = json)
-        kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
-    }
-
-    private fun publishPending(eventId: UUID, data: Map<String, String>) {
-        val json = objectMapper.writeValueAsString(data)
-        val result = CommandResult(eventId = eventId, status = "PENDING_WATERMARK", resultData = json)
         kafkaTemplate.send(buildResultRecord(eventId, result)).subscribe()
     }
 
@@ -84,16 +68,11 @@ class FiscalCommandConsumer(
         if (header != null) {
             try { return UUID.fromString(String(header)) } catch (_: IllegalArgumentException) { }
         }
-        val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
-        if (fromPayload != null) {
-            try { return UUID.fromString(fromPayload) } catch (_: IllegalArgumentException) { }
+        return try {
+            val fromPayload = objectMapper.readTree(json).get("eventId")?.asText()
+            if (fromPayload != null) UUID.fromString(fromPayload) else UUID.randomUUID()
+        } catch (_: Exception) {
+            UUID.randomUUID()
         }
-        log.error("No valid eventId in header or payload, generating random")
-        return UUID.randomUUID()
-    }
-
-    private fun parseSeq(header: ByteArray?): Long {
-        if (header == null) return 0L
-        return try { String(header).toLong() } catch (_: NumberFormatException) { 0L }
     }
 }

@@ -51,6 +51,10 @@ class ServiceRegistry {
         "asop-keys" to svc("admin-service", 8091),
         "config-params" to svc("admin-service", 8091),
         "terminal-profiles" to svc("admin-service", 8091),
+        "fiscalizers" to svc("admin-service", 8091),
+        "carrier-fiscalizers" to svc("admin-service", 8091),
+        "distributor-fiscalizers" to svc("admin-service", 8091),
+        "fiscalizer-tokens" to svc("admin-service", 8091),
         "distributor-terminals" to svc("terminal-service", 8084),
         // Routes & Paths (route-service)
         "fare-zones" to svc("route-service", 8092),

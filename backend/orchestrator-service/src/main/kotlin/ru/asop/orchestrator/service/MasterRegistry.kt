@@ -52,7 +52,9 @@ class MasterRegistry {
             "asop_path_benefits" to route("path-benefits"),
             "asop_user_roles" to user("user-roles"),
             "asop_user_carriers" to user("user-carriers"),
-            "asop_user_regions" to user("user-regions")
+            "asop_user_regions" to user("user-regions"),
+            // Настройки фискализации перевозчика — только для терминалов его региона/перевозчика
+            "asop_carrier_fiscalizers" to admin("carrier-fiscalizers")
         )
 
         // Глобальные справочники (без carrier/region фильтра)
@@ -76,7 +78,9 @@ class MasterRegistry {
             // Справочник КРС (audit-service)
             "asop_audit_services" to audit("audit-services"),
             // Профили настроек терминалов (админка редактирует, синкаются терминалам)
-            "asop_terminal_profiles" to admin("terminal-profiles")
+            "asop_terminal_profiles" to admin("terminal-profiles"),
+            // Словарь фискализаторов (code/name/base_api_url — не секреты)
+            "asop_fiscalizers" to admin("fiscalizers")
         )
 
         // Пользовательские таблицы (user-service): фильтр по carrierId/regionId каскадом

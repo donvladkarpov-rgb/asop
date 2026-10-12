@@ -584,6 +584,38 @@ message TerminalProfilesRow {
   int64  version = 8;         // delta watermark
 }
 
+// Справочник фискализаторов (ASOP_FISCALIZERS) — глобальный словарь
+// (code/name/base_api_url — для построения URL чека на терминале).
+message FiscalizersRow {
+  string fiscalizer_id = 1;    // UUIDv7
+  string fiscalizer_code = 2;
+  string fiscalizer_name = 3;
+  string base_api_url = 4;
+  string description = 5;
+  bool   is_active = 6;
+  string created_at = 7;       // RFC3339 timestamp
+  string updated_at = 8;       // RFC3339 timestamp
+  string deleted_at = 9;       // RFC3339 или пусто
+  int64  version = 10;         // delta watermark
+}
+
+// Настройки фискализации перевозчика (ASOP_CARRIER_FISCALIZERS).
+// SETTINGS — JSON-строка (как в delta-ответе мастера).
+message CarrierFiscalizersRow {
+  string carrier_fiscalizer_id = 1; // UUIDv7
+  string carrier_id = 2;
+  string fiscalizer_id = 3;
+  string contract_id = 4;
+  string custom_api_url = 5;
+  bool   is_primary = 6;
+  bool   is_active = 7;
+  string settings = 8;         // JSON-строка (пусто, если не задано)
+  string created_at = 9;       // RFC3339 timestamp
+  string updated_at = 10;      // RFC3339 timestamp
+  string deleted_at = 11;      // RFC3339 или пусто
+  int64  version = 12;         // delta watermark
+}
+
 // Один дельта-чанк: записи из разных таблиц + метаданные чанка.
 message DeltaChunk {
   repeated RegionsRow asop_regions = 1;
@@ -631,6 +663,8 @@ message DeltaChunk {
   repeated AsopKeysRow asop_keys = 43;
   repeated AuditServicesRow asop_audit_services = 44;
   repeated TerminalProfilesRow asop_terminal_profiles = 45;
+  repeated FiscalizersRow asop_fiscalizers = 46;
+  repeated CarrierFiscalizersRow asop_carrier_fiscalizers = 47;
   int32 chunk_index = 90;
   int32 total_chunks = 91;
   string event_id = 92;
@@ -682,4 +716,6 @@ message TidsFile { repeated TidsRow rows = 1; }
 message AsopKeysFile { repeated AsopKeysRow rows = 1; }
 message AuditServicesFile { repeated AuditServicesRow rows = 1; }
 message TerminalProfilesFile { repeated TerminalProfilesRow rows = 1; }
+message FiscalizersFile { repeated FiscalizersRow rows = 1; }
+message CarrierFiscalizersFile { repeated CarrierFiscalizersRow rows = 1; }
 

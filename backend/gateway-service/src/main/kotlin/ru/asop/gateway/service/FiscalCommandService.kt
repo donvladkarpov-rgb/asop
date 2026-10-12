@@ -54,10 +54,13 @@ class FiscalCommandService(
             val event = FiscalReceiptRequestedEvent(
                 receiptId = receiptId,
                 transactionId = request.transactionId,
-                carrierId = null,
+                carrierId = request.carrierId,
                 carrierFiscalizerId = null,
                 amount = request.amount,
                 description = request.description,
+                sessionId = request.sessionId,
+                cardsDistributorId = request.cardsDistributorId,
+                source = request.source ?: "TERMINAL",
                 requestedAt = Instant.now(),
                 correlationId = correlationId
             )

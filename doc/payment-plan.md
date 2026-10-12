@@ -331,3 +331,16 @@ payment-service (новый модуль, порт ~809x)
 - **`CardProbe`**: negative-cache `FAIL_COOLDOWN_MS = 60 с` — на устройствах без FTSDK (Samsung) callback bind'а НЕ приходит вообще, каждый вызов ждал бы полный таймаут (2×25 c); после первой полной неудачи `connectReader()` в течение минуты мгновенно возвращает null. Latch'и ужаты: main 25→10 с, bind-поток 20→12 с (плюс прогрев `ftsdk-warmup` в `PaymentApp.onCreate`).
 
 Проверено: `./gradlew assembleDebug` (frontend/android-payment) — BUILD SUCCESSFUL.
+
+## Статус 2026-10-12 — серверный контур фискализации (промпт 017)
+
+Добавлен серверный контур регистрации расчётов в ОФД через фискального посредника (BIFIT): справочники
+фискализаторов (глобальный `ASOP_FISCALIZERS` + привязки `ASOP_CARRIER_FISCALIZERS`/`ASOP_DISTRIBUTOR_FISCALIZERS`
++ AES-GCM токены `ASOP_FISCALIZER_TOKENS`), журнал чеков `ASOP_FISCAL_RECEIPTS`/`ASOP_FISCAL_RECEIPT_ATTEMPTS`,
+fiscal-service (adapter registry, `BifitAdapter`, контекст-резолвер `session→TID→BANK-договор→carrier fiscalizer`,
+ретраи), gateway `POST /sync/fiscal/receipts` + admin CRUD + web-admin страница «Фискализация». Дистрибьюторские
+фискализаторы тянутся JSON-pull'ом (`/sync/distributor/fiscalizers/delta`), в proto-delta не входят.
+
+Подробно — `AGENTS.md` раздел «Фискализация» и `doc/context.md` раздел 8. **Android-часть (QR 3 с + NFC-запись
+чека, промпт 017 §10) и полный distributor-receipt-flow не реализованы**; seed-URL BIFIT указывает на dev-заглушку
+`mock-fiscal` (см. `doc/smoke-tests.md` «Smoke Test: Фискализация»).
