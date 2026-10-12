@@ -604,6 +604,8 @@ services:
     command: ["python3", "/server.py"]
     environment:
       MOCK_PORT: 8089
+    ports:
+      - "8089:8089"
     volumes:
       - ./mock-fiscal/server.py:/server.py:ro
     healthcheck:
