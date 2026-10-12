@@ -110,6 +110,9 @@ class FiscalizerTokenController(
     ): Mono<ResponseEntity<FiscalizerTokenResponse>> {
         validateDates(request.validFrom, request.validUntil)
         validateStatus(request.status)
+        // Если пришла хотя бы одна ссылка — перепривязываем токен (ровно одна из двух).
+        val linkProvided = request.carrierFiscalizerId != null || request.distributorFiscalizerId != null
+        if (linkProvided) validateLink(request)
         return repository.findById(id)
             .flatMap { existing ->
                 val token = request.token?.trim()
@@ -117,6 +120,8 @@ class FiscalizerTokenController(
                     throw IllegalArgumentException("TOKEN не может быть пустым")
                 }
                 val updated = existing.copy(
+                    carrierFiscalizerId = if (linkProvided) request.carrierFiscalizerId else existing.carrierFiscalizerId,
+                    distributorFiscalizerId = if (linkProvided) request.distributorFiscalizerId else existing.distributorFiscalizerId,
                     tokenEncrypted = token?.let { cipher.encrypt(it) } ?: existing.tokenEncrypted,
                     tokenHint = token?.let { hintOf(it) } ?: existing.tokenHint,
                     validFrom = request.validFrom ?: existing.validFrom,

@@ -465,6 +465,8 @@ function TokensTab() {
   const { data: carrierLinks } = useQuery({ queryKey: ['carrier-fiscalizers'], queryFn: () => api.getCarrierFiscalizers() });
   const { data: distributorLinks } = useQuery({ queryKey: ['distributor-fiscalizers'], queryFn: () => api.getDistributorFiscalizers() });
   const { data: fiscalizers } = useQuery({ queryKey: ['fiscalizers'], queryFn: api.getFiscalizers });
+  const { data: carriers } = useQuery({ queryKey: ['carriers'], queryFn: () => getCarriers() });
+  const { data: distributors } = useQuery({ queryKey: ['cards-distributors'], queryFn: () => getCardsDistributors() });
   const [edit, setEdit] = useState<FiscalizerToken | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -472,14 +474,16 @@ function TokensTab() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ['fiscalizer-tokens'] });
 
   const fiscalizerName = (id: string) => fiscalizers?.find((f) => f.fiscalizerId === id)?.fiscalizerName || id;
+  const carrierName = (id: string) => carriers?.find((c) => c.id === id)?.carrierName || id;
+  const distributorName = (id: string) => distributors?.find((d) => d.id === id)?.distributorName || id;
   const linkLabel = (t: FiscalizerToken) => {
     if (t.carrierFiscalizerId) {
       const l = carrierLinks?.find((c) => c.carrierFiscalizerId === t.carrierFiscalizerId);
-      return l ? `Перевозчик · ${fiscalizerName(l.fiscalizerId)}` : `Перевозчик · ${t.carrierFiscalizerId}`;
+      return l ? `Перевозчик: ${carrierName(l.carrierId)} · ${fiscalizerName(l.fiscalizerId)}` : `Перевозчик · ${t.carrierFiscalizerId}`;
     }
     if (t.distributorFiscalizerId) {
       const l = distributorLinks?.find((c) => c.distributorFiscalizerId === t.distributorFiscalizerId);
-      return l ? `Дистрибьютор · ${fiscalizerName(l.fiscalizerId)}` : `Дистрибьютор · ${t.distributorFiscalizerId}`;
+      return l ? `Дистрибьютор: ${distributorName(l.cardsDistributorId)} · ${fiscalizerName(l.fiscalizerId)}` : `Дистрибьютор · ${t.distributorFiscalizerId}`;
     }
     return '—';
   };
@@ -515,6 +519,8 @@ function TokensTab() {
           carrierLinks={carrierLinks || []}
           distributorLinks={distributorLinks || []}
           fiscalizers={fiscalizers || []}
+          carriers={carriers || []}
+          distributors={distributors || []}
           error={formError}
           onSave={(d) => edit ? updateMut.mutate({ id: edit.tokenId, data: d }) : createMut.mutate(d)}
           onCancel={() => { setShowForm(false); setEdit(null); setFormError(null); }}
@@ -545,16 +551,20 @@ function TokensTab() {
   );
 }
 
-function TokenForm({ initial, carrierLinks, distributorLinks, fiscalizers, onSave, onCancel, error }: {
+function TokenForm({ initial, carrierLinks, distributorLinks, fiscalizers, carriers, distributors, onSave, onCancel, error }: {
   initial?: FiscalizerToken | null;
   carrierLinks: CarrierFiscalizer[];
   distributorLinks: DistributorFiscalizer[];
   fiscalizers: Fiscalizer[];
+  carriers: { id: string; carrierName: string }[];
+  distributors: { id: string; distributorName: string }[];
   onSave: (d: Record<string, unknown>) => void;
   onCancel: () => void;
   error?: string | null;
 }) {
   const fiscalizerName = (id: string) => fiscalizers.find((f) => f.fiscalizerId === id)?.fiscalizerName || id;
+  const carrierName = (id: string) => carriers.find((c) => c.id === id)?.carrierName || id;
+  const distributorName = (id: string) => distributors.find((d) => d.id === id)?.distributorName || id;
   const initialLink = initial?.carrierFiscalizerId
     ? `c:${initial.carrierFiscalizerId}`
     : initial?.distributorFiscalizerId
@@ -594,16 +604,16 @@ function TokenForm({ initial, carrierLinks, distributorLinks, fiscalizers, onSav
       {(error || localError) && <div className="form-error" style={{ marginBottom: 12 }}>{error || localError}</div>}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
         <label>Привязка
-          <select value={link} onChange={(e) => setLink(e.target.value)} disabled={!!initial}>
+          <select value={link} onChange={(e) => setLink(e.target.value)}>
             <option value="">— выберите —</option>
             <optgroup label="Перевозчики">
               {carrierLinks.map((l) => (
-                <option key={l.carrierFiscalizerId} value={`c:${l.carrierFiscalizerId}`}>{fiscalizerName(l.fiscalizerId)}</option>
+                <option key={l.carrierFiscalizerId} value={`c:${l.carrierFiscalizerId}`}>{carrierName(l.carrierId)} · {fiscalizerName(l.fiscalizerId)}</option>
               ))}
             </optgroup>
             <optgroup label="Дистрибьюторы">
               {distributorLinks.map((l) => (
-                <option key={l.distributorFiscalizerId} value={`d:${l.distributorFiscalizerId}`}>{fiscalizerName(l.fiscalizerId)}</option>
+                <option key={l.distributorFiscalizerId} value={`d:${l.distributorFiscalizerId}`}>{distributorName(l.cardsDistributorId)} · {fiscalizerName(l.fiscalizerId)}</option>
               ))}
             </optgroup>
           </select>

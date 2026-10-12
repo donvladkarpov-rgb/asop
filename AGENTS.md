@@ -773,7 +773,7 @@ ASOP_SESSIONS (session_type=SHIFT, parent=NULL) — смена водителя
 
 ### admin-service (CRUD + `/delta`)
 
-`FiscalizerController` (`/api/v1/fiscalizers`), `CarrierFiscalizerController` (`/api/v1/carrier-fiscalizers`), `DistributorFiscalizerController` (`/api/v1/distributor-fiscalizers`), `FiscalizerTokenController` (`/api/v1/fiscalizer-tokens`). Фискализаторы/carrier/distributor — DeltaSupport; токены — только list/get/post/put/delete. Токен шифруется `util/TokenCipher` (AES-GCM, отдельный util и в fiscal-service).
+`FiscalizerController` (`/api/v1/fiscalizers`), `CarrierFiscalizerController` (`/api/v1/carrier-fiscalizers`), `DistributorFiscalizerController` (`/api/v1/distributor-fiscalizers`), `FiscalizerTokenController` (`/api/v1/fiscalizer-tokens`). Фискализаторы/carrier/distributor — DeltaSupport; токены — только list/get/post/put/delete. Токен шифруется `util/TokenCipher` (AES-GCM, отдельный util и в fiscal-service). **Привязка токена меняется и при обновлении**: `FiscalizerTokenController.update` принимает `carrierFiscalizerId`/`distributorFiscalizerId` — если пришла хотя бы одна не-null ссылка, токен перепривязывается (валидация `chk_ft_link`: ровно одна из двух); если обе null/опущены — прежняя привязка сохраняется (сам токен при пустом `token` не трогается). В web-admin форма токена показывает в списке «Привязка» имена перевозчика/дистрибьютора (не только фискализатора) и позволяет менять связь при редактировании.
 
 ### gateway
 
