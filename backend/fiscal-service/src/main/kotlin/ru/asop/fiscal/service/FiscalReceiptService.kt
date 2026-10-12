@@ -1,6 +1,7 @@
 package ru.asop.fiscal.service
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import io.r2dbc.postgresql.codec.Json
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.r2dbc.core.R2dbcEntityTemplate
@@ -87,7 +88,7 @@ class FiscalReceiptService(
             cardsDistributorId = event.cardsDistributorId,
             carrierFiscalizerId = ctx.second,
             source = event.source,
-            receiptData = objectMapper.writeValueAsString(event.description),
+            receiptData = Json.of(objectMapper.writeValueAsString(event.description)),
             status = "PENDING",
             maxAttempts = maxAttempts
         )
@@ -100,12 +101,12 @@ class FiscalReceiptService(
                 receiptId = receipt.receiptId,
                 transactionId = receipt.transactionId,
                 total = null,
-                fiscalContext = parseReceiptData(receipt.receiptData)
+                fiscalContext = parseReceiptData(receipt.receiptData?.asString())
             )
             val payload = resolved.adapter.buildRequest(ctx)
             val payloadJson = objectMapper.writeValueAsString(payload)
-            resolved.tokenMono.flatMap { token ->
-                post(resolved.adapter, resolved.baseUrl, payloadJson, token, receipt.receiptId, resolved.linkId)
+            resolved.tokenMono.flatMap { (tokenId, token) ->
+                post(resolved.adapter, resolved.baseUrl, payloadJson, token, tokenId, receipt.receiptId)
             }
         }.onErrorResume { e ->
             fail(receipt, e.message ?: "error")
@@ -116,7 +117,8 @@ class FiscalReceiptService(
         val adapter: FiscalizerAdapter,
         val linkId: UUID,
         val baseUrl: String?,
-        val tokenMono: Mono<ByteArray>
+        // (TOKEN_ID, расшифрованные байты токена). TOKEN_ID нужен для FK attempts.TOKEN_ID.
+        val tokenMono: Mono<Pair<UUID?, ByteArray>>
     )
 
     private fun resolveAdapter(receipt: FiscalReceiptEntity): Mono<Resolved> {
@@ -142,8 +144,8 @@ class FiscalReceiptService(
                 ?: return@flatMap Mono.error<Resolved>(IllegalStateException("No adapter for ${fiscalizer.fiscalizerCode}"))
             val baseUrl = customUrl ?: fiscalizer.baseApiUrl
             val tokenMono = tokenRepository.findActiveForLink(linkId)
-                .map { tokenCipher.decrypt(it.tokenEncrypted) }
-                .defaultIfEmpty(ByteArray(0))
+                .map { it.tokenId as UUID? to tokenCipher.decrypt(it.tokenEncrypted) }
+                .defaultIfEmpty(Pair<UUID?, ByteArray>(null, ByteArray(0)))
             Mono.just(Resolved(adapter, linkId, baseUrl, tokenMono))
         }
     }
@@ -153,8 +155,8 @@ class FiscalReceiptService(
         baseUrl: String?,
         payloadJson: String,
         token: ByteArray,
-        receiptId: UUID,
-        linkId: UUID
+        tokenId: UUID?,
+        receiptId: UUID
     ): Mono<FiscalReceiptEntity> {
         val base = baseUrl?.trimEnd('/') ?: "https://fp.bifit.com"
         val uri = base + adapter.registrationPath()
@@ -169,12 +171,12 @@ class FiscalReceiptService(
             .toEntity(String::class.java)
             .flatMap { resp ->
                 val result = adapter.parseResponse(resp.statusCode.value(), resp.body)
-                finishAttempt(receiptId, linkId, payloadJson, result.success, resp.statusCode.value(),
+                finishAttempt(receiptId, tokenId, payloadJson, result.success, resp.statusCode.value(),
                     result.responseData, result.errorMessage, result.receiptNumber, result.fiscalSign,
                     adapter.receiptUrl(receiptId, baseUrl, null), startedAt)
             }
             .onErrorResume { e ->
-                finishAttempt(receiptId, linkId, payloadJson, false, null, null,
+                finishAttempt(receiptId, tokenId, payloadJson, false, null, null,
                     e.message ?: "error", null, null, null, startedAt)
             }
     }
@@ -182,7 +184,7 @@ class FiscalReceiptService(
     @Suppress("LongParameterList")
     private fun finishAttempt(
         receiptId: UUID,
-        linkId: UUID,
+        tokenId: UUID?,
         payloadJson: String,
         success: Boolean,
         httpStatus: Int?,
@@ -203,7 +205,7 @@ class FiscalReceiptService(
                     attemptCount = attemptNumber,
                     receiptNumber = receiptNumber ?: r.receiptNumber,
                     fiscalSign = fiscalSign ?: r.fiscalSign,
-                    responseData = responseData,
+                    responseData = responseData?.let { Json.of(it) },
                     fiscalUrl = fiscalUrl,
                     confirmedAt = now,
                     lastAttemptAt = now,
@@ -232,9 +234,9 @@ class FiscalReceiptService(
                 attemptId = UUID.randomUUID(),
                 receiptId = receiptId,
                 attemptNumber = attemptNumber,
-                tokenId = linkId,
-                requestPayload = payloadJson,
-                responsePayload = responseData,
+                tokenId = tokenId,
+                requestPayload = Json.of(payloadJson),
+                responsePayload = responseData?.let { Json.of(it) },
                 httpStatus = httpStatus,
                 success = success,
                 errorMessage = errorMessage?.take(1000),

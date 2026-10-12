@@ -1,5 +1,6 @@
 package ru.asop.fiscal.model
 
+import io.r2dbc.postgresql.codec.Json
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
 import java.time.OffsetDateTime
@@ -25,9 +26,11 @@ data class FiscalReceiptEntity(
     val lastAttemptAt: OffsetDateTime? = null,
     val nextRetryAt: OffsetDateTime? = null,
     val lastErrorMessage: String? = null,
-    val receiptData: String? = null,
-    val requestPayload: String? = null,
-    val responseData: String? = null,
+    // JSONB-колонки — тип io.r2dbc.postgresql.codec.Json (иначе String биндится как varchar
+    // и INSERT/UPDATE падает: «column ... is of type jsonb but expression is of type character varying»).
+    val receiptData: Json? = null,
+    val requestPayload: Json? = null,
+    val responseData: Json? = null,
     val fiscalUrl: String? = null,
     val confirmedAt: OffsetDateTime? = null,
     val createdAt: OffsetDateTime = OffsetDateTime.now(),

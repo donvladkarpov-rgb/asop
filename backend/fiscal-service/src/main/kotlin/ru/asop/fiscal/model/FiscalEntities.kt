@@ -2,6 +2,7 @@ package ru.asop.fiscal.model
 
 import org.springframework.data.annotation.Id
 import org.springframework.data.relational.core.mapping.Table
+import io.r2dbc.postgresql.codec.Json
 import java.math.BigDecimal
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -65,8 +66,8 @@ data class FiscalReceiptAttempt(
     val receiptId: UUID,
     val attemptNumber: Int = 1,
     val tokenId: UUID? = null,
-    val requestPayload: String? = null,
-    val responsePayload: String? = null,
+    val requestPayload: Json? = null,
+    val responsePayload: Json? = null,
     val httpStatus: Int? = null,
     val success: Boolean = false,
     val errorMessage: String? = null,
