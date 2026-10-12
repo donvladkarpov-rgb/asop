@@ -63,14 +63,14 @@ class ShiftReportRepository(
                        OR t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000904'
                        OR t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000905'
                 ) AS failed_card_transactions,
-                COUNT(*) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL) AS cashless_count,
-                COALESCE(SUM(bp.AMOUNT) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL), 0) AS cashless_amount,
+                COUNT(*) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL OR (t.METADATA->>'bankCard' = 'true')) AS cashless_count,
+                COALESCE(SUM(COALESCE(bp.AMOUNT, (NULLIF(t.METADATA->>'amount', ''))::numeric)) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL OR (t.METADATA->>'bankCard' = 'true')), 0) AS cashless_amount,
                 -- Сумма без скидки: используем appliedTariff/regTariff из метаданных? В отчёте это SUM bp.amount?
                 -- В исходном XLS: "Сумма безнал (без скидки)" — 15785.0 для 451 безнал. Иногда бывает > безнал.
                 -- Попробуем взять MAX(p.AMOUNT_WITHOUT_DISCOUNT) или сумму? Либо NULL не трогаем — часто равна full fare.
                 COALESCE(SUM(NULL::numeric) FILTER (WHERE bp.PAYMENT_ID IS NOT NULL), 0) AS cashless_amount_without_discount,
-                COUNT(*) FILTER (WHERE bp.PAYMENT_ID IS NULL AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901' AND COALESCE((t.METADATA->>'tripsDebited')::numeric, 0) = 0 AND COALESCE((t.METADATA->>'tripsAfter')::numeric, 0) = 0) AS cash_count,
-                COALESCE(SUM(COALESCE((t.METADATA->>'amount')::numeric, t.AMOUNT, 0)) FILTER (WHERE bp.PAYMENT_ID IS NULL AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901' AND COALESCE((t.METADATA->>'tripsDebited')::numeric, 0) = 0 AND COALESCE((t.METADATA->>'tripsAfter')::numeric, 0) = 0), 0) AS cash_amount
+                COUNT(*) FILTER (WHERE bp.PAYMENT_ID IS NULL AND (t.METADATA->>'bankCard' IS DISTINCT FROM 'true') AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901' AND COALESCE((t.METADATA->>'tripsDebited')::numeric, 0) = 0 AND COALESCE((t.METADATA->>'tripsAfter')::numeric, 0) = 0) AS cash_count,
+                COALESCE(SUM(COALESCE((t.METADATA->>'amount')::numeric, t.AMOUNT, 0)) FILTER (WHERE bp.PAYMENT_ID IS NULL AND (t.METADATA->>'bankCard' IS DISTINCT FROM 'true') AND t.TRANSACTION_RESULT_ID = '00000000-0000-0000-0000-000000000901' AND COALESCE((t.METADATA->>'tripsDebited')::numeric, 0) = 0 AND COALESCE((t.METADATA->>'tripsAfter')::numeric, 0) = 0), 0) AS cash_amount
             FROM ASOP_TRANSACTIONS t
             JOIN ASOP_SESSIONS tr ON tr.SESSION_ID = t.SESSION_ID
             -- Связка платежа: TRANSACTION_ID (backfill/resolve в payment-service), fallback по

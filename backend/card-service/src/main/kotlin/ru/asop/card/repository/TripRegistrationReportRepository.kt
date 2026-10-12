@@ -56,6 +56,13 @@ class TripRegistrationReportRepository(
                 t.METADATA->>'acqReference' AS acq_reference,
                 t.METADATA->>'paymentSystem' AS payment_system,
                 t.METADATA->>'cardLast4' AS card_last4,
+                -- Банковская оплата по metadata терминала — фолбэк, когда ASOP_BANK_PAYMENTS ещё
+                -- не записан (mock-платёж без реального эквайера / app-payment). Без него реестр
+                -- показывал банковскую транзакцию как «МИФЕР» с суммой 0.
+                CASE WHEN t.METADATA->>'bankCard' = 'true' THEN true ELSE false END AS bank_card,
+                CASE WHEN t.METADATA->>'amount' ~ '^[0-9]+(\.[0-9]+)?$'
+                     THEN (t.METADATA->>'amount')::numeric ELSE NULL END AS metadata_amount,
+                t.METADATA->>'rrn' AS metadata_rrn,
                 -- Время операции НА ТЕРМИНАЛЕ (metadata.tripsAt, epoch ms), иначе серверный STARTED_AT
                 CASE WHEN t.METADATA->>'tripsAt' ~ '^[0-9]+$'
                      THEN to_timestamp((t.METADATA->>'tripsAt')::double precision / 1000.0)
@@ -116,16 +123,16 @@ class TripRegistrationReportRepository(
                 bs.DISCOUNT_SHARE AS benefit_share,
 
                 tt.NAME AS tariff_type_name,
-                CASE WHEN bp.PAYMENT_ID IS NOT NULL
+                CASE WHEN bp.PAYMENT_ID IS NOT NULL OR tx.bank_card
                      THEN 'Банковская карта'
                      ELSE 'МИФЕР' END AS payment_form,
-                COALESCE(bp.AMOUNT, 0) AS paid_amount,
+                COALESCE(bp.AMOUNT, tx.metadata_amount, 0) AS paid_amount,
 
                 -- Формат «СХЕМА:*ПОСЛ4» (как в «Сменах и рейсах»): источник схемы —
                 -- metadata.paymentSystem терминала, затем BIN; источник последних 4 —
                 -- metadata.cardLast4, затем ASOP_CARD_BANKS / ASOP_BANK_PAYMENTS.
                 CASE
-                    WHEN bp.PAYMENT_ID IS NOT NULL AND COALESCE(
+                    WHEN (bp.PAYMENT_ID IS NOT NULL OR tx.bank_card) AND COALESCE(
                              NULLIF(BTRIM(COALESCE(tx.card_last4, '')), ''),
                              NULLIF(BTRIM(COALESCE(cb.PAN_LAST4, '')), ''),
                              NULLIF(BTRIM(COALESCE(bp.pan_last4, '')), '')) IS NOT NULL
@@ -151,7 +158,7 @@ class TripRegistrationReportRepository(
                     WHEN cm.UID IS NOT NULL THEN encode(cm.UID, 'hex')
                     ELSE NULL
                 END AS card_number,
-                bp.RRN,
+                COALESCE(bp.RRN, CASE WHEN tx.bank_card THEN tx.metadata_rrn END) AS rrn,
 
                 fr.STATUS AS fiscal_status,
                 fr.CREATED_AT AS fiscal_created_at,
