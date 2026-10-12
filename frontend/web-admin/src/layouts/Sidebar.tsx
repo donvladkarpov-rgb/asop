@@ -174,7 +174,7 @@ export function Sidebar() {
             ))}
           </nav>
         </CollapsibleSection>
-        <CollapsibleSection label="Контрагенты">
+        <CollapsibleSection label="Контрагенты" defaultOpen={true}>
           <nav className="sidebar-nav">
             {contractorItems.map((item) => (
               <NavLink
