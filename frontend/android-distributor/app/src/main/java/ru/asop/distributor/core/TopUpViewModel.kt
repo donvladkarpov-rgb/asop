@@ -168,7 +168,10 @@ class TopUpViewModel(
         )
         val requestId = UuidCreator.getTimeOrderedEpoch().toString()
         scope.launch {
-            val result = payments.pay(requestId, amount, "TOPUP", message = "Пополнение транспортной карты")
+            // На устройствах без FTSDK (Samsung) app-payment не может прочитать карту сам —
+            // читаем её здесь через IsoDep и передаём открытые данные в /pay.
+            val card = EmvIsoDepReader.read(tag)
+            val result = payments.pay(requestId, amount, "TOPUP", message = "Пополнение транспортной карты", card = card)
             if (result == null) {
                 state = state.copy(step = Step.BANK_CARD, payError = "Нет связи с app-payment")
                 return@launch

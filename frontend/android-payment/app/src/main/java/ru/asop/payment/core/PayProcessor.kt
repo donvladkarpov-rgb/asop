@@ -29,9 +29,9 @@ class PayProcessor(private val context: Context) {
             return response(req, PayStatus.TIMEOUT, errorCode = "91", errorMessage = "EMV kernel не настроен (TBD)")
         }
 
-        // Читаем РЕАЛЬНЫЕ публичные данные карты (PPSE→SELECT→GPO→READ RECORD, без ядра EMV),
-        // чтобы MVP отдавал фактический masked PAN / срок / держателя. Фолбэк — заглушка.
-        val card = readCard() ?: stubCard
+        // Карта: приоритет — переданные вызывающим открытые данные (дистрибьютор прочитал
+        // через IsoDep на устройстве без FTSDK), затем собственная FTSDK-читалка, фолбэк — заглушка.
+        val card = req.card ?: readCard() ?: stubCard
 
         val kopecks = kotlin.math.round(req.amount * 100.0).toInt() % 100
         return when (kopecks) {

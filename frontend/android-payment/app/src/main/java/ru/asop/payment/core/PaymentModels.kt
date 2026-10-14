@@ -28,7 +28,9 @@ data class PayRequest(
     val terminalSerial: String? = null,
     val carrierId: String? = null,
     val regionId: String? = null,
-    val issuedAt: Long? = null
+    val issuedAt: Long? = null,
+    /** Открытые данные карты, прочитанные вызывающим (дистрибьютором) через IsoDep — для устройств без FTSDK. */
+    val card: CardInfo? = null
 ) {
     fun toJson(): String = JSONObject()
         .put("requestId", requestId)
@@ -43,6 +45,7 @@ data class PayRequest(
         .optPut("carrierId", carrierId)
         .optPut("regionId", regionId)
         .optPut("issuedAt", issuedAt)
+        .apply { card?.let { put("card", it.toJson()) } }
         .toString()
 
     companion object {
@@ -60,7 +63,18 @@ data class PayRequest(
             terminalSerial = o.optString("terminalSerial").ifBlank { null },
             carrierId = o.optString("carrierId").ifBlank { null },
             regionId = o.optString("regionId").ifBlank { null },
-            issuedAt = if (o.has("issuedAt") && !o.isNull("issuedAt")) o.optLong("issuedAt") else null
+            issuedAt = if (o.has("issuedAt") && !o.isNull("issuedAt")) o.optLong("issuedAt") else null,
+            card = if (o.has("card") && !o.isNull("card")) {
+                val c = o.getJSONObject("card")
+                CardInfo(
+                    c.nullable("maskedPan"),
+                    c.nullable("panLast4"),
+                    c.nullable("bin"),
+                    c.nullable("expiry"),
+                    c.nullable("holdername"),
+                    c.nullable("cardToken")
+                )
+            } else null
         )
     }
 }

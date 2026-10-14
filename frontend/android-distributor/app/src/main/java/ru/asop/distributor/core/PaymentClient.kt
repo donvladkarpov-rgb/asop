@@ -31,7 +31,8 @@ class PaymentClient {
         amount: Double,
         paymentType: String,
         sessionId: String? = null,
-        message: String? = null
+        message: String? = null,
+        card: EmvIsoDepReader.Card? = null
     ): Result? = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("requestId", requestId)
@@ -41,6 +42,16 @@ class PaymentClient {
             .put("capture", true)
             .putOpt("sessionId", sessionId)
             .putOpt("message", message)
+        if (card != null) {
+            // Открытые данные карты, прочитанные дистрибьютором через IsoDep (Samsung) —
+            // передаём app-payment, чтобы mock отдавал реальную карту, а не заглушку.
+            body.put("card", JSONObject()
+                .put("maskedPan", card.maskedPan)
+                .put("panLast4", card.panLast4)
+                .put("bin", card.bin)
+                .put("expiry", card.expiry)
+                .put("holdername", card.holdername))
+        }
 
         val status = post("/pay", body.toString())
         val result = status?.let { parse(it) }
