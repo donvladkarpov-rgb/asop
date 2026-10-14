@@ -79,6 +79,7 @@ class TopUpViewModel(
     }
 
     fun onTag(tag: Tag) {
+        Log.i("TopUp", "onTag step=${state.step} techs=${tag.techList.toList()}")
         when (state.step) {
             Step.IDLE, Step.DISTRIBUTOR_SCAN -> scanDistributor(tag)
             Step.BANK_CARD -> scanBankCard(tag)

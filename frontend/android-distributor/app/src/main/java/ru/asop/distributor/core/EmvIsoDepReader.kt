@@ -30,7 +30,12 @@ object EmvIsoDepReader {
 
     /** Читает открытые данные карты из [tag]. null — не банковская карта или чтение не удалось. */
     fun read(tag: Tag): Card? {
-        val iso = IsoDep.get(tag) ?: return null
+        val iso = IsoDep.get(tag)
+        if (iso == null) {
+            Log.w(TAG, "IsoDep.get(tag)=null, techs=${tag.techList.toList()}")
+            return null
+        }
+        Log.i(TAG, "read start: techs=${tag.techList.toList()}")
         return try {
             iso.connect()
             iso.timeout = 5000
