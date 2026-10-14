@@ -37,18 +37,37 @@ class LocalPaymentServer private constructor(context: Context) {
     fun start() {
         if (!running.compareAndSet(false, true)) return
         thread(name = "app-payment-http") {
-            runCatching {
-                val sock = ServerSocket()
-                sock.reuseAddress = true
-                sock.bind(InetSocketAddress("127.0.0.1", PORT))
-                serverSocket = sock
-                Log.i(tag, "listening on $PORT")
+            try {
+                // Держим сервер живым: если accept-цикл умер (сокет закрыт системой при
+                // freeze/смене сети), пере-биндим через 1 с — дистрибьютор не теряет /pay.
                 while (running.get()) {
-                    val client = runCatching { sock.accept() }.getOrNull() ?: break
-                    thread(name = "app-payment-conn", isDaemon = true) { handle(client) }
+                    runCatching { bindAndAccept() }
+                    if (running.get()) {
+                        Log.w(tag, "server died, re-binding in 1s")
+                        Thread.sleep(1_000)
+                    }
                 }
-            }.onFailure { e -> Log.e(tag, "server error", e) }
-            running.set(false)
+            } finally {
+                running.set(false)
+            }
+        }
+    }
+
+    /** Биндит 127.0.0.1:PORT и принимает соединения, пока running=true. */
+    private fun bindAndAccept() {
+        val sock = ServerSocket()
+        try {
+            sock.reuseAddress = true
+            sock.bind(InetSocketAddress("127.0.0.1", PORT))
+            serverSocket = sock
+            Log.i(tag, "listening on $PORT")
+            while (running.get()) {
+                val client = runCatching { sock.accept() }.getOrNull() ?: return
+                thread(name = "app-payment-conn", isDaemon = true) { handle(client) }
+            }
+        } finally {
+            runCatching { sock.close() }
+            if (serverSocket === sock) serverSocket = null
         }
     }
 

@@ -19,14 +19,13 @@ class PayProcessor(private val context: Context) {
 
     /** Выполняет /pay. В PoC-режиме не блокирует на EMV — возвращает сразу. */
     suspend fun process(req: PayRequest): PayResponse {
-        // Фаза 0: фиксируем доступность NFC-ридера на F20.
-        val probe = CardProbe.get(context).checkNfc()
-        if (!probe.available) {
-            Log.w(tag, "NFC reader unavailable: checkCode=${probe.checkCode} err=${probe.error}")
-        }
-
         if (!BuildConfig.PO_C_MOCK_EMV) {
-            // Реальный EMV — TBD (интерфейс ВТБ). Возвращаем TIMEOUT, чтобы не «съесть» карту.
+            // Реальный EMV — TBD (интерфейс ВТБ). Проверяем NFC-ридер F20 (FTSDK) и
+            // возвращаем TIMEOUT, чтобы не «съесть» карту.
+            val probe = CardProbe.get(context).checkNfc()
+            if (!probe.available) {
+                Log.w(tag, "NFC reader unavailable: checkCode=${probe.checkCode} err=${probe.error}")
+            }
             return response(req, PayStatus.TIMEOUT, errorCode = "91", errorMessage = "EMV kernel не настроен (TBD)")
         }
 
