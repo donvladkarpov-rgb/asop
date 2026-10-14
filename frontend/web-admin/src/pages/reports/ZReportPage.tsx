@@ -128,7 +128,7 @@ export function ZReportPage() {
     <div className="page">
       <div className="page-header">
         <h1>Отчёты</h1>
-        <p className="page-subtitle">Z отчёт: кассовая сводка смены — Наличные/Банковская карта/МФК/Школьный + «Билетов»</p>
+        <p className="page-subtitle">Z отчёт: кассовая сводка смены — Наличные/Банковская карта/МФК/Льгота + «Билетов»</p>
       </div>
 
       <div className="filters-panel">
@@ -261,7 +261,7 @@ export function ZReportPage() {
         </div>
 
         <p className="hint">
-          Сводка по сменам + детализация по маршрутам. Категории: Наличные / Банковская карта / МФК (МайФер) / Школьный (льгота); «Билетов» — итог.
+          Сводка по сменам + детализация по маршрутам. Категории: Наличные / Банковская карта / МФК (МайФер) / Льгота (гос. возмещение); «Билетов» — итог.
         </p>
       </div>
 
@@ -274,7 +274,7 @@ export function ZReportPage() {
               <span>Наличные: <b>{report.totals.cashCount} / {formatMoney(report.totals.cashSum)} ₽</b></span>
               <span>Банк. карта: <b>{report.totals.bankCount} / {formatMoney(report.totals.bankSum)} ₽</b></span>
               <span>МФК: <b>{report.totals.mifareCount} / {formatMoney(report.totals.mifareSum)} ₽</b></span>
-              <span>Школьный: <b>{report.totals.benefitCount} / {formatMoney(report.totals.benefitSum)} ₽</b></span>
+              <span>Льгота: <b>{report.totals.benefitCount} / {formatMoney(report.totals.benefitSum)} ₽</b></span>
               <span>Билетов: <b>{report.totals.totalCount} / {formatMoney(report.totals.totalSum)} ₽</b></span>
               {report.totalRows > report.rows.length && (
                 <span className="hint">

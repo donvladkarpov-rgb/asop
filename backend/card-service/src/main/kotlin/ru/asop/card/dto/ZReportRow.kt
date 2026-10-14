@@ -12,7 +12,7 @@ import java.util.UUID
  *  - Наличные (`cash*`)     — наличная оплата (bucket CASH);
  *  - Банковская карта (`bank*`) — эквайринг (metadata.bankCard ∨ ASOP_BANK_PAYMENTS);
  *  - МФК (`mifare*`)        — МайФер Карта, поездки списаны с карты (bucket TK/ride_like);
- *  - Школьный (`benefit*`)  — любая льгота с гос. возмещением (bucket MFK/benefit_id).
+ *  - Льгота (`benefit*`)  — любая льгота с гос. возмещением (bucket MFK/benefit_id).
  * Итог «Билетов» (`total*`) — сумма четырёх категорий.
  */
 data class ZReportRow(

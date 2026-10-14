@@ -208,7 +208,7 @@ export const SHIFT_LIST_REPORT_COLUMNS: ShiftListReportColumn[] = [
 
 /**
  * Колонки сводки «Z отчёт» по сменам (20 колонок):
- * контекст смены + 4 категории оплат (Наличные/Банковская карта/МФК/Школьный) + итог «Билетов».
+ * контекст смены + 4 категории оплат (Наличные/Банковская карта/МФК/Льгота) + итог «Билетов».
  */
 export const Z_REPORT_COLUMNS: ZReportColumn[] = [
   { header: 'Перевозчик', width: 200, kind: 'text', get: (r) => r.carrierName },
@@ -227,8 +227,8 @@ export const Z_REPORT_COLUMNS: ZReportColumn[] = [
   { header: 'Банк. карта сумма', width: 120, kind: 'money', get: (r) => r.bankSum },
   { header: 'МФК кол-во', width: 100, kind: 'num', get: (r) => r.mifareCount },
   { header: 'МФК сумма', width: 110, kind: 'money', get: (r) => r.mifareSum },
-  { header: 'Школьный кол-во', width: 110, kind: 'num', get: (r) => r.benefitCount },
-  { header: 'Школьный сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
+  { header: 'Льгота кол-во', width: 110, kind: 'num', get: (r) => r.benefitCount },
+  { header: 'Льгота сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
   { header: 'Билетов кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
   { header: 'Билетов сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
 ];
@@ -248,8 +248,8 @@ export const Z_REPORT_SEGMENT_COLUMNS: ZReportSegmentColumn[] = [
   { header: 'Банк. карта сумма', width: 120, kind: 'money', get: (r) => r.bankSum },
   { header: 'МФК кол-во', width: 100, kind: 'num', get: (r) => r.mifareCount },
   { header: 'МФК сумма', width: 110, kind: 'money', get: (r) => r.mifareSum },
-  { header: 'Школьный кол-во', width: 110, kind: 'num', get: (r) => r.benefitCount },
-  { header: 'Школьный сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
+  { header: 'Льгота кол-во', width: 110, kind: 'num', get: (r) => r.benefitCount },
+  { header: 'Льгота сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
   { header: 'Билетов кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
   { header: 'Билетов сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
 ];

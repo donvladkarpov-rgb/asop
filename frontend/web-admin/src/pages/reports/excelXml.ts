@@ -553,7 +553,7 @@ function zReportTotalsSheet(report: ZReport): string {
     ['Наличные', t.cashCount, t.cashSum],
     ['Банковская карта', t.bankCount, t.bankSum],
     ['МФК', t.mifareCount, t.mifareSum],
-    ['Школьный', t.benefitCount, t.benefitSum],
+    ['Льгота', t.benefitCount, t.benefitSum],
     ['Билетов (итого)', t.totalCount, t.totalSum],
   ] as const;
   const body = rows
