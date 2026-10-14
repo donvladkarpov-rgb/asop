@@ -38,6 +38,8 @@ export interface DistributorZReportParams {
   dateFrom: string;
   dateTo: string;
   cardsDistributorId?: string;
+  paymentMethod?: string;
+  status?: string;
   limit?: number;
   offset?: number;
 }

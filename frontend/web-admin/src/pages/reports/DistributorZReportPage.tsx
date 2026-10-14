@@ -16,6 +16,8 @@ export function DistributorZReportPage() {
   const [dateFrom, setDateFrom] = useState(isoToday());
   const [dateTo, setDateTo] = useState(isoToday());
   const [cardsDistributorId, setCardsDistributorId] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('');
+  const [status, setStatus] = useState('');
   const [applied, setApplied] = useState(false);
 
   const distributorsQuery = useQuery({ queryKey: ['cards-distributors'], queryFn: getCardsDistributors });
@@ -26,10 +28,12 @@ export function DistributorZReportPage() {
       dateTo,
       limit: PAGE_LIMIT,
       cardsDistributorId: cardsDistributorId || undefined,
+      paymentMethod: paymentMethod || undefined,
+      status: status || undefined,
     }),
     // applied — «заморозка» фильтров до нажатия «Построить отчёт»
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [dateFrom, dateTo, cardsDistributorId, applied],
+    [dateFrom, dateTo, cardsDistributorId, paymentMethod, status, applied],
   );
 
   const reportQuery = useQuery({
@@ -72,6 +76,26 @@ export function DistributorZReportPage() {
               {(distributorsQuery.data ?? []).map((d) => (
                 <option key={d.id} value={d.id}>{d.distributorName}</option>
               ))}
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Способ оплаты</span>
+            <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+              <option value="">Все</option>
+              <option value="CASH">Наличные</option>
+              <option value="BANK">Банковская карта</option>
+            </select>
+          </label>
+          <label className="field">
+            <span className="field-label">Статус чека</span>
+            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">Все</option>
+              <option value="PENDING">PENDING</option>
+              <option value="SENT">SENT</option>
+              <option value="CONFIRMED">CONFIRMED</option>
+              <option value="RETRY">RETRY</option>
+              <option value="FAILED">FAILED</option>
+              <option value="CANCELLED">CANCELLED</option>
             </select>
           </label>
           <div className="field field-actions">

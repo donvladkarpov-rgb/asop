@@ -30,6 +30,8 @@ class DistributorZReportController(
         @RequestParam("dateFrom") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) dateFrom: LocalDate,
         @RequestParam("dateTo") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) dateTo: LocalDate,
         @RequestParam("cardsDistributorId", required = false) cardsDistributorId: UUID?,
+        @RequestParam("paymentMethod", required = false) paymentMethod: String?,
+        @RequestParam("status", required = false) status: String?,
         @RequestParam("limit", required = false) limit: Int?,
         @RequestParam("offset", required = false) offset: Int?
     ): Mono<DistributorZReportResponse> {
@@ -39,7 +41,9 @@ class DistributorZReportController(
         val filter = DistributorZReportRepository.Filter(
             dateFrom = dateFrom,
             dateTo = dateTo,
-            cardsDistributorId = cardsDistributorId
+            cardsDistributorId = cardsDistributorId,
+            paymentMethod = paymentMethod,
+            status = status
         )
         return service.build(
             filter,

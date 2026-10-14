@@ -25,7 +25,11 @@ class DistributorZReportRepository(
     data class Filter(
         val dateFrom: LocalDate,
         val dateTo: LocalDate,
-        val cardsDistributorId: UUID? = null
+        val cardsDistributorId: UUID? = null,
+        /** null | "CASH" | "BANK" — способ оплаты (по acqReference). */
+        val paymentMethod: String? = null,
+        /** null | конкретный STATUS чека (PENDING/CONFIRMED/RETRY/…). */
+        val status: String? = null
     )
 
     private val select = """
@@ -112,12 +116,21 @@ class DistributorZReportRepository(
             .one()
     }
 
-    private fun conditions(filter: Filter): String =
-        if (filter.cardsDistributorId != null) "AND cd.CARDS_DISTRIBUTOR_ID = :cardsDistributorId" else ""
+    private fun conditions(filter: Filter): String {
+        var s = ""
+        if (filter.cardsDistributorId != null) s += " AND fr.CARDS_DISTRIBUTOR_ID = :cardsDistributorId"
+        when (filter.paymentMethod) {
+            "CASH" -> s += " AND fr.ACQ_REFERENCE IS NULL"
+            "BANK" -> s += " AND fr.ACQ_REFERENCE IS NOT NULL"
+        }
+        if (filter.status != null) s += " AND fr.STATUS = :status"
+        return s
+    }
 
     private fun bound(sql: DatabaseClient.GenericExecuteSpec, filter: Filter): DatabaseClient.GenericExecuteSpec {
         var s = sql.bind("dateFrom", filter.dateFrom).bind("dateTo", filter.dateTo)
         filter.cardsDistributorId?.let { s = s.bind("cardsDistributorId", it) }
+        filter.status?.let { s = s.bind("status", it) }
         return s
     }
 

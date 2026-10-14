@@ -46,27 +46,42 @@ object EmvIsoDepReader {
     private fun readConnected(iso: IsoDep): Card? {
         // 1. SELECT PPSE (2PAY.SYS.DDF01)
         val ppse = hex("00 A4 04 00 0E 325041592E5359532E4444463031 00")
-        val ppseResp = transceive(iso, ppse) ?: return null
+        val ppseResp = transceive(iso, ppse)
+        if (ppseResp == null) { Log.w(TAG, "PPSE: нет ответа"); return null }
+        Log.i(TAG, "PPSE raw(${ppseResp.size}): ${ppseResp.toHex()}")
+
         val aids = extractAids(ppseResp)
-        if (aids.isEmpty()) return null
+        Log.i(TAG, "PPSE candidates: $aids")
+        if (aids.isEmpty()) { Log.w(TAG, "PPSE: нет платёжных AID"); return null }
 
         // Приоритет МИР, затем остальные по порядку.
         val ordered = aids.sortedBy { if (it.startsWith("A000000658")) 0 else 1 }
 
         for (aid in ordered) {
-            val selResp = transceive(iso, selectAid(aid)) ?: continue
+            val selResp = transceive(iso, selectAid(aid))
+            if (selResp == null) { Log.i(TAG, "SELECT $aid → нет ответа"); continue }
+            Log.i(TAG, "SELECT $aid resp(${selResp.size}): ${selResp.toHex()}")
             val label = tagAscii(selResp, "50")
             val pdol = findTag(selResp, "9F38")?.value
-            val gpoResp = tryGpo(iso, pdol, aid) ?: continue
-            val afl = findTag(gpoResp, "94")?.value ?: continue
+
+            val gpoResp = tryGpo(iso, pdol, aid)
+            if (gpoResp == null) { Log.i(TAG, "GPO(all variants) $aid → отрицание"); continue }
+            Log.i(TAG, "GPO $aid resp(${gpoResp.size}): ${gpoResp.toHex()}")
+            val afl = findTag(gpoResp, "94")?.value
+            if (afl == null) { Log.i(TAG, "GPO $aid → нет AFL"); continue }
+            Log.i(TAG, "AFL $aid: ${afl.toHex()}")
+
             val records = readRecords(iso, afl)
-            val pan = recordsTag(records, "5A")?.toHex() ?: continue
+            Log.i(TAG, "records $aid: ${records.size} шт")
+            val pan = recordsTag(records, "5A")?.toHex()
+            if (pan == null) { Log.i(TAG, "$aid: нет PAN в records"); continue }
             val name = recordsTag(records, "5F20")?.ascii()?.trim()?.let { if (it == "/" || it.isBlank()) "" else it } ?: ""
             val exp = recordsTag(records, "5F24")?.toHex() ?: ""
             val expFmt = if (exp.length >= 4) "${exp.substring(2, 4)}/${exp.substring(0, 2)}" else exp
             val panClean = pan.trimEnd('F').trim()
             val masked = if (panClean.length <= 10) panClean
                 else "${panClean.substring(0, 6)}******${panClean.substring(panClean.length - 4)}"
+            Log.i(TAG, "OK $aid: pan=${masked} exp=$expFmt holder=$name")
             return Card(
                 maskedPan = masked,
                 panLast4 = panClean.takeLast(4),
@@ -75,6 +90,7 @@ object EmvIsoDepReader {
                 holdername = name
             )
         }
+        Log.w(TAG, "PAN не извлечён ни из одного AID")
         return null
     }
 
