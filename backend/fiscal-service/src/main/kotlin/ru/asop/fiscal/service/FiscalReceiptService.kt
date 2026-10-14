@@ -89,7 +89,14 @@ class FiscalReceiptService(
             cardsDistributorId = event.cardsDistributorId,
             carrierFiscalizerId = ctx.second,
             source = event.source,
-            receiptData = Json.of(objectMapper.writeValueAsString(event.description)),
+            // RECEIPT_DATA — JSON-объект (description + amount), а не строка description:
+            // иначе сумма терялась и уходила в ОФД пустым payload'ом.
+            receiptData = Json.of(objectMapper.writeValueAsString(
+                mapOf(
+                    "description" to (event.description ?: ""),
+                    "amount" to event.amount
+                )
+            )),
             status = "PENDING",
             maxAttempts = maxAttempts
         )
@@ -101,7 +108,7 @@ class FiscalReceiptService(
             val ctx = FiscalContext(
                 receiptId = receipt.receiptId,
                 transactionId = receipt.transactionId,
-                total = null,
+                total = receipt.amount,
                 fiscalContext = parseReceiptData(receipt.receiptData?.asString())
             )
             val payload = resolved.adapter.buildRequest(ctx)

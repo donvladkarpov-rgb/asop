@@ -9,7 +9,12 @@ class BifitAdapter(private val objectMapper: ObjectMapper) : FiscalizerAdapter {
     override fun providerCode() = "BIFIT"
 
     override fun buildRequest(ctx: FiscalContext): Map<String, Any?> {
-        return ctx.fiscalContext
+        // Payload чека = данные из RECEIPT_DATA (description/amount) + итоговая сумма.
+        val result = ctx.fiscalContext.toMutableMap()
+        if (ctx.total != null && !result.containsKey("total")) {
+            result["total"] = ctx.total
+        }
+        return result
     }
 
     override fun parseResponse(status: Int, body: String?): FiscalizerResult {

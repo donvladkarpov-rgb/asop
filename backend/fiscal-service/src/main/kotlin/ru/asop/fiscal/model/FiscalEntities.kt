@@ -50,7 +50,8 @@ data class DistributorFiscalizer(
 @Table("asop_fiscalizer_tokens")
 data class FiscalizerToken(
     @Id val tokenId: UUID,
-    val carrierFiscalizerId: UUID,
+    val carrierFiscalizerId: UUID? = null,
+    val distributorFiscalizerId: UUID? = null,
     val tokenEncrypted: ByteArray = ByteArray(0),
     val tokenHint: String? = null,
     val validFrom: java.time.OffsetDateTime = OffsetDateTime.now(),
