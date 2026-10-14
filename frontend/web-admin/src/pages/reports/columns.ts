@@ -2,6 +2,7 @@ import type { TripRegistrationReportRow } from '../../api/reports';
 import type { ShiftReportRow } from '../../api/reports-shifts';
 import type { BenefitReportRow } from '../../api/reports-benefit';
 import type { ShiftListRow } from '../../api/reports-shift-list';
+import type { ZReportRow, ZReportSegment } from '../../api/reports-z-report';
 
 export type CellKind = 'text' | 'center' | 'money' | 'datetime' | 'num' | 'percent';
 
@@ -33,6 +34,20 @@ export interface ShiftListReportColumn {
   width: number;
   kind: CellKind;
   get: (row: ShiftListRow) => string | number | null;
+}
+
+export interface ZReportColumn {
+  header: string;
+  width: number;
+  kind: CellKind;
+  get: (row: ZReportRow) => string | number | null;
+}
+
+export interface ZReportSegmentColumn {
+  header: string;
+  width: number;
+  kind: CellKind;
+  get: (row: ZReportSegment) => string | number | null;
 }
 
 
@@ -181,4 +196,52 @@ export const SHIFT_LIST_REPORT_COLUMNS: ShiftListReportColumn[] = [
   { header: 'Нал. Сумма', width: 110, kind: 'money', get: (r) => r.cashSum },
   { header: 'Итого кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
   { header: 'Итого сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
+];
+
+/**
+ * Колонки сводки «Z отчёт» по сменам (20 колонок):
+ * контекст смены + 4 категории оплат (Наличные/Банковская карта/МФК/Школьный) + итог «Билетов».
+ */
+export const Z_REPORT_COLUMNS: ZReportColumn[] = [
+  { header: 'Перевозчик', width: 200, kind: 'text', get: (r) => r.carrierName },
+  { header: 'ИНН', width: 110, kind: 'text', get: (r) => r.carrierInn },
+  { header: 'ID смены', width: 260, kind: 'text', get: (r) => r.shiftId },
+  { header: 'Кондуктор', width: 170, kind: 'text', get: (r) => r.driverName },
+  { header: 'Начало смены', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.shiftStartedAt) },
+  { header: 'Конец смены', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.shiftClosedAt) },
+  { header: 'Длительность', width: 100, kind: 'center', get: (r) => r.durationText },
+  { header: 'SN терминала', width: 150, kind: 'text', get: (r) => r.terminalSerial },
+  { header: 'Госномер', width: 110, kind: 'text', get: (r) => r.vehicleNumber },
+  { header: 'Маршрут', width: 220, kind: 'text', get: (r) => join(r.routeNumber, r.routeName) },
+  { header: 'Наличные кол-во', width: 110, kind: 'num', get: (r) => r.cashCount },
+  { header: 'Наличные сумма', width: 120, kind: 'money', get: (r) => r.cashSum },
+  { header: 'Банк. карта кол-во', width: 115, kind: 'num', get: (r) => r.bankCount },
+  { header: 'Банк. карта сумма', width: 120, kind: 'money', get: (r) => r.bankSum },
+  { header: 'МФК кол-во', width: 100, kind: 'num', get: (r) => r.mifareCount },
+  { header: 'МФК сумма', width: 110, kind: 'money', get: (r) => r.mifareSum },
+  { header: 'Школьный кол-во', width: 110, kind: 'num', get: (r) => r.benefitCount },
+  { header: 'Школьный сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
+  { header: 'Билетов кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
+  { header: 'Билетов сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
+];
+
+/**
+ * Колонки детализации «Z отчёт» по маршрутам (14 колонок):
+ * маршрут + начало/окончание сегмента + 4 категории оплат + итог «Билетов».
+ */
+export const Z_REPORT_SEGMENT_COLUMNS: ZReportSegmentColumn[] = [
+  { header: 'ID смены', width: 260, kind: 'text', get: (r) => r.shiftId },
+  { header: 'Маршрут', width: 220, kind: 'text', get: (r) => join(r.routeNumber, r.routeName) },
+  { header: 'Начало маршрута', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.segmentStartedAt) },
+  { header: 'Конец маршрута', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.segmentEndedAt) },
+  { header: 'Наличные кол-во', width: 110, kind: 'num', get: (r) => r.cashCount },
+  { header: 'Наличные сумма', width: 120, kind: 'money', get: (r) => r.cashSum },
+  { header: 'Банк. карта кол-во', width: 115, kind: 'num', get: (r) => r.bankCount },
+  { header: 'Банк. карта сумма', width: 120, kind: 'money', get: (r) => r.bankSum },
+  { header: 'МФК кол-во', width: 100, kind: 'num', get: (r) => r.mifareCount },
+  { header: 'МФК сумма', width: 110, kind: 'money', get: (r) => r.mifareSum },
+  { header: 'Школьный кол-во', width: 110, kind: 'num', get: (r) => r.benefitCount },
+  { header: 'Школьный сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
+  { header: 'Билетов кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
+  { header: 'Билетов сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
 ];

@@ -332,6 +332,13 @@ h1 {
   color: #111827;
 }
 
+.report-subtitle {
+  margin: 20px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
 .report-stats {
   display: flex;
   flex-wrap: wrap;

@@ -2,15 +2,20 @@ import type { TripRegistrationReport, TripRegistrationReportRow } from '../../ap
 import type { ShiftReport } from '../../api/reports-shifts';
 import type { BenefitReport } from '../../api/reports-benefit';
 import type { ShiftListReport } from '../../api/reports-shift-list';
+import type { ZReport } from '../../api/reports-z-report';
 import {
   BENEFIT_REPORT_COLUMNS,
   REPORT_COLUMNS,
   SHIFT_LIST_REPORT_COLUMNS,
   SHIFT_REPORT_COLUMNS,
+  Z_REPORT_COLUMNS,
+  Z_REPORT_SEGMENT_COLUMNS,
   formatPct,
   type BenefitReportColumn,
   type ShiftListReportColumn,
   type ShiftReportColumn,
+  type ZReportColumn,
+  type ZReportSegmentColumn,
 } from './columns';
 
 /**
@@ -495,6 +500,131 @@ export function downloadShiftListExcelXml(report: ShiftListReport): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `Список-смен_${report.dateFrom}_${report.dateTo}.xml`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ===== Z отчёт =====
+
+/** 1-based индекс первой агрегатной колонки сводки («Наличные кол-во»). */
+const Z_REPORT_AGG_COLUMN_INDEX = Z_REPORT_COLUMNS.findIndex((c) => c.header === 'Наличные кол-во') + 1;
+
+function zReportHeaderRow(): string {
+  const cells = Z_REPORT_COLUMNS.map((c) => cell(c.header, 's-header')).join('');
+  const widths = Z_REPORT_COLUMNS.map((c) => `<Column ss:Width="${c.width}"/>`).join('');
+  return `${widths}\n   <Row ss:Height="32">${cells}</Row>`;
+}
+
+function zReportSegmentHeaderRow(): string {
+  const cells = Z_REPORT_SEGMENT_COLUMNS.map((c) => cell(c.header, 's-header')).join('');
+  const widths = Z_REPORT_SEGMENT_COLUMNS.map((c) => `<Column ss:Width="${c.width}"/>`).join('');
+  return `${widths}\n   <Row ss:Height="32">${cells}</Row>`;
+}
+
+function zReportDetailRows(report: ZReport): string {
+  return report.rows
+    .map((row) => {
+      const cells = Z_REPORT_COLUMNS.map((c: ZReportColumn) => typedCell(c.get(row), c.kind)).join('');
+      return `<Row>${cells}</Row>`;
+    })
+    .join('\n   ');
+}
+
+function zReportSegmentRows(report: ZReport): string {
+  return report.segments
+    .map((row) => {
+      const cells = Z_REPORT_SEGMENT_COLUMNS.map((c: ZReportSegmentColumn) => typedCell(c.get(row), c.kind)).join('');
+      return `<Row>${cells}</Row>`;
+    })
+    .join('\n   ');
+}
+
+/** Лист «Итоги»: агрегаты четырёх категорий + «Билетов». */
+function zReportTotalsSheet(report: ZReport): string {
+  const t = report.totals;
+  const head =
+    `<Row>${cell('Категория', 's-header')}${cell('Кол-во', 's-header')}${cell('Сумма', 's-header')}</Row>`;
+  const rows = [
+    ['Наличные', t.cashCount, t.cashSum],
+    ['Банковская карта', t.bankCount, t.bankSum],
+    ['МФК', t.mifareCount, t.mifareSum],
+    ['Школьный', t.benefitCount, t.benefitSum],
+    ['Билетов (итого)', t.totalCount, t.totalSum],
+  ] as const;
+  const body = rows
+    .map(
+      ([label, count, sum]) =>
+        `<Row>${cell(label, label.startsWith('Билетов') ? 's-total' : undefined)}${cellNumber(count, label.startsWith('Билетов') ? 's-total' : undefined)}${cellNumber(sum, label.startsWith('Билетов') ? 's-total-money' : 's-money')}</Row>`,
+    )
+    .join('\n   ');
+  const shifts =
+    `<Row>${cell('Смен в выборке', 's-total')}${cellNumber(t.shiftsCount, 's-total')}<Cell/></Row>`;
+  return ` <Worksheet ss:Name="Итоги">
+  <Table>
+   <Column ss:Width="200"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="130"/>
+   ${head}
+   ${body}
+   ${shifts}
+  </Table>
+ </Worksheet>`;
+}
+
+export function buildZReportExcelXml(report: ZReport): string {
+  const titleRow = `<Row>${cell(report.title, 's-title')}</Row>`;
+  const t = report.totals;
+  const agg = [t.cashCount, t.cashSum, t.bankCount, t.bankSum, t.mifareCount, t.mifareSum, t.benefitCount, t.benefitSum, t.totalCount, t.totalSum];
+  const isSum = [false, true, false, true, false, true, false, true, false, true];
+  const grandRow =
+    `<Row>` +
+    `<Cell ss:MergeAcross="${Z_REPORT_AGG_COLUMN_INDEX - 2}" ss:StyleID="s-total">` +
+    `<Data ss:Type="String">${esc(`ИТОГО — смен: ${report.totalRows}`)}</Data></Cell>` +
+    agg
+      .map((v, i) => `<Cell ss:StyleID="${isSum[i] ? 's-total-money' : 's-total'}"><Data ss:Type="Number">${Number(v) || 0}</Data></Cell>`)
+      .join('') +
+    `</Row>`;
+
+  const segmentsSheet =
+    `<Worksheet ss:Name="Маршруты">
+  <Table>
+   ${titleRow}
+   ${zReportSegmentHeaderRow()}
+   ${zReportSegmentRows(report)}
+  </Table>
+ </Worksheet>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+${STYLES}
+ <Worksheet ss:Name="Смены">
+  <Table>
+   ${titleRow}
+   ${zReportHeaderRow()}
+   ${zReportDetailRows(report)}
+   <Row ss:Height="6"/>
+   ${grandRow}
+  </Table>
+ </Worksheet>
+ ${segmentsSheet}
+${zReportTotalsSheet(report)}
+</Workbook>`;
+}
+
+export function downloadZReportExcelXml(report: ZReport): void {
+  const xml = `﻿${buildZReportExcelXml(report)}`;
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Z-отчет_${report.dateFrom}_${report.dateTo}.xml`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
