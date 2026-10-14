@@ -91,6 +91,7 @@ class PaymentReceiptConsumer(
                 receiptId = UuidUtils.newId(),
                 transactionId = transactionId,
                 acqReference = event.acquirerReference,
+                amount = event.amount,
                 carrierId = ctx.carrierId,
                 carrierFiscalizerId = ctx.carrierFiscalizerId,
                 status = "PENDING",

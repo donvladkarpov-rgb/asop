@@ -57,6 +57,7 @@ import { ShiftReportPage } from './pages/reports/ShiftReportPage';
 import { ShiftListReportPage } from './pages/reports/ShiftListReportPage';
 import { BenefitReportPage } from './pages/reports/BenefitReportPage';
 import { ZReportPage } from './pages/reports/ZReportPage';
+import { DistributorZReportPage } from './pages/reports/DistributorZReportPage';
 import { useAuth } from './auth/useAuth';
 import { getAccessToken } from './auth/config';
 
@@ -146,6 +147,7 @@ function AppRoutes() {
         <Route path="reports/shift-list" element={<ShiftListReportPage />} />
         <Route path="reports/benefit-trips" element={<BenefitReportPage />} />
         <Route path="reports/z-report" element={<ZReportPage />} />
+        <Route path="reports/distributor-z-report" element={<DistributorZReportPage />} />
         <Route path="route-editor" element={<RouteEditorPage />} />
         <Route path="password" element={<PasswordChangePage />} />
       </Route>

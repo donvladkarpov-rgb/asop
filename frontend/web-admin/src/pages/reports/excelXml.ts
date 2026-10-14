@@ -3,8 +3,10 @@ import type { ShiftReport } from '../../api/reports-shifts';
 import type { BenefitReport } from '../../api/reports-benefit';
 import type { ShiftListReport } from '../../api/reports-shift-list';
 import type { ZReport } from '../../api/reports-z-report';
+import type { DistributorZReport } from '../../api/reports-distributor-z';
 import {
   BENEFIT_REPORT_COLUMNS,
+  DISTRIBUTOR_Z_REPORT_COLUMNS,
   REPORT_COLUMNS,
   SHIFT_LIST_REPORT_COLUMNS,
   SHIFT_REPORT_COLUMNS,
@@ -12,6 +14,7 @@ import {
   Z_REPORT_SEGMENT_COLUMNS,
   formatPct,
   type BenefitReportColumn,
+  type DistributorZReportColumn,
   type ShiftListReportColumn,
   type ShiftReportColumn,
   type ZReportColumn,
@@ -625,6 +628,84 @@ export function downloadZReportExcelXml(report: ZReport): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `Z-отчет_${report.dateFrom}_${report.dateTo}.xml`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ===== Z отчёт (дистрибьюторы) =====
+
+function distributorZHeaderRow(): string {
+  const cells = DISTRIBUTOR_Z_REPORT_COLUMNS.map((c) => cell(c.header, 's-header')).join('');
+  const widths = DISTRIBUTOR_Z_REPORT_COLUMNS.map((c) => `<Column ss:Width="${c.width}"/>`).join('');
+  return `${widths}\n   <Row ss:Height="32">${cells}</Row>`;
+}
+
+function distributorZDetailRows(report: DistributorZReport): string {
+  return report.rows
+    .map((row) => {
+      const cells = DISTRIBUTOR_Z_REPORT_COLUMNS.map((c: DistributorZReportColumn) => typedCell(c.get(row), c.kind)).join('');
+      return `<Row>${cells}</Row>`;
+    })
+    .join('\n   ');
+}
+
+/** Лист «Итоги»: кол-во/сумма по наличным и банковской карте + всего. */
+function distributorZTotalsSheet(report: DistributorZReport): string {
+  const t = report.totals;
+  const head =
+    `<Row>${cell('Категория', 's-header')}${cell('Кол-во', 's-header')}${cell('Сумма', 's-header')}</Row>`;
+  const rows = [
+    ['Наличные', t.cashCount, t.cashSum],
+    ['Банковская карта', t.bankCount, t.bankSum],
+    ['Итого', t.receiptsCount, t.totalSum],
+  ] as const;
+  const body = rows
+    .map(
+      ([label, count, sum]) =>
+        `<Row>${cell(label, label === 'Итого' ? 's-total' : undefined)}${cellNumber(count, label === 'Итого' ? 's-total' : undefined)}${cellNumber(sum, label === 'Итого' ? 's-total-money' : 's-money')}</Row>`,
+    )
+    .join('\n   ');
+  return ` <Worksheet ss:Name="Итоги">
+  <Table>
+   <Column ss:Width="200"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="130"/>
+   ${head}
+   ${body}
+  </Table>
+ </Worksheet>`;
+}
+
+export function buildDistributorZReportExcelXml(report: DistributorZReport): string {
+  const titleRow = `<Row>${cell(report.title, 's-title')}</Row>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+${STYLES}
+ <Worksheet ss:Name="Чеки">
+  <Table>
+   ${titleRow}
+   ${distributorZHeaderRow()}
+   ${distributorZDetailRows(report)}
+  </Table>
+ </Worksheet>
+${distributorZTotalsSheet(report)}
+</Workbook>`;
+}
+
+export function downloadDistributorZReportExcelXml(report: DistributorZReport): void {
+  const xml = `﻿${buildDistributorZReportExcelXml(report)}`;
+  const blob = new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `Z-отчет-дистрибьюторы_${report.dateFrom}_${report.dateTo}.xml`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

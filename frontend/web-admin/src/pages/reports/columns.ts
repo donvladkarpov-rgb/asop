@@ -3,6 +3,7 @@ import type { ShiftReportRow } from '../../api/reports-shifts';
 import type { BenefitReportRow } from '../../api/reports-benefit';
 import type { ShiftListRow } from '../../api/reports-shift-list';
 import type { ZReportRow, ZReportSegment } from '../../api/reports-z-report';
+import type { DistributorZReportRow } from '../../api/reports-distributor-z';
 
 export type CellKind = 'text' | 'center' | 'money' | 'datetime' | 'num' | 'percent';
 
@@ -48,6 +49,13 @@ export interface ZReportSegmentColumn {
   width: number;
   kind: CellKind;
   get: (row: ZReportSegment) => string | number | null;
+}
+
+export interface DistributorZReportColumn {
+  header: string;
+  width: number;
+  kind: CellKind;
+  get: (row: DistributorZReportRow) => string | number | null;
 }
 
 
@@ -244,4 +252,18 @@ export const Z_REPORT_SEGMENT_COLUMNS: ZReportSegmentColumn[] = [
   { header: 'Школьный сумма', width: 120, kind: 'money', get: (r) => r.benefitSum },
   { header: 'Билетов кол-во', width: 110, kind: 'num', get: (r) => r.totalCount },
   { header: 'Билетов сумма', width: 120, kind: 'money', get: (r) => r.totalSum },
+];
+
+/**
+ * Колонки «Z отчёта (дистрибьюторы)» — реестр фискальных чеков дистрибьютора (8 колонок).
+ */
+export const DISTRIBUTOR_Z_REPORT_COLUMNS: DistributorZReportColumn[] = [
+  { header: 'Дистрибьютор', width: 220, kind: 'text', get: (r) => r.distributorName },
+  { header: 'ИНН', width: 110, kind: 'text', get: (r) => r.distributorInn },
+  { header: '№ чека', width: 120, kind: 'text', get: (r) => r.receiptNumber },
+  { header: 'ФП', width: 140, kind: 'text', get: (r) => r.fiscalSign },
+  { header: 'Дата и время', width: 155, kind: 'datetime', get: (r) => formatDateTime(r.createdAt) },
+  { header: 'Сумма', width: 120, kind: 'money', get: (r) => r.amount },
+  { header: 'Способ оплаты', width: 150, kind: 'text', get: (r) => r.paymentMethod },
+  { header: 'Статус', width: 110, kind: 'text', get: (r) => r.status },
 ];

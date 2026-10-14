@@ -84,6 +84,7 @@ class FiscalReceiptService(
             receiptId = event.receiptId,
             transactionId = event.transactionId,
             acqReference = event.acqReference,
+            amount = event.amount,
             carrierId = ctx.first,
             cardsDistributorId = event.cardsDistributorId,
             carrierFiscalizerId = ctx.second,

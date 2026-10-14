@@ -1509,6 +1509,7 @@ CREATE TABLE ASOP_FISCAL_RECEIPTS
     -- NULL допустим: дистрибьюторские чеки и терминальные чеки до резолва транзакции.
     TRANSACTION_ID        UUID,
     ACQ_REFERENCE         VARCHAR(100),  -- RRN/ссылка эквайрера — общий ключ дедупа terminal/auto-path
+    AMOUNT                NUMERIC(10, 2),  -- сумма чека (для Z-отчётов дистрибьютора/терминала)
     CARRIER_ID            UUID,
     CARDS_DISTRIBUTOR_ID  UUID,
     CARRIER_FISCALIZER_ID UUID,

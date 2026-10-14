@@ -21,6 +21,7 @@ const reportItems = [
   { to: '/reports/shifts', label: 'Отчёт по сменам', icon: '📄' },
   { to: '/reports/shift-list', label: 'Список смен', icon: '📄' },
   { to: '/reports/z-report', label: 'Z отчёт', icon: '🧾' },
+  { to: '/reports/distributor-z-report', label: 'Z отчёт (дистрибьюторы)', icon: '🧾' },
   { to: '/reports/benefit-trips', label: 'Сводный, льготники', icon: '📄' },
 ];
 
